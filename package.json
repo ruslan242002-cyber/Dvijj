@@ -1,0 +1,12 @@
+{
+  "name": "periferia-bot-engine",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Боевой движок и вебхуки для текстовой космической MMORPG «Периферия» — без внешних зависимостей.",
+  "scripts": {
+    "test": "node --test",
+    "simulate": "node test/simulate-balance.js",
+    "dev": "node webhook/server.js"
+  },
+  "engines": { "node": ">=18" }
+}
