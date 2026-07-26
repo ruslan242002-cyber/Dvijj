@@ -1,6 +1,6 @@
 /**
  * ВАЖНО: этот файл должен лежать по пути  api/turn.js  от КОРНЯ репозитория.
- * Vercel превращает его в адрес:  https://ваш-проект.vercel.app/api/turn
+ * Vercel превращает его в адрес:  https://dvijj-ifka.vercel.app/api/turn
  * Ничего внутри менять не нужно.
  */
 'use strict';
