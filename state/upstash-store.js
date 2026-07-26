@@ -10,10 +10,10 @@
  *   4. В Vercel: Project → Settings → Environment Variables — вставьте эти
  *      два значения под теми же именами
  *
- * Бесплатный тариф Upstash — 10 000 команд в сутки не завязанных на число
- * "сообщений" бота, а не 50/10000 сообщений как в конструкторах — этого
- * с большим запасом хватает на старте и растёт линейно за копейки, а не
- * скачками тарифных пакетов.
+ * Значение (JSON состояния игрока) отправляется в ТЕЛЕ POST-запроса
+ * командой вида ["SET", "ключ", "значение"], а не встраивается в URL —
+ * это официально рекомендованный Upstash способ именно для длинных или
+ * "сложных" значений (JSON, спецсимволы), URL-путь для этого не годится.
  */
 'use strict';
 
@@ -28,22 +28,26 @@ function upstashStore({ url, token } = {}) {
     );
   }
 
-  const headers = { Authorization: `Bearer ${authToken}` };
+  const headers = { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' };
   const key = (userId) => `periferia:player:${userId}`;
+
+  async function execute(commandArray) {
+    const res = await fetch(baseUrl, { method: 'POST', headers, body: JSON.stringify(commandArray) });
+    if (!res.ok) throw new Error(`Upstash request failed: ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(`Upstash error: ${data.error}`);
+    return data.result;
+  }
 
   return {
     async get(userId) {
-      const res = await fetch(`${baseUrl}/get/${encodeURIComponent(key(userId))}`, { headers });
-      if (!res.ok) throw new Error(`Upstash GET failed: ${res.status}`);
-      const data = await res.json();
-      if (!data.result) return null;
-      try { return JSON.parse(data.result); }
+      const result = await execute(['GET', key(userId)]);
+      if (!result) return null;
+      try { return JSON.parse(result); }
       catch { return null; }
     },
     async set(userId, state) {
-      const value = encodeURIComponent(JSON.stringify(state));
-      const res = await fetch(`${baseUrl}/set/${encodeURIComponent(key(userId))}/${value}`, { headers });
-      if (!res.ok) throw new Error(`Upstash SET failed: ${res.status}`);
+      await execute(['SET', key(userId), JSON.stringify(state)]);
     }
   };
 }
