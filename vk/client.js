@@ -12,11 +12,11 @@
 const VK_API_VERSION = '5.199';
 
 /** Собирает клавиатуру ВК из простого списка подписей кнопок (один ряд).
- * inline: true — кнопки показываются прямо под сообщением (как в примерах
- * текстовых игр). inline: false — обычная клавиатура ВК, которая появляется
- * только когда тапнуть по полю ввода — то, из-за чего кнопки "не появлялись".
+ * inline: false (по умолчанию) — обычная, постоянная клавиатура снизу экрана,
+ * как меню игры — остаётся видна, пока не заменится следующей.
+ * inline: true — кнопки, приклеенные к конкретному сообщению.
  */
-function buildKeyboard(buttonLabels, { inline = true, oneTime = false } = {}) {
+function buildKeyboard(buttonLabels, { inline = false, oneTime = false } = {}) {
   if (!buttonLabels || buttonLabels.length === 0) return undefined;
   return JSON.stringify({
     inline,
