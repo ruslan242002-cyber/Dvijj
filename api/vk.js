@@ -1,5 +1,5 @@
 /**
- * Путь: api/vk.js -> https://ваш-проект.vercel.app/api/vk
+ * Путь: api/vk.js -> https://dvijj-ifka.vercel.app/api/vk
  * Это единственный адрес, который нужно вписать в настройки Callback API
  * в сообществе ВК. Дальше всё делает game/router.js — этот файл только
  * подключает реальное хранилище (Upstash) и реальный клиент ВК.
@@ -21,13 +21,19 @@ module.exports = async (req, res) => {
     return;
   }
 
+  // ВРЕМЕННАЯ диагностика — покажет в Vercel Logs, что реально пришло от ВК.
+  // Уберите эти две строки после того, как всё заработает.
+  console.log('VK webhook body:', JSON.stringify(req.body));
+  console.log('VK_CONFIRMATION_CODE length:', (process.env.VK_CONFIRMATION_CODE || '').length);
+
   try {
     const reply = await handleVkEvent(req.body || {}, {
       store: upstashStore(),
       vk: vkClient(),
-      confirmationCode: process.env.VK_CONFIRMATION_CODE,
-      secret: process.env.VK_CALLBACK_SECRET
+      confirmationCode: (process.env.VK_CONFIRMATION_CODE || '').trim(),
+      secret: (process.env.VK_CALLBACK_SECRET || '').trim()
     });
+    console.log('VK webhook reply:', JSON.stringify(reply));
     res.status(200).send(reply);
   } catch (err) {
     // ВК ждёт "ok" даже при внутренней ошибке, иначе начнёт слать событие повторно раз в секунду
