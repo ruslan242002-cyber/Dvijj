@@ -1,1 +1,196 @@
 
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Периферия — терминал профиля</title>
+<style>
+  :root {
+    --bg: #0a0e17;
+    --panel: #121a2b;
+    --panel2: #182339;
+    --accent: #3aa0ff;
+    --accent2: #ff7a3a;
+    --text: #e6ecf5;
+    --muted: #7d8aa3;
+    --danger: #ff4d5e;
+    --ok: #35d07f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: radial-gradient(ellipse at top, #101b30 0%, #05070c 70%);
+    color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh; padding: 20px 14px 60px;
+  }
+  .wrap { max-width: 520px; margin: 0 auto; }
+  h1 { font-size: 20px; letter-spacing: .04em; margin: 6px 0 2px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+  .card {
+    background: linear-gradient(180deg, var(--panel), var(--panel2));
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: 14px; padding: 16px; margin-bottom: 14px;
+  }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); margin: 0 0 12px; }
+  .hp-bar-outer { background: #1c2740; border-radius: 8px; height: 14px; overflow: hidden; margin: 6px 0 4px; }
+  .hp-bar-inner { height: 100%; background: linear-gradient(90deg, var(--danger), var(--ok)); transition: width .3s; }
+  .stat-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.05); }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-name { color: var(--muted); font-size: 14px; }
+  .stat-val { font-weight: 600; font-size: 15px; }
+  button {
+    background: var(--accent); color: #051422; border: none; border-radius: 8px;
+    padding: 8px 12px; font-weight: 700; font-size: 13px; cursor: pointer;
+  }
+  button:disabled { background: #2a3550; color: var(--muted); cursor: not-allowed; }
+  button.secondary { background: transparent; border: 1px solid var(--accent); color: var(--accent); }
+  .skill-item {
+    display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 10px;
+    border: 1px solid rgba(255,255,255,.07); margin-bottom: 8px; cursor: pointer;
+  }
+  .skill-item.selected { border-color: var(--accent); background: rgba(58,160,255,.08); }
+  .skill-item .dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--muted); flex-shrink: 0; }
+  .skill-item.selected .dot { background: var(--accent); border-color: var(--accent); }
+  .skill-name { font-size: 14px; }
+  .skill-station { color: var(--muted); font-size: 12px; margin-left: auto; }
+  .save-row { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; }
+  .msg { font-size: 13px; padding: 8px 10px; border-radius: 8px; margin-top: 8px; }
+  .msg.error { background: rgba(255,77,94,.12); color: var(--danger); }
+  .msg.ok { background: rgba(53,208,127,.12); color: var(--ok); }
+  .empty { color: var(--muted); font-size: 13px; font-style: italic; }
+  .loading, .fatal { text-align: center; color: var(--muted); padding: 60px 20px; }
+</style>
+</head>
+<body>
+<div class="wrap" id="app">
+  <div class="loading">Связь со станцией устанавливается…</div>
+</div>
+
+<script>
+const params = new URLSearchParams(location.search);
+const token = params.get('token');
+const app = document.getElementById('app');
+
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+async function api(method, body) {
+  const res = await fetch('/api/profile' + (method === 'GET' ? ('?token=' + encodeURIComponent(token)) : ''), {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: method === 'GET' ? undefined : JSON.stringify({ token, ...body })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Неизвестная ошибка');
+  return data;
+}
+
+function render(data) {
+  const p = data.player;
+  const equipped = new Set(p.equippedSkills || []);
+  const hpPct = Math.max(0, Math.min(100, Math.round((p.hp / p.hpMax) * 100)));
+
+  app.innerHTML = `
+    <h1>🛰️ ТЕРМИНАЛ ПРОФИЛЯ</h1>
+    <div class="sub">${esc(p.name)} · ${esc(p.faction)}</div>
+
+    <div class="card">
+      <h2>Состояние</h2>
+      <div class="stat-row"><span class="stat-name">HP</span><span class="stat-val">${p.hp}/${p.hpMax}</span></div>
+      <div class="hp-bar-outer"><div class="hp-bar-inner" style="width:${hpPct}%"></div></div>
+    </div>
+
+    <div class="card">
+      <h2>Параметры ${p.statPoints ? `<span style="color:var(--accent2)">· ${p.statPoints} очков свободно</span>` : ''}</h2>
+      <div id="stats"></div>
+    </div>
+
+    <div class="card">
+      <h2>Экипированные умения (до ${data.maxEquippedSkills})</h2>
+      <div id="skills"></div>
+      <div class="save-row">
+        <span class="empty" id="skill-count">${equipped.size} / ${data.maxEquippedSkills} выбрано</span>
+        <button id="save-skills">Сохранить умения</button>
+      </div>
+      <div id="skill-msg"></div>
+    </div>
+
+    <div class="card">
+      <h2>Инвентарь</h2>
+      <div class="empty">${(p.inventory && p.inventory.length) ? '' : 'Пока пусто — предметы появятся по мере исследования секторов.'}</div>
+    </div>
+  `;
+
+  const statNames = { power: 'Мощь', mind: 'Разум', reaction: 'Реакция', endurance: 'Живучесть' };
+  const statsEl = document.getElementById('stats');
+  Object.entries(statNames).forEach(([key, label]) => {
+    const row = document.createElement('div');
+    row.className = 'stat-row';
+    row.innerHTML = `<span class="stat-name">${label}</span><span class="stat-val">${p.stats[key]}</span>`;
+    const btn = document.createElement('button');
+    btn.textContent = '+1';
+    btn.disabled = !p.statPoints;
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try {
+        const res = await api('POST', { action: 'allocateStat', stat: key });
+        render(res);
+      } catch (e) { alert(e.message); btn.disabled = false; }
+    };
+    row.appendChild(btn);
+    statsEl.appendChild(row);
+  });
+  // прочие вторичные статы — только просмотр
+  ['firepower', 'shielding'].forEach((key) => {
+    const label = key === 'firepower' ? 'Огневая мощь' : 'Экранирование';
+    const row = document.createElement('div');
+    row.className = 'stat-row';
+    row.innerHTML = `<span class="stat-name">${label}</span><span class="stat-val">${p.stats[key]}</span>`;
+    statsEl.appendChild(row);
+  });
+
+  const skillsEl = document.getElementById('skills');
+  const selected = new Set(equipped);
+  data.allSkills.forEach((s) => {
+    const item = document.createElement('div');
+    item.className = 'skill-item' + (selected.has(s.id) ? ' selected' : '');
+    item.innerHTML = `<div class="dot"></div><div class="skill-name">${esc(s.name)}</div><div class="skill-station">${esc(s.station)}</div>`;
+    item.onclick = () => {
+      if (selected.has(s.id)) selected.delete(s.id);
+      else {
+        if (selected.size >= data.maxEquippedSkills) return;
+        selected.add(s.id);
+      }
+      item.classList.toggle('selected');
+      document.getElementById('skill-count').textContent = `${selected.size} / ${data.maxEquippedSkills} выбрано`;
+    };
+    skillsEl.appendChild(item);
+  });
+
+  document.getElementById('save-skills').onclick = async () => {
+    const msgEl = document.getElementById('skill-msg');
+    msgEl.innerHTML = '';
+    try {
+      const res = await api('POST', { action: 'setEquippedSkills', skillIds: [...selected] });
+      msgEl.innerHTML = '<div class="msg ok">Сохранено — эти умения теперь доступны в бою.</div>';
+      render(res);
+    } catch (e) {
+      msgEl.innerHTML = `<div class="msg error">${esc(e.message)}</div>`;
+    }
+  };
+}
+
+(async () => {
+  if (!token) {
+    app.innerHTML = '<div class="fatal">Ссылка неполная — откройте профиль заново кнопкой «Профиль» в игре.</div>';
+    return;
+  }
+  try {
+    const data = await api('GET');
+    render(data);
+  } catch (e) {
+    app.innerHTML = `<div class="fatal">${esc(e.message)}</div>`;
+  }
+})();
+</script>
+</body>
+</html>
