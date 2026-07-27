@@ -7,6 +7,15 @@
 
 const RESOURCES = ['Сплавы', 'Изотопы', 'Полимеры', 'Биомасса', 'Реголит'];
 
+// Именной пул отголосков по зонам — просто добавляйте новые строки сюда,
+// когда захотите больше разнообразия. Ни один "куб" в конструкторе бота
+// трогать не нужно — сервер сам решает, кто попадётся и с какими статами.
+const ENEMY_NAMES = {
+  blue: ['Дрейф-обломок', 'Слабый резонанс', 'Отбившийся зонд'],
+  yellow: ['Отголосок-падальщик', 'Резонансный хищник', 'Сбойный дрон'],
+  red: ['Глубинный Отголосок', 'Тракт-порождение', 'Искажённый страж']
+};
+
 // веса событий по зонам: находка, отголосок(бой), аномалия, сигнал бедствия, залежь
 const ZONE_WEIGHTS = {
   blue:   { find: 45, ambush: 5,  anomaly: 10, distress: 15, node: 25 },
@@ -40,6 +49,38 @@ function rollLoot(zone, rng = Math.random) {
   return { resource, tier, qty, credits };
 }
 
+/**
+ * Полноценный враг, готовый к бою прямо из /api/turn — с именем и всеми
+ * полями, которые понимает combat-engine. SaleBot просто сохраняет
+ * весь этот объект в переменную state.enemy как есть, ничего не достраивая.
+ */
+function generateEnemy(zone, rng = Math.random) {
+  const names = ENEMY_NAMES[zone] || ENEMY_NAMES.blue;
+  const name = names[Math.floor(rng() * names.length)];
+  const dangerMult = { blue: 0.6, yellow: 1, red: 1.8 }[zone] || 1;
+  const tier = tierForZone(zone, rng);
+  const hp = Math.round((80 + rng() * 120) * dangerMult * (1 + tier * 0.1));
+
+  const base = 12 + tier * 4;
+  return {
+    name,
+    hp, hpMax: hp,
+    stats: {
+      power: Math.round(base * (0.8 + rng() * 0.4)),
+      mind: Math.round(base * (0.8 + rng() * 0.4)),
+      reaction: Math.round(base * (0.8 + rng() * 0.4)),
+      endurance: Math.round(base * (0.8 + rng() * 0.4)),
+      firepower: Math.round(base * 1.2 * (0.8 + rng() * 0.4)),
+      shielding: Math.min(60, Math.round(base * 0.6))
+    },
+    luck: Math.round(5 + tier * 1.5),
+    accuracy: 0.68 + Math.min(tier, 5) * 0.02,
+    dodge: 0.06 + Math.min(tier, 5) * 0.015,
+    focus: 0.6 + Math.min(tier, 5) * 0.02,
+    periodic: []
+  };
+}
+
 function rollEvent(zone, rng = Math.random) {
   const weights = ZONE_WEIGHTS[zone] || ZONE_WEIGHTS.blue;
   const type = weightedPick(weights, rng);
@@ -50,9 +91,8 @@ function rollEvent(zone, rng = Math.random) {
       return { type, loot, text: `Внутри: ${loot.qty}× ${loot.resource} ${toRoman(loot.tier)}, ${loot.credits} кредитов.` };
     }
     case 'ambush': {
-      const dangerMult = { blue: 0.6, yellow: 1, red: 1.8 }[zone] || 1;
-      const hp = Math.round((80 + rng() * 120) * dangerMult);
-      return { type, enemy: { hp, hpMax: hp }, text: `HP: ${hp} · Тип угрозы: боевой` };
+      const enemy = generateEnemy(zone, rng);
+      return { type, enemy, text: `${enemy.name} · HP: ${enemy.hp} · Тип угрозы: боевой` };
     }
     case 'anomaly':
       return { type, radiationGain: 5 + Math.floor(rng() * 10), text: 'Дотронуться до фрагмента можно, но неясно, что он сделает с облучением.' };
@@ -73,4 +113,4 @@ function toRoman(n) {
   return map[n] || String(n);
 }
 
-module.exports = { rollEvent, rollLoot, RESOURCES, ZONE_WEIGHTS, toRoman };
+module.exports = { rollEvent, rollLoot, generateEnemy, RESOURCES, ZONE_WEIGHTS, toRoman };
