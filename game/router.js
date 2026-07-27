@@ -23,6 +23,19 @@ const MAX_EQUIPPED_SKILLS = 3;
 const RESET_COMMAND = 'Сброс';
 const STATION_BUTTONS = ['Исследовать', 'Статус', 'Профиль', 'Сброс'];
 
+const CURATORS = { 'Приют': 'Ирис Вейл', 'Терминус': 'Дрого Кейн', 'Арсенал': 'Рен Окса', 'Вуаль': 'Шёпот' };
+
+/** Дежурный дрон-манекен — фиксированный слабый противник для тренировочного
+ * боя, тот самый, что описан в тексте онбординга («Тренировочный отсек»). */
+function trainerDrone() {
+  return {
+    name: 'Дрон-манекен',
+    hp: 100, hpMax: 100,
+    stats: { power: 8, mind: 8, reaction: 8, endurance: 10, firepower: 10, shielding: 5 },
+    luck: 0, accuracy: 0.5, dodge: 0.05, focus: 0.4, periodic: []
+  };
+}
+
 function freshPlayer(name, faction) {
   const bias = (FACTION_KIT[faction] || {}).statBias || {};
   const starterSkills = (FACTION_KIT[faction] || {}).skills || [];
@@ -108,12 +121,13 @@ function step(state, text, rng = Math.random, deps = {}) {
         return { reply: { text: 'Выбери одну из четырёх станций кнопкой ниже.', buttons: FACTIONS }, nextState: state };
       }
       const player = freshPlayer(state.name, input);
+      const curator = CURATORS[input] || 'куратор станции';
       return {
         reply: {
-          text: `Добро пожаловать на борт, ${state.name}. Станция «${input}» тебя ждёт.`,
-          buttons: STATION_BUTTONS
+          text: `Добро пожаловать на борт, ${state.name}. Станция «${input}» тебя ждёт.\n\nКуратор ${curator} лично встречает новичков в тренировочном отсеке — активировался дежурный дрон-манекен, никакого риска, просто проверка со скафандром.`,
+          buttons: ['Атаковать']
         },
-        nextState: { scene: 'station', player }
+        nextState: { scene: 'pre_combat', player, enemy: trainerDrone(), trainingFight: true }
       };
     }
 
@@ -165,7 +179,7 @@ function step(state, text, rng = Math.random, deps = {}) {
       const buttons = ['Обычная атака', ...skillButtons(state.player)];
       return {
         reply: { text: `${state.enemy.name}: ❤️ ${state.enemy.hp}/${state.enemy.hpMax}\n\nВыбери действие:`, buttons },
-        nextState: { scene: 'combat', player: state.player, enemy: state.enemy }
+        nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight }
       };
     }
 
@@ -181,6 +195,12 @@ function step(state, text, rng = Math.random, deps = {}) {
 
       if (result.finished) {
         if (result.winner === 'attacker') {
+          if (state.trainingFight) {
+            return {
+              reply: { text: `💥 ${result.log.join(' ')}\n\n✅ Дрон-манекен деактивирован. Тренировка окончена — это была только симуляция, статы и HP полностью восстановлены.`, buttons: ['Доложить куратору'] },
+              nextState: { scene: 'quest_report', player: { ...result.attacker, hp: result.attacker.hpMax } }
+            };
+          }
           return {
             reply: { text: `💥 ${result.log.join(' ')}\n\n🏆 ${state.enemy.name} уничтожен.`, buttons: STATION_BUTTONS },
             nextState: { scene: 'station', player: result.attacker }
@@ -206,7 +226,18 @@ function step(state, text, rng = Math.random, deps = {}) {
       const buttons = ['Обычная атака', ...skillButtons(enemyTurn.defender)];
       return {
         reply: { text: `💥 ${log}\n\n${state.enemy.name}: ❤️ ${enemyTurn.attacker.hp}/${enemyTurn.attacker.hpMax}`, buttons },
-        nextState: { scene: 'combat', player: enemyTurn.defender, enemy: enemyTurn.attacker }
+        nextState: { scene: 'combat', player: enemyTurn.defender, enemy: enemyTurn.attacker, trainingFight: state.trainingFight }
+      };
+    }
+
+    case 'quest_report': {
+      const player = { ...state.player, statPoints: (state.player.statPoints || 0) + 1 };
+      return {
+        reply: {
+          text: `Куратор ${CURATORS[player.faction] || ''}: «Неплохо для начала. Держи премию за инициативу — одно очко параметров сверху». Станция полностью открыта, можно выходить в космос.`,
+          buttons: STATION_BUTTONS
+        },
+        nextState: { scene: 'station', player }
       };
     }
 
