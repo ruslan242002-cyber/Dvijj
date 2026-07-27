@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Периферия — карта секторов</title>
+<script src="https://unpkg.com/@vkontakte/vk-bridge/dist/browser.min.js"></script>
 <style>
   :root {
     --bg: #05070d; --panel: #121a2b; --panel2: #182339;
@@ -194,10 +195,15 @@ let scale = 1;
 document.getElementById('zoomIn').onclick = () => { scale = Math.min(2, scale + 0.2); svg.style.transform = `scale(${scale})`; };
 document.getElementById('zoomOut').onclick = () => { scale = Math.max(0.6, scale - 0.2); svg.style.transform = `scale(${scale})`; };
 
-// Прокидываем token в ссылку на профиль, если он есть в текущем URL
+// VK Mini Apps должны подтвердить готовность клиенту ВК
+if (window.vkBridge) { vkBridge.send('VKWebAppInit').catch(() => {}); }
+
+// Прокидываем параметры запуска (или старый token) обратно в ссылку на профиль
+const rawLaunchParams = location.search.slice(1);
 const token = new URLSearchParams(location.search).get('token');
 document.querySelectorAll('.bottom-nav a[href^="profile.html"]').forEach((a) => {
-  if (token) a.href = 'profile.html?token=' + encodeURIComponent(token);
+  if (rawLaunchParams) a.href = 'profile.html?' + rawLaunchParams;
+  else if (token) a.href = 'profile.html?token=' + encodeURIComponent(token);
 });
 </script>
 </body>
