@@ -19,8 +19,12 @@ const FACTION_KIT = {
   'Вуаль':    { skills: ['anima_drain', 'corrosion'], statBias: { mind: 6, reaction: 4 } }
 };
 
+const MAX_EQUIPPED_SKILLS = 3;
+const STATION_BUTTONS = ['Исследовать', 'Статус', 'Профиль'];
+
 function freshPlayer(name, faction) {
   const bias = (FACTION_KIT[faction] || {}).statBias || {};
+  const starterSkills = (FACTION_KIT[faction] || {}).skills || [];
   return {
     name, faction,
     hp: 220, hpMax: 220,
@@ -33,13 +37,21 @@ function freshPlayer(name, faction) {
       shielding: 18
     },
     luck: 10, accuracy: 0.8, dodge: 0.12, focus: 0.76,
-    periodic: []
+    periodic: [],
+    statPoints: 5,
+    equippedSkills: starterSkills.slice(0, MAX_EQUIPPED_SKILLS),
+    inventory: []
   };
 }
 
-function skillButtons(faction) {
-  const ids = (FACTION_KIT[faction] || {}).skills || [];
-  return ids.map((id) => SKILLS[id].name);
+/** Экипированные умения игрока — если игрок ещё ни разу не настраивал их
+ * через профиль (нет поля или оно пустое), используем стартовый набор фракции. */
+function equippedSkillIds(player) {
+  if (player.equippedSkills && player.equippedSkills.length) return player.equippedSkills;
+  return (FACTION_KIT[player.faction] || {}).skills || [];
+}
+function skillButtons(player) {
+  return equippedSkillIds(player).map((id) => SKILLS[id]?.name).filter(Boolean);
 }
 function skillIdByName(name) {
   return Object.values(SKILLS).find((s) => s.name === name)?.id || null;
@@ -47,11 +59,15 @@ function skillIdByName(name) {
 
 /**
  * Основная точка входа. state — то, что лежит в хранилище для этого userId
- * (или null для нового игрока). Возвращает { reply: {text, buttons}, nextState }.
- * Ничего не мутирует снаружи и не делает I/O — вызывающий код (webhook)
- * сам решает, как сохранить nextState и как физически отправить reply.
+ * (или null для нового игрока). deps.getProfileLink() — необязательная
+ * функция без аргументов, отдаёт готовую персональную ссылку на сайт-профиль;
+ * если не передана, кнопка «Профиль» просто ответит заглушкой (нужно для
+ * тестов, где ссылка не имеет смысла).
+ * Возвращает { reply: {text, buttons}, nextState }. Ничего не мутирует
+ * снаружи и не делает I/O — вызывающий код (webhook) сам решает, как
+ * сохранить nextState и как физически отправить reply.
  */
-function step(state, text, rng = Math.random) {
+function step(state, text, rng = Math.random, deps = {}) {
   const input = (text || '').trim();
   const scene = state?.scene || 'start';
 
@@ -79,7 +95,7 @@ function step(state, text, rng = Math.random) {
       return {
         reply: {
           text: `Добро пожаловать на борт, ${state.name}. Станция «${input}» тебя ждёт.`,
-          buttons: ['Исследовать', 'Статус']
+          buttons: STATION_BUTTONS
         },
         nextState: { scene: 'station', player }
       };
@@ -89,7 +105,19 @@ function step(state, text, rng = Math.random) {
       if (input === 'Статус') {
         const p = state.player;
         return {
-          reply: { text: `${p.name} · ${p.faction}\n❤️ ${p.hp}/${p.hpMax}`, buttons: ['Исследовать', 'Статус'] },
+          reply: { text: `${p.name} · ${p.faction}\n❤️ ${p.hp}/${p.hpMax}${p.statPoints ? `\n✨ Нераспределённых очков: ${p.statPoints}` : ''}`, buttons: STATION_BUTTONS },
+          nextState: state
+        };
+      }
+      if (input === 'Профиль') {
+        const link = typeof deps.getProfileLink === 'function' ? deps.getProfileLink() : null;
+        return {
+          reply: {
+            text: link
+              ? `Личный терминал профиля:\n${link}`
+              : 'Терминал профиля сейчас недоступен, попробуйте позже.',
+            buttons: STATION_BUTTONS
+          },
           nextState: state
         };
       }
@@ -102,7 +130,7 @@ function step(state, text, rng = Math.random) {
         };
       }
       return {
-        reply: { text: `🔭 ${event.text}`, buttons: ['Исследовать', 'Статус'] },
+        reply: { text: `🔭 ${event.text}`, buttons: STATION_BUTTONS },
         nextState: state
       };
     }
@@ -110,11 +138,11 @@ function step(state, text, rng = Math.random) {
     case 'pre_combat': {
       if (input === 'Отступить') {
         return {
-          reply: { text: 'Ты отступаешь на безопасное расстояние.', buttons: ['Исследовать', 'Статус'] },
+          reply: { text: 'Ты отступаешь на безопасное расстояние.', buttons: STATION_BUTTONS },
           nextState: { scene: 'station', player: state.player }
         };
       }
-      const buttons = ['Обычная атака', ...skillButtons(state.player.faction)];
+      const buttons = ['Обычная атака', ...skillButtons(state.player)];
       return {
         reply: { text: `${state.enemy.name}: ❤️ ${state.enemy.hp}/${state.enemy.hpMax}\n\nВыбери действие:`, buttons },
         nextState: { scene: 'combat', player: state.player, enemy: state.enemy }
@@ -125,7 +153,7 @@ function step(state, text, rng = Math.random) {
       const skillId = input === 'Обычная атака' ? null : skillIdByName(input);
       const skill = skillId ? SKILLS[skillId] : null;
       if (input !== 'Обычная атака' && !skill) {
-        const buttons = ['Обычная атака', ...skillButtons(state.player.faction)];
+        const buttons = ['Обычная атака', ...skillButtons(state.player)];
         return { reply: { text: 'Выбери действие кнопкой ниже.', buttons }, nextState: state };
       }
 
@@ -134,12 +162,12 @@ function step(state, text, rng = Math.random) {
       if (result.finished) {
         if (result.winner === 'attacker') {
           return {
-            reply: { text: `💥 ${result.log.join(' ')}\n\n🏆 ${state.enemy.name} уничтожен.`, buttons: ['Исследовать', 'Статус'] },
+            reply: { text: `💥 ${result.log.join(' ')}\n\n🏆 ${state.enemy.name} уничтожен.`, buttons: STATION_BUTTONS },
             nextState: { scene: 'station', player: result.attacker }
           };
         }
         return {
-          reply: { text: `💥 ${result.log.join(' ')}\n\n💀 Скафандр пробит. Аварийная капсула эвакуирует тебя на станцию.`, buttons: ['Исследовать', 'Статус'] },
+          reply: { text: `💥 ${result.log.join(' ')}\n\n💀 Скафандр пробит. Аварийная капсула эвакуирует тебя на станцию.`, buttons: STATION_BUTTONS },
           nextState: { scene: 'station', player: { ...result.attacker, hp: Math.round(result.attacker.hpMax * 0.5) } }
         };
       }
@@ -150,15 +178,15 @@ function step(state, text, rng = Math.random) {
 
       if (enemyTurn.finished && enemyTurn.winner === 'attacker') {
         return {
-          reply: { text: `💥 ${log}\n\n💀 Скафандр пробит.`, buttons: ['Исследовать', 'Статус'] },
-          nextState: { scene: 'station', player: { ...enemyTurn.attacker, hp: Math.round(enemyTurn.attacker.hpMax * 0.5) } }
+          reply: { text: `💥 ${log}\n\n💀 Скафандр пробит.`, buttons: STATION_BUTTONS },
+          nextState: { scene: 'station', player: { ...enemyTurn.defender, hp: Math.round(enemyTurn.defender.hpMax * 0.5) } }
         };
       }
 
-      const buttons = ['Обычная атака', ...skillButtons(state.player.faction)];
+      const buttons = ['Обычная атака', ...skillButtons(enemyTurn.defender)];
       return {
         reply: { text: `💥 ${log}\n\n${state.enemy.name}: ❤️ ${enemyTurn.attacker.hp}/${enemyTurn.attacker.hpMax}`, buttons },
-        nextState: { scene: 'combat', player: enemyTurn.attacker, enemy: enemyTurn.defender }
+        nextState: { scene: 'combat', player: enemyTurn.defender, enemy: enemyTurn.attacker }
       };
     }
 
@@ -167,4 +195,4 @@ function step(state, text, rng = Math.random) {
   }
 }
 
-module.exports = { step, freshPlayer, FACTIONS, FACTION_KIT };
+module.exports = { step, freshPlayer, equippedSkillIds, FACTIONS, FACTION_KIT, MAX_EQUIPPED_SKILLS };
