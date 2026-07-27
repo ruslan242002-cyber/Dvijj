@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Периферия — терминал профиля</title>
+<script src="https://unpkg.com/@vkontakte/vk-bridge/dist/browser.min.js"></script>
 <style>
   :root {
     --bg: #05070d;
@@ -142,16 +143,24 @@
 
 <script>
 const params = new URLSearchParams(location.search);
-const token = params.get('token');
+const token = params.get('token'); // старый способ — запасной путь
+const rawLaunchParams = location.search.slice(1); // vk_user_id, sign и т.д. — основной способ внутри VK Mini App
 const app = document.getElementById('app');
+
+// VK Mini Apps должны сообщить клиенту ВК, что готовы к показу — иначе
+// внутри приложения ВК может бесконечно висеть экран загрузки поверх нашего.
+if (window.vkBridge) { vkBridge.send('VKWebAppInit').catch(() => {}); }
 
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 async function api(method, body) {
-  const res = await fetch('/api/profile' + (method === 'GET' ? ('?token=' + encodeURIComponent(token)) : ''), {
+  const query = new URLSearchParams();
+  if (rawLaunchParams) query.set('launch', rawLaunchParams);
+  if (token) query.set('token', token);
+  const res = await fetch('/api/profile' + (method === 'GET' ? ('?' + query.toString()) : ''), {
     method,
     headers: { 'Content-Type': 'application/json' },
-    body: method === 'GET' ? undefined : JSON.stringify({ token, ...body })
+    body: method === 'GET' ? undefined : JSON.stringify({ token, launchParams: rawLaunchParams, ...body })
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || 'Неизвестная ошибка');
@@ -254,8 +263,8 @@ function render(data) {
 }
 
 (async () => {
-  if (!token) {
-    app.innerHTML = '<div class="fatal">Ссылка неполная — откройте профиль заново кнопкой «Профиль» в игре.</div>';
+  if (!rawLaunchParams && !token) {
+    app.innerHTML = '<div class="fatal">Не удалось определить пользователя ВК — откройте профиль заново кнопкой «Профиль» в игре.</div>';
     return;
   }
   try {
@@ -266,9 +275,11 @@ function render(data) {
   }
 })();
 
-// Прокидываем token в ссылку на карту, чтобы не терять сессию при переключении вкладок
+// Прокидываем параметры запуска (или старый token) в ссылку на карту,
+// чтобы при переключении вкладки ВК снова могла подтвердить пользователя
 document.querySelectorAll('.bottom-nav a[href^="map.html"]').forEach((a) => {
-  if (token) a.href = 'map.html?token=' + encodeURIComponent(token);
+  if (rawLaunchParams) a.href = 'map.html?' + rawLaunchParams;
+  else if (token) a.href = 'map.html?token=' + encodeURIComponent(token);
 });
 </script>
 </body>
