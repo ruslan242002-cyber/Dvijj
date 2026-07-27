@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -59,11 +58,32 @@
   .msg.ok { background: rgba(53,208,127,.12); color: var(--ok); }
   .empty { color: var(--muted); font-size: 13px; font-style: italic; }
   .loading, .fatal { text-align: center; color: var(--muted); padding: 60px 20px; }
+  body { padding-bottom: 90px; }
+  .bottom-nav {
+    position: fixed; bottom: 0; left: 0; right: 0; background: #0b1120;
+    border-top: 1px solid rgba(255,255,255,.08); display: flex; padding: 8px 4px 14px;
+  }
+  .bottom-nav a {
+    flex: 1; text-align: center; color: var(--muted); text-decoration: none; font-size: 11px;
+    display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 4px 0;
+  }
+  .bottom-nav a.active { color: var(--accent); }
+  .bottom-nav a .ic { font-size: 18px; }
+  .bottom-nav a.soon { opacity: .4; }
 </style>
 </head>
 <body>
 <div class="wrap" id="app">
   <div class="loading">Связь со станцией устанавливается…</div>
+</div>
+
+<div class="bottom-nav">
+  <a href="#" class="active">👤<span class="ic"></span>Профиль</a>
+  <a href="map.html">🗺️<span class="ic"></span>Карта</a>
+  <a href="#" class="soon">🛒<span class="ic"></span>Биржа</a>
+  <a href="#" class="soon">🛠️<span class="ic"></span>Крафт</a>
+  <a href="#" class="soon">🏆<span class="ic"></span>Рейтинги</a>
+  <a href="#" class="soon">🚀<span class="ic"></span>Флотилии</a>
 </div>
 
 <script>
@@ -191,6 +211,11 @@ function render(data) {
     app.innerHTML = `<div class="fatal">${esc(e.message)}</div>`;
   }
 })();
+
+// Прокидываем token в ссылку на карту, чтобы не терять сессию при переключении вкладок
+document.querySelectorAll('.bottom-nav a[href^="map.html"]').forEach((a) => {
+  if (token) a.href = 'map.html?token=' + encodeURIComponent(token);
+});
 </script>
 </body>
 </html>
