@@ -1,19 +1,22 @@
 /**
- * Путь: api/vk.js -> https://dvijj-ifka.vercel.app/api/vk
+ * Путь: api/vk.js -> https://ваш-проект.vercel.app/api/vk
  * Это единственный адрес, который нужно вписать в настройки Callback API
  * в сообществе ВК. Дальше всё делает game/router.js — этот файл только
- * подключает реальное хранилище (Upstash) и реальный клиент ВК.
+ * подключает реальное хранилище (Upstash), реальный клиент ВК и генерацию
+ * персональной ссылки на профиль.
  *
  * Обязательные переменные окружения (Vercel → Settings → Environment Variables):
  *   VK_GROUP_TOKEN         — ключ доступа сообщества (права: сообщения)
  *   VK_CONFIRMATION_CODE   — строка из настроек Callback API в ВК
  *   VK_CALLBACK_SECRET     — секретный ключ, тот же, что в настройках ВК
+ *   PROFILE_TOKEN_SECRET   — любая своя длинная случайная строка (для подписи ссылок на профиль)
  *   UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN — из Upstash
  */
 'use strict';
 const { handleVkEvent } = require('../vk/webhook-handler.js');
 const { vkClient } = require('../vk/client.js');
 const { upstashStore } = require('../state/upstash-store.js');
+const { sign } = require('../lib/auth-token.js');
 
 module.exports = async (req, res) => {
   if (req.method !== 'POST') {
@@ -21,19 +24,19 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // ВРЕМЕННАЯ диагностика — покажет в Vercel Logs, что реально пришло от ВК.
-  // Уберите эти две строки после того, как всё заработает.
-  console.log('VK webhook body:', JSON.stringify(req.body));
-  console.log('VK_CONFIRMATION_CODE length:', (process.env.VK_CONFIRMATION_CODE || '').length);
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  const profileSecret = process.env.PROFILE_TOKEN_SECRET;
 
   try {
     const reply = await handleVkEvent(req.body || {}, {
       store: upstashStore(),
       vk: vkClient(),
       confirmationCode: (process.env.VK_CONFIRMATION_CODE || '').trim(),
-      secret: (process.env.VK_CALLBACK_SECRET || '').trim()
+      secret: (process.env.VK_CALLBACK_SECRET || '').trim(),
+      getProfileLink: profileSecret
+        ? (peerId) => `https://${host}/profile.html?token=${sign(String(peerId), profileSecret)}`
+        : undefined
     });
-    console.log('VK webhook reply:', JSON.stringify(reply));
     res.status(200).send(reply);
   } catch (err) {
     // ВК ждёт "ok" даже при внутренней ошибке, иначе начнёт слать событие повторно раз в секунду
