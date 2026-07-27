@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Периферия — карта секторов</title>
+<style>
+  :root {
+    --bg: #05070c; --panel: #121a2b; --panel2: #182339;
+    --accent: #3aa0ff; --text: #e6ecf5; --muted: #7d8aa3;
+    --blue: #3aa0ff; --yellow: #e8b93a; --red: #ff4d5e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: radial-gradient(ellipse at top, #101b30 0%, #05070c 70%);
+    color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh; padding: 18px 14px 90px;
+  }
+  .wrap { max-width: 520px; margin: 0 auto; }
+  h1 { font-size: 20px; letter-spacing: .04em; margin: 6px 0 2px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-bottom: 12px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .map-card {
+    background: linear-gradient(180deg, var(--panel), var(--panel2));
+    border: 1px solid rgba(255,255,255,.06); border-radius: 16px; padding: 10px;
+    position: relative; overflow: hidden;
+  }
+  #mapSvg { width: 100%; height: auto; display: block; }
+  .cell { transition: opacity .15s; }
+  .cell:active { opacity: .6; }
+  .station-label { font-size: 7px; fill: var(--text); text-anchor: middle; }
+  .tooltip {
+    display: none; margin-top: 10px; padding: 10px 12px; border-radius: 10px;
+    background: rgba(58,160,255,.1); border: 1px solid rgba(58,160,255,.3); font-size: 13px;
+  }
+  .bottom-nav {
+    position: fixed; bottom: 0; left: 0; right: 0; background: #0b1120;
+    border-top: 1px solid rgba(255,255,255,.08); display: flex; padding: 8px 4px 14px;
+  }
+  .bottom-nav a {
+    flex: 1; text-align: center; color: var(--muted); text-decoration: none; font-size: 11px;
+    display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 4px 0;
+  }
+  .bottom-nav a.active { color: var(--accent); }
+  .bottom-nav a .ic { font-size: 18px; }
+  .bottom-nav a.soon { opacity: .4; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🗺️ КАРТА ПЕРИФЕРИИ</h1>
+  <div class="sub">Секторы вокруг четырёх станций — чем дальше от центра, тем опаснее и щедрее</div>
+
+  <div class="legend">
+    <span><i style="background:var(--blue)"></i>Патрулируемый</span>
+    <span><i style="background:var(--yellow)"></i>Спорный</span>
+    <span><i style="background:var(--red)"></i>Открытый космос</span>
+  </div>
+
+  <div class="map-card">
+    <svg id="mapSvg" viewBox="0 0 400 400"></svg>
+  </div>
+
+  <div class="tooltip" id="tooltip"></div>
+</div>
+
+<div class="bottom-nav">
+  <a href="profile.html">👤<span class="ic"></span>Профиль</a>
+  <a href="map.html" class="active">🗺️<span class="ic"></span>Карта</a>
+  <a href="#" class="soon">🛒<span class="ic"></span>Биржа</a>
+  <a href="#" class="soon">🛠️<span class="ic"></span>Крафт</a>
+  <a href="#" class="soon">🏆<span class="ic"></span>Рейтинги</a>
+  <a href="#" class="soon">🚀<span class="ic"></span>Флотилии</a>
+</div>
+
+<script>
+// Генерируем ромбовидный кластер секторов: зона зависит от расстояния до
+// ближайшей из 4 станций (по краям — синие, дальше — жёлтые, глубже — красные).
+const SIZE = 17; // сеток по половине стороны
+const CELL = 400 / (SIZE * 2 + 4);
+const svg = document.getElementById('mapSvg');
+const tooltip = document.getElementById('tooltip');
+
+const STATIONS = [
+  { name: 'Приют', x: -8, y: -8, color: '#35d07f' },
+  { name: 'Терминус', x: 8, y: -8, color: '#7d8aa3' },
+  { name: 'Арсенал', x: -8, y: 8, color: '#ff7a3a' },
+  { name: 'Вуаль', x: 8, y: 8, color: '#a06bff' }
+];
+
+function zoneFor(dist) {
+  if (dist <= 5) return { z: 'station', color: null };
+  if (dist <= 9) return { z: 'blue', color: 'var(--blue)' };
+  if (dist <= 13) return { z: 'yellow', color: 'var(--yellow)' };
+  return { z: 'red', color: 'var(--red)' };
+}
+
+let svgMarkup = '';
+for (let gx = -SIZE; gx <= SIZE; gx++) {
+  for (let gy = -SIZE; gy <= SIZE; gy++) {
+    // ромбовидная маска — как кластер на скриншоте Атраксиса, а не квадрат
+    if (Math.abs(gx) + Math.abs(gy) > SIZE + 2) continue;
+
+    const distToStation = Math.min(...STATIONS.map(s => Math.hypot(gx - s.x, gy - s.y)));
+    const { z, color } = zoneFor(distToStation);
+    if (z === 'station') continue; // сама станция рисуется отдельным маркером
+
+    const cx = 200 + gx * CELL;
+    const cy = 200 + gy * CELL;
+    svgMarkup += `<circle class="cell" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${(CELL * 0.32).toFixed(1)}" fill="none" stroke="${color}" stroke-width="1.1" opacity="0.75" data-zone="${z}" data-x="${gx}" data-y="${gy}"/>`;
+  }
+}
+
+// маркеры станций поверх сетки
+STATIONS.forEach((s) => {
+  const cx = 200 + s.x * CELL;
+  const cy = 200 + s.y * CELL;
+  svgMarkup += `<circle cx="${cx}" cy="${cy}" r="${CELL * 0.9}" fill="${s.color}" opacity="0.9"/>`;
+  svgMarkup += `<text class="station-label" x="${cx}" y="${cy + CELL * 1.7}">${s.name}</text>`;
+});
+
+svg.innerHTML = svgMarkup;
+
+svg.addEventListener('click', (e) => {
+  const t = e.target;
+  if (t.tagName !== 'circle' || !t.dataset.zone) return;
+  const zoneNames = { blue: 'Патрулируемый сектор', yellow: 'Спорный сектор', red: 'Открытый космос' };
+  const dangerHint = { blue: 'опасность низкая', yellow: 'PvP только по вызову', red: 'PvP без ограничений' };
+  tooltip.style.display = 'block';
+  tooltip.innerHTML = `<b>${zoneNames[t.dataset.zone]}</b> · сектор [${t.dataset.x}, ${t.dataset.y}]<br>${dangerHint[t.dataset.zone]}`;
+});
+</script>
+</body>
+</html>
