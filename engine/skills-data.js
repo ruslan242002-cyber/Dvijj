@@ -1,6 +1,5 @@
 /**
- * Набор из 8 навыков — представительная выборка формул из дизайн-документа
- * (аналоги Плазменного шара, Вытягивания анимы, Живого жара и т.д.),
+ * Набор из 8 навыков — представительная выборка формул из дизайн-документа,
  * переименованные под сеттинг "Периферии". Формулы принимают "attacker"
  * (объект Fighter) и возвращают базовое число до крита и брони.
  */
@@ -14,12 +13,12 @@ const SKILLS = {
     applyDot: { type: 'dot', amount: 12, turnsLeft: 3 }
   },
   anima_drain: {
-    id: 'anima_drain', name: 'Вытягивание анимы', station: 'Вуаль', cd: 3,
+    id: 'anima_drain', name: 'Психонический разрыв', station: 'Вуаль', cd: 3,
     usesFocus: true, damaging: true, pure: true, lifestealPct: 0.25,
     formula: (a) => a.stats.reaction * 0.7 + a.stats.endurance * 0.5 + a.stats.power * 0.6
   },
   living_heat: {
-    id: 'living_heat', name: 'Живой жар', station: 'Терминус', cd: 3,
+    id: 'living_heat', name: 'Полевой ремонт', station: 'Терминус', cd: 3,
     usesFocus: true, damaging: true, pure: true, selfHealPct: 0.15,
     formula: (a) => a.hpMax * 0.12
   },
@@ -35,7 +34,7 @@ const SKILLS = {
     // доп. эффект «-33% экранирования цели» применяется отдельно в вызывающем коде при желании
   },
   heal_field: {
-    id: 'heal_field', name: 'Полевое исцеление', station: 'Приют', cd: 3,
+    id: 'heal_field', name: 'Нанитовое исцеление', station: 'Приют', cd: 3,
     usesFocus: true, damaging: false, selfHealPct: 0.35,
     formula: () => 0
   },
@@ -47,7 +46,7 @@ const SKILLS = {
     , shieldPierce: 0.33
   },
   ritual_mark: {
-    id: 'ritual_mark', name: 'Ритуальная метка', station: 'Вуаль', cd: 3,
+    id: 'ritual_mark', name: 'Метка Тракта', station: 'Вуаль', cd: 3,
     usesFocus: true, damaging: true, pure: true,
     formula: (a) => a.stats.endurance * 0.6 + a.stats.power * 0.6 + a.stats.reaction * 0.4
   }
