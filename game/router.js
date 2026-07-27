@@ -20,7 +20,8 @@ const FACTION_KIT = {
 };
 
 const MAX_EQUIPPED_SKILLS = 3;
-const STATION_BUTTONS = ['Исследовать', 'Статус', 'Профиль'];
+const RESET_COMMAND = 'Сброс';
+const STATION_BUTTONS = ['Исследовать', 'Статус', 'Профиль', 'Сброс'];
 
 function freshPlayer(name, faction) {
   const bias = (FACTION_KIT[faction] || {}).statBias || {};
@@ -69,6 +70,21 @@ function skillIdByName(name) {
  */
 function step(state, text, rng = Math.random, deps = {}) {
   const input = (text || '').trim();
+
+  // Глобальная команда — работает из ЛЮБОЙ сцены, даже если где-то застряли
+  // в бою или в непонятном состоянии. Специально не требует подтверждения:
+  // это единственный способ у игрока сбросить прогресс, раз удаление
+  // переписки в ВК не стирает данные на сервере.
+  if (input === RESET_COMMAND) {
+    return {
+      reply: {
+        text: '🔄 Прогресс сброшен подчистую.\n\n🛰️ ПЕРИФЕРИЯ\n\nТракт оборвался триста лет назад. Как тебя записать в журнал станции?',
+        buttons: []
+      },
+      nextState: { scene: 'ask_name' }
+    };
+  }
+
   const scene = state?.scene || 'start';
 
   switch (scene) {
