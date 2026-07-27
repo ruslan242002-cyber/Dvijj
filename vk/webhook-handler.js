@@ -19,15 +19,18 @@
 const { step } = require('../game/router.js');
 
 async function handleVkEvent(body, deps) {
-  const { store, vk, rng = Math.random, confirmationCode, secret } = deps;
+  const { store, vk, rng = Math.random, confirmationCode, secret, getProfileLink } = deps;
+
+  // confirmation проверяем ДО секрета: VK не всегда присылает secret в этом
+  // событии, и не должен — это просто "рукопожатие", секрет защищает
+  // только настоящие события (message_new и т.п.), см. официальные примеры VK
+  if (body.type === 'confirmation') {
+    return confirmationCode || '';
+  }
 
   if (secret && body.secret !== secret) {
     // Не совпал секрет — отвечаем "ok", чтобы ВК не долбил ретраями, но ничего не делаем
     return 'ok';
-  }
-
-  if (body.type === 'confirmation') {
-    return confirmationCode || '';
   }
 
   if (body.type === 'message_new') {
@@ -36,7 +39,8 @@ async function handleVkEvent(body, deps) {
     const text = message.text || '';
 
     const prevState = await store.get(peerId);
-    const { reply, nextState } = step(prevState, text, rng);
+    const routerDeps = getProfileLink ? { getProfileLink: () => getProfileLink(peerId) } : {};
+    const { reply, nextState } = step(prevState, text, rng, routerDeps);
     await store.set(peerId, nextState);
     await vk.sendMessage(peerId, reply.text, reply.buttons);
     return 'ok';
