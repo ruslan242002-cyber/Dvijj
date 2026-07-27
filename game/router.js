@@ -127,12 +127,16 @@ function step(state, text, rng = Math.random, deps = {}) {
       }
       if (input === 'Профиль') {
         const link = typeof deps.getProfileLink === 'function' ? deps.getProfileLink() : null;
+        if (!link) {
+          return {
+            reply: { text: 'Терминал профиля сейчас недоступен, попробуйте позже.', buttons: STATION_BUTTONS },
+            nextState: state
+          };
+        }
         return {
           reply: {
-            text: link
-              ? `Личный терминал профиля:\n${link}`
-              : 'Терминал профиля сейчас недоступен, попробуйте позже.',
-            buttons: STATION_BUTTONS
+            text: 'Личный терминал профиля готов:',
+            buttons: [{ label: 'Открыть профиль', url: link }, 'Исследовать', 'Статус', 'Сброс']
           },
           nextState: state
         };
