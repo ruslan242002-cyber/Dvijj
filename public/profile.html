@@ -25,7 +25,6 @@
     color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     min-height: 100vh; padding: 68px 12px 92px; position: relative; overflow-x: hidden;
   }
-  /* звёздный фон — чистый CSS, без картинок */
   body::before {
     content: ''; position: fixed; inset: 0; z-index: -2;
     background: radial-gradient(ellipse at 50% -10%, #16233f 0%, #05070d 60%);
@@ -42,7 +41,6 @@
     background-repeat: repeat; background-size: 220px 220px;
   }
 
-  /* верхняя плашка — как заголовок приложения у Атраксиса */
   .app-bar {
     position: fixed; top: 0; left: 0; right: 0; z-index: 10;
     display: flex; align-items: center; gap: 10px;
@@ -174,6 +172,7 @@ function render(data) {
   const p = data.player;
   const equipped = new Set(p.equippedSkills || []);
   const hpPct = Math.max(0, Math.min(100, Math.round((p.hp / p.hpMax) * 100)));
+  const xpPct = Math.max(0, Math.min(100, Math.round(((p.xp || 0) / (data.xpToNext || 1)) * 100)));
 
   app.innerHTML = `
     <h1>ТЕРМИНАЛ ПРОФИЛЯ</h1>
@@ -181,6 +180,9 @@ function render(data) {
 
     <div class="card">
       <h2>Состояние</h2>
+      <div class="stat-row"><span class="stat-name">Уровень</span><span class="stat-val">⭐ ${p.level || 1}</span></div>
+      <div class="hp-bar-outer"><div class="hp-bar-inner" style="width:${xpPct}%;background:linear-gradient(90deg,#3aa0ff,#8a5cff)"></div></div>
+      <div class="stat-row"><span class="stat-name">Опыт</span><span class="stat-val">${p.xp || 0}/${data.xpToNext} XP</span></div>
       <div class="stat-row"><span class="stat-name">HP</span><span class="stat-val">${p.hp}/${p.hpMax}</span></div>
       <div class="hp-bar-outer"><div class="hp-bar-inner" style="width:${hpPct}%"></div></div>
       <div class="stat-row"><span class="stat-name">Кредиты</span><span class="stat-val">💳 ${p.credits || 0}</span></div>
@@ -231,7 +233,6 @@ function render(data) {
     row.appendChild(btn);
     statsEl.appendChild(row);
   });
-  // прочие вторичные статы — только просмотр
   ['firepower', 'shielding'].forEach((key) => {
     const label = key === 'firepower' ? 'Огневая мощь' : 'Экранирование';
     const row = document.createElement('div');
@@ -284,8 +285,6 @@ function render(data) {
   }
 })();
 
-// Прокидываем параметры запуска (или старый token) в ссылку на карту,
-// чтобы при переключении вкладки ВК снова могла подтвердить пользователя
 document.querySelectorAll('.bottom-nav a[href^="map.html"]').forEach((a) => {
   if (rawLaunchParams) a.href = 'map.html?' + rawLaunchParams;
   else if (token) a.href = 'map.html?token=' + encodeURIComponent(token);
