@@ -1,4 +1,3 @@
-cat > /home/claude/periferia-bot/game/router.js << 'ROUTEREOF'
 /**
  * Игровой роутер: то, что раньше рисовалось кубами в SaleBot, теперь —
  * обычная функция от (текущая сцена, входящее сообщение) к (ответ, новая сцена).
@@ -12,6 +11,7 @@ const { SKILLS } = require('../engine/skills-data.js');
 const { rollEvent, rollLoot } = require('../engine/exploration-engine.js');
 const { grantXp, xpToNext, xpForTier } = require('../engine/leveling.js');
 const { availableQuests, getQuest, describeObjective, progressText, objectiveMet, consumeObjective } = require('./quests-data.js');
+const { imageForEnemy } = require('./enemy-images.js');
 
 const FACTIONS = ['Приют', 'Терминус', 'Арсенал', 'Вуаль'];
 
@@ -170,7 +170,7 @@ function explore(player, zone, rng, deps) {
   const event = rollEvent(zone, rng, player.level || 1);
   if (event.type === 'ambush') {
     return {
-      reply: { text: `⚠️ ОТГОЛОСОК\n\n${event.text}`, buttons: ['Атаковать', 'Отступить'] },
+      reply: { text: `⚠️ ОТГОЛОСОК\n\n${event.text}`, buttons: ['Атаковать', 'Отступить'], imageKey: imageForEnemy(event.enemy.name) },
       nextState: { scene: 'pre_combat', player, enemy: event.enemy, zone }
     };
   }
