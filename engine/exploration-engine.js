@@ -54,16 +54,20 @@ function rollLoot(zone, rng = Math.random) {
  * полями, которые понимает combat-engine. SaleBot просто сохраняет
  * весь этот объект в переменную state.enemy как есть, ничего не достраивая.
  */
-function generateEnemy(zone, rng = Math.random) {
+function generateEnemy(zone, rng = Math.random, playerLevel = null) {
   const names = ENEMY_NAMES[zone] || ENEMY_NAMES.blue;
   const name = names[Math.floor(rng() * names.length)];
   const dangerMult = { blue: 0.6, yellow: 1, red: 1.8 }[zone] || 1;
-  const tier = tierForZone(zone, rng);
+  let tier = tierForZone(zone, rng);
+  // Даже если игрок технически допущен в зону, тир противника не может
+  // оторваться от его уровня больше чем на 2 — это и есть защита от
+  // "зашёл и умер за один удар", а не только запрет на вход в зону.
+  if (playerLevel) tier = Math.max(1, Math.min(tier, playerLevel + 2));
   const hp = Math.round((80 + rng() * 120) * dangerMult * (1 + tier * 0.1));
 
   const base = 12 + tier * 4;
   return {
-    name,
+    name, tier,
     hp, hpMax: hp,
     stats: {
       power: Math.round(base * (0.8 + rng() * 0.4)),
@@ -81,7 +85,7 @@ function generateEnemy(zone, rng = Math.random) {
   };
 }
 
-function rollEvent(zone, rng = Math.random) {
+function rollEvent(zone, rng = Math.random, playerLevel = null) {
   const weights = ZONE_WEIGHTS[zone] || ZONE_WEIGHTS.blue;
   const type = weightedPick(weights, rng);
 
@@ -91,7 +95,7 @@ function rollEvent(zone, rng = Math.random) {
       return { type, loot, text: `Внутри: ${loot.qty}× ${loot.resource} ${toRoman(loot.tier)}, ${loot.credits} кредитов.` };
     }
     case 'ambush': {
-      const enemy = generateEnemy(zone, rng);
+      const enemy = generateEnemy(zone, rng, playerLevel);
       return { type, enemy, text: `${enemy.name} · HP: ${enemy.hp} · Тип угрозы: боевой` };
     }
     case 'anomaly':
