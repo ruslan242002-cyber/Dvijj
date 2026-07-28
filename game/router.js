@@ -508,5 +508,3 @@ module.exports = {
   step, freshPlayer, equippedSkillIds, addToInventory, sellInventory, hubMessage, stationButtons,
   FACTIONS, FACTION_KIT, MAX_EQUIPPED_SKILLS, HUB_BUTTONS, ZONE_BUTTONS, MIN_LEVEL_FOR_ZONE
 };
-ROUTEREOF
-echo "written"
