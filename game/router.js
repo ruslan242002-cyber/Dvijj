@@ -507,7 +507,5 @@ function step(state, text, rng = Math.random, deps = {}) {
 module.exports = {
   step, freshPlayer, equippedSkillIds, addToInventory, sellInventory, hubMessage, stationButtons,
   FACTIONS, FACTION_KIT, MAX_EQUIPPED_SKILLS, HUB_BUTTONS, ZONE_BUTTONS, MIN_LEVEL_FOR_ZONE
-};// в game/router.js — только эти строки добавляете
-const { getDailyContracts, checkContractProgress } = require('../contracts/contracts-engine.js');
-const { craftItem, listRecipes } = require('../crafting/crafting-engine.js');
+}
 
