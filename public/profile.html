@@ -152,6 +152,9 @@ const app = document.getElementById('app');
 if (window.vkBridge) { vkBridge.send('VKWebAppInit').catch(() => {}); }
 
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function zoneLabel(zone) {
+  return { blue: 'Патрулируемый', yellow: 'Спорный', red: 'Открытый космос' }[zone] || 'Патрулируемый';
+}
 
 async function api(method, body) {
   const query = new URLSearchParams();
@@ -180,6 +183,9 @@ function render(data) {
       <h2>Состояние</h2>
       <div class="stat-row"><span class="stat-name">HP</span><span class="stat-val">${p.hp}/${p.hpMax}</span></div>
       <div class="hp-bar-outer"><div class="hp-bar-inner" style="width:${hpPct}%"></div></div>
+      <div class="stat-row"><span class="stat-name">Кредиты</span><span class="stat-val">💳 ${p.credits || 0}</span></div>
+      <div class="stat-row"><span class="stat-name">Сектор</span><span class="stat-val">${zoneLabel(p.zone)}</span></div>
+      ${p.radiation ? `<div class="stat-row"><span class="stat-name">Облучение</span><span class="stat-val" style="color:var(--accent2)">☢️ ${p.radiation}%</span></div>` : ''}
     </div>
 
     <div class="card">
@@ -198,10 +204,13 @@ function render(data) {
     </div>
 
     <div class="card">
-      <h2>Инвентарь</h2>
-      <div class="empty">${(p.inventory && p.inventory.length) ? '' : 'Пока пусто — предметы появятся по мере исследования секторов.'}</div>
+      <h2>Трюм</h2>
+      ${(p.inventory && p.inventory.length)
+        ? p.inventory.map((i) => `<div class="stat-row"><span class="stat-name">${esc(i.resource)} T${i.tier}</span><span class="stat-val">×${i.qty}</span></div>`).join('')
+        : '<div class="empty">Пока пусто — предметы появятся по мере исследования секторов.</div>'}
     </div>
   `;
+
 
   const statNames = { power: 'Мощь', mind: 'Разум', reaction: 'Реакция', endurance: 'Живучесть' };
   const statsEl = document.getElementById('stats');
