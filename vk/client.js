@@ -27,11 +27,13 @@ function buildKeyboard(buttons, { inline = false, oneTime = false } = {}) {
 
   const rows = [];
   let textRow = [];
+  const MAX_PER_ROW = 3;
   const flushTextRow = () => { if (textRow.length) { rows.push(textRow); textRow = []; } };
 
   buttons.forEach((b) => {
     if (typeof b === 'string') {
       textRow.push({ action: { type: 'text', label: b.slice(0, 40) }, color: 'primary' });
+      if (textRow.length >= MAX_PER_ROW) flushTextRow();
     } else if (b && b.url) {
       flushTextRow();
       rows.push([{ action: { type: 'open_link', link: b.url, label: String(b.label || 'Открыть').slice(0, 40) } }]);
