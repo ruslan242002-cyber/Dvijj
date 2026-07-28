@@ -19,7 +19,7 @@
 const { step } = require('../game/router.js');
 
 async function handleVkEvent(body, deps) {
-  const { store, vk, rng = Math.random, confirmationCode, secret, getProfileLink } = deps;
+  const { store, vk, rng = Math.random, confirmationCode, secret, getProfileLink, resolveEnemyImage } = deps;
 
   // confirmation проверяем ДО секрета: VK не всегда присылает secret в этом
   // событии, и не должен — это просто "рукопожатие", секрет защищает
@@ -42,7 +42,12 @@ async function handleVkEvent(body, deps) {
     const routerDeps = getProfileLink ? { getProfileLink: () => getProfileLink(peerId) } : {};
     const { reply, nextState } = step(prevState, text, rng, routerDeps);
     await store.set(peerId, nextState);
-    await vk.sendMessage(peerId, reply.text, reply.buttons);
+
+    let attachment;
+    if (reply.imageKey && typeof resolveEnemyImage === 'function') {
+      attachment = await resolveEnemyImage(reply.imageKey).catch(() => null);
+    }
+    await vk.sendMessage(peerId, reply.text, reply.buttons, attachment);
     return 'ok';
   }
 
