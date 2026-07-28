@@ -1,24 +1,43 @@
-'use strict';
-
 /**
- * ЛОР-ПРОСЛОЙКА «Периферия»
- * 
- * ГИПЕРПРОСТРАНСТВЕННЫЙ ТРАКТ — не дорога, а живой организм. 
- * Триста лет назад он «оборвался». Что это значит — никто не знает точно.
- * 
- * ЧЕТЫРЕ ГИПОТЕЗЫ (игрок постепенно открывает все, но верит в одну):
- * 1. КАТАСТРОФА: Тракт разрушил метеоритный поток. Можно восстановить.
- * 2. ИНФЕКЦИЯ: Тракт заразился «Отголосками» — это его иммунный ответ. 
- *    Нужно найти «ядро» и уничтожить.
- * 3. ЭВОЛЮЦИЯ: Тракт сознательно отделил Периферию. Нужно доказать, 
- *    что мы достойны вернуться.
- * 4. ПРЕДАТЕЛЬСТВО: Одна из станций (или все четыре) сделала это намеренно.
- * 
- * ГЛОБАЛЬНЫЙ КВЕСТ: «СШИТЬ ТРАКТ»
- * Собрать 7 ФРАГМЕНТОВ НАВИГАЦИОННОГО КЛЮЧА — древних артефактов, 
- * разбросанных по секторам. Каждый охраняет УНИКАЛЬНЫЙ босс-аномалия.
- * После сбора — финальное испытание: выбор, определяющий концовку.
+ * МИФОЛОГИЯ ТРАКТА — ядро мира и глобальный эндгейм-квест «Сшить Тракт».
+ *
+ * Что поправил при адаптации:
+ *
+ *  1. state → player, по той же причине, что и везде в этом роутере:
+ *     только то, что лежит в player, переживает переход между сценами.
+ *
+ *  2. У трёх из семи фрагментов условие разблокировки ссылалось на
+ *     системы, которых у нас физически нет:
+ *       - fragment_gamma: 'boss_kills' — заменил на highTierKills
+ *         (счётчик убийств врагов тира 5+, который теперь реально
+ *         ведётся в game/router.js после каждой победы в бою);
+ *       - fragment_delta: 'tower' (этаж башни) — башни-мини-игры нет,
+ *         заменил на уровень персонажа (level 25) — по духу похоже:
+ *         тоже "долгий путь", а не разовое действие;
+ *       - fragment_epsilon: 'pvp' (победы над игроками) — PvP между
+ *         игроками не реализовано, заменил на суммарное число побед
+ *         в бою (killCount) — сама лорная фраза "что если враг — это
+ *         ты сам" не потеряла смысл: чем больше боёв, тем актуальнее вопрос;
+ *       - fragment_zeta: 'craft' (уникальные предметы) — крафта нет,
+ *         заменил на число выполненных квестов станций (completedQuests) —
+ *         "ты создавал орудия" стало "ты решал задачи станций", лорный
+ *         текст чуть подправлен под это.
+ *     fragment_alpha (репутация конкретной фракции) и fragment_beta
+ *     (число вылазок в жёлтую зону) переносятся без изменений — это
+ *     как раз то, что у нас уже реально считается (player.factionStanding
+ *     из choices/consequence-engine.js и player.zoneVisits).
+ *
+ *  3. "guardian" (уникальный босс на фрагмент) оставлен как лорное поле —
+ *     сама механика "прийти и подраться с named-боссом за фрагмент" ещё
+ *     не реализована (нет сцены "экспедиция за фрагментом"), это
+ *     следующий логичный шаг, если понадобится.
+ *
+ *  4. ENDINGS (концовки) реализованы как данные + чистая функция
+ *     getEnding(player) — без самой сцены "финальное испытание", это
+ *     тоже задел на будущее: как только появится соответствующая сцена,
+ *     она сможет прямо спросить getEnding(player) и показать нужный текст.
  */
+'use strict';
 
 const TRAKT_FRAGMENTS = [
   {
@@ -26,7 +45,7 @@ const TRAKT_FRAGMENTS = [
     name: 'Фрагмент Альфа: Координаты Истока',
     sector: 'blue',
     guardian: 'Древний Зонд-Хранитель',
-    unlockCondition: { type: 'reputation', faction: 'Терминус', value: 50 },
+    unlockCondition: { type: 'faction_reputation', faction: 'Терминус', value: 50 },
     lore: 'Терминус хранит память о том, КЕМ были первые путники. Но память искажена.'
   },
   {
@@ -42,7 +61,7 @@ const TRAKT_FRAGMENTS = [
     name: 'Фрагмент Гамма: Импульс Разрыва',
     sector: 'red',
     guardian: 'Порождение Разлома',
-    unlockCondition: { type: 'boss_kills', count: 5, tier: 5 },
+    unlockCondition: { type: 'high_tier_kills', count: 5 },
     lore: 'Арсенал знает силу. Но сила без понимания — глухота.'
   },
   {
@@ -50,7 +69,7 @@ const TRAKT_FRAGMENTS = [
     name: 'Фрагмент Дельта: Матрица Возврата',
     sector: 'red',
     guardian: 'Искажённый Куратор',
-    unlockCondition: { type: 'tower', floor: 7 },
+    unlockCondition: { type: 'level', value: 25 },
     lore: 'Приют лечит раны. Но некоторые раны — это двери.'
   },
   {
@@ -58,16 +77,16 @@ const TRAKT_FRAGMENTS = [
     name: 'Фрагмент Эпсилон: Подпись Предателя',
     sector: 'red',
     guardian: 'Тень Себя',
-    unlockCondition: { type: 'pvp', wins: 10 },
-    lore: 'Ты дрался с другими. А что, если враг — это ты сам?'
+    unlockCondition: { type: 'total_kills', count: 100 },
+    lore: 'Ты дрался столько раз, что счёт потерял смысл. А что, если враг — это ты сам?'
   },
   {
     id: 'fragment_zeta',
     name: 'Фрагмент Зета: Код Перезагрузки',
     sector: 'red',
     guardian: 'Аварийный ИИ Тракта',
-    unlockCondition: { type: 'craft', uniqueItems: 3 },
-    lore: 'Ты создавал орудия. Сможешь ли создать мост?'
+    unlockCondition: { type: 'quests_completed', count: 15 },
+    lore: 'Ты решал задачи станций одну за другой. Сможешь ли решить задачу самого Тракта?'
   },
   {
     id: 'fragment_omega',
@@ -87,7 +106,7 @@ const ENDINGS = {
     text: 'Тракт сшит. Но он сшит ТОБОЙ — и теперь ты его часть. Навсегда.'
   },
   PURIFICATION: {
-    id: 'purification', 
+    id: 'purification',
     name: 'Очищение',
     condition: { hypothesis: 'INFECTION', fragments: 7 },
     text: 'Отголоски уничтожены. Тракт чист. Но пуст. Что ты сделал?'
@@ -100,7 +119,7 @@ const ENDINGS = {
   },
   EXPOSURE: {
     id: 'exposure',
-    name: 'Разоблачение', 
+    name: 'Разоблачение',
     condition: { hypothesis: 'BETRAYAL', fragments: 7 },
     text: 'Правда о станциях открыта. Хаос. Война. Но хотя бы честно.'
   },
@@ -112,50 +131,95 @@ const ENDINGS = {
   }
 };
 
-function getFragmentStatus(state) {
-  const collected = state.lore?.fragments || [];
-  return TRAKT_FRAGMENTS.map(f => ({
-    ...f,
-    collected: collected.includes(f.id),
-    unlocked: checkUnlock(state, f.unlockCondition)
-  }));
-}
+const HYPOTHESES = ['CATASTROPHE', 'INFECTION', 'EVOLUTION', 'BETRAYAL'];
 
-function checkUnlock(state, condition) {
+function checkUnlock(player, condition) {
   switch (condition.type) {
-    case 'reputation':
-      return (state.player.reputation || 0) >= condition.value;
+    case 'faction_reputation':
+      return ((player.factionStanding || {})[condition.faction] || 0) >= condition.value;
     case 'explore':
-      return (state.stats?.exploredYellow || 0) >= condition.count;
-    case 'boss_kills':
-      return (state.stats?.highTierKills || 0) >= condition.count;
-    case 'tower':
-      return (state.tower?.bestFloor || 0) >= condition.floor;
-    case 'pvp':
-      return (state.pvp?.wins || 0) >= condition.wins;
-    case 'craft':
-      return (state.player.blueprints?.length || 0) >= condition.uniqueItems;
+      return ((player.zoneVisits || {})[condition.zone] || 0) >= condition.count;
+    case 'high_tier_kills':
+      return (player.highTierKills || 0) >= condition.count;
+    case 'level':
+      return (player.level || 1) >= condition.value;
+    case 'total_kills':
+      return (player.killCount || 0) >= condition.count;
+    case 'quests_completed':
+      return (player.completedQuests || []).length >= condition.count;
     case 'fragments':
-      return (state.lore?.fragments?.length || 0) >= condition.count;
-    default: return false;
+      return ((player.lore && player.lore.fragments) || []).length >= condition.count;
+    default:
+      return false;
   }
 }
 
-function getActiveHypothesis(state) {
-  return state.lore?.hypothesis || null;
+function getFragmentStatus(player) {
+  const collected = (player.lore && player.lore.fragments) || [];
+  return TRAKT_FRAGMENTS.map((f) => ({
+    ...f,
+    collected: collected.includes(f.id),
+    unlocked: checkUnlock(player, f.unlockCondition)
+  }));
 }
 
-function setHypothesis(state, hypothesisId) {
-  state.lore = state.lore || {};
-  state.lore.hypothesis = hypothesisId;
-  return state;
+/** Отмечает фрагмент собранным — только если он реально разблокирован
+ * и ещё не собран. Возвращает { success, player }. */
+function collectFragment(player, fragmentId) {
+  const fragment = TRAKT_FRAGMENTS.find((f) => f.id === fragmentId);
+  if (!fragment) return { success: false, player };
+
+  player.lore = player.lore || {};
+  player.lore.fragments = player.lore.fragments || [];
+  if (player.lore.fragments.includes(fragmentId)) return { success: false, player };
+  if (!checkUnlock(player, fragment.unlockCondition)) return { success: false, player };
+
+  player.lore.fragments.push(fragmentId);
+  return { success: true, player };
+}
+
+function getActiveHypothesis(player) {
+  return (player.lore && player.lore.hypothesis) || null;
+}
+
+function setHypothesis(player, hypothesisId) {
+  if (!HYPOTHESES.includes(hypothesisId)) return player;
+  player.lore = player.lore || {};
+  player.lore.hypothesis = hypothesisId;
+  player.lore.discoveredHypotheses = player.lore.discoveredHypotheses || [];
+  if (!player.lore.discoveredHypotheses.includes(hypothesisId)) {
+    player.lore.discoveredHypotheses.push(hypothesisId);
+  }
+  return player;
+}
+
+/** Просто "узнать" гипотезу (услышать её от NPC/в квесте), не обязательно поверить в неё —
+ * нужно для концовки SYNTHESIS ("узнал все четыре и отверг все"). */
+function discoverHypothesis(player, hypothesisId) {
+  if (!HYPOTHESES.includes(hypothesisId)) return player;
+  player.lore = player.lore || {};
+  player.lore.discoveredHypotheses = player.lore.discoveredHypotheses || [];
+  if (!player.lore.discoveredHypotheses.includes(hypothesisId)) {
+    player.lore.discoveredHypotheses.push(hypothesisId);
+  }
+  return player;
+}
+
+/** Возвращает подходящую концовку по текущему состоянию игрока, либо null,
+ * если условия ещё не выполнены (обычно — не собраны все 7 фрагментов). */
+function getEnding(player) {
+  const fragmentsCount = ((player.lore && player.lore.fragments) || []).length;
+  if (fragmentsCount < 7) return null;
+
+  const discovered = (player.lore && player.lore.discoveredHypotheses) || [];
+  if (discovered.length >= HYPOTHESES.length) return ENDINGS.SYNTHESIS;
+
+  const hypothesis = getActiveHypothesis(player);
+  return Object.values(ENDINGS).find((e) => e.condition.hypothesis === hypothesis) || null;
 }
 
 module.exports = {
-  TRAKT_FRAGMENTS,
-  ENDINGS,
-  getFragmentStatus,
-  checkUnlock,
-  getActiveHypothesis,
-  setHypothesis
+  TRAKT_FRAGMENTS, ENDINGS, HYPOTHESES,
+  checkUnlock, getFragmentStatus, collectFragment,
+  getActiveHypothesis, setHypothesis, discoverHypothesis, getEnding
 };
