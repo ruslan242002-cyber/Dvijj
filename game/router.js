@@ -269,9 +269,7 @@ function step(state, text, rng = Math.random, deps = {}) {
         },
         nextState: { scene: 'station', player }
       };
-    }
-
-    // ───────────────────────────────── ГЛАВНЫЙ ХАБ СТАНЦИИ ─────────────────────────────────
+    }// ───────────────────────────────── ГЛАВНЫЙ ХАБ СТАНЦИИ ─────────────────────────────────
 
     case 'station': {
       if (input === 'Статус') {
@@ -324,4 +322,165 @@ function step(state, text, rng = Math.random, deps = {}) {
         const gained = sellInventory(player);
         return { reply: { text: gained ? `Завхоз отсчитывает ${gained} кредитов за находки.` : 'Продавать нечего.', buttons: HUB_BUTTONS }, nextState: { scene: 'station', player } };
       }
-      return { reply: { text: 'Возвращаешься в главный отсек станции.', buttons: HUB_BUTTONS }, nextState: { scene: '
+      return { reply: { text: 'Возвращаешься в главный отсек станции.', buttons: HUB_BUTTONS }, nextState: { scene: 'station', player: state.player } };
+    }
+
+    case 'loc_decon': {
+      if (input === 'Снять облучение') {
+        const player = { ...state.player, radiation: 0 };
+        return { reply: { text: 'Мягкое гудение очистителей — облучение снято подчистую.', buttons: HUB_BUTTONS }, nextState: { scene: 'station', player } };
+      }
+      return { reply: { text: 'Возвращаешься в главный отсек станции.', buttons: HUB_BUTTONS }, nextState: { scene: 'station', player: state.player } };
+    }
+
+    case 'loc_cantina': {
+      if (input === 'Назад') {
+        return { reply: { text: 'Возвращаешься в главный отсек станции.', buttons: HUB_BUTTONS }, nextState: { scene: 'station', player: state.player } };
+      }
+      const quest = availableQuests(state.player).find((q) => q.title === input);
+      if (!quest) return cantinaBoard(state.player);
+
+      const player = { ...state.player };
+      player.completedQuests = [...(player.completedQuests || []), quest.id];
+      let rewardText = `${quest.text}\n\nНаграда:`;
+      if (quest.reward.xp) {
+        const { leveledUp, level } = grantXp(player, quest.reward.xp);
+        rewardText += `\n✨ +${quest.reward.xp} XP`;
+        if (leveledUp) rewardText += ` — новый уровень: ${level}! (+2 очка, +20 HP, полное исцеление)`;
+      }
+      if (quest.reward.credits) { player.credits = (player.credits || 0) + quest.reward.credits; rewardText += `\n💳 +${quest.reward.credits} кредитов`; }
+      if (quest.reward.statPoints) { player.statPoints = (player.statPoints || 0) + quest.reward.statPoints; rewardText += `\n🔧 +${quest.reward.statPoints} очков параметров`; }
+
+      return { reply: { text: rewardText, buttons: HUB_BUTTONS }, nextState: { scene: 'station', player } };
+    }
+
+    case 'loc_gates': {
+      if (input === 'Назад') {
+        return { reply: { text: 'Возвращаешься в главный отсек станции.', buttons: HUB_BUTTONS }, nextState: { scene: 'station', player: state.player } };
+      }
+      if (input === 'К другим станциям') {
+        const others = FACTIONS.filter((f) => f !== state.player.faction);
+        return { reply: { text: 'Куда проложить курс?', buttons: [...others, 'Назад'] }, nextState: { scene: 'loc_gates_travel', player: state.player } };
+      }
+      const zone = ZONE_BY_LABEL[input];
+      if (!zone) {
+        return { reply: { text: 'Выбери сектор кнопкой ниже.', buttons: ZONE_BUTTONS }, nextState: state };
+      }
+      const requiredLevel = MIN_LEVEL_FOR_ZONE[zone];
+      if ((state.player.level || 1) < requiredLevel) {
+        return {
+          reply: { text: `⛔ Слишком опасно. «${ZONE_LABEL[zone]}» открывается с ${requiredLevel} уровня — сейчас у тебя ${state.player.level || 1}.`, buttons: ZONE_BUTTONS },
+          nextState: state
+        };
+      }
+      const player = { ...state.player, zone };
+      return startJourney(player, 'explore', { zone }, rng);
+    }
+
+    case 'loc_gates_travel': {
+      if (input === 'Назад') {
+        return { reply: { text: 'Выбери, куда прыгнуть:', buttons: ZONE_BUTTONS }, nextState: { scene: 'loc_gates', player: state.player } };
+      }
+      if (!FACTIONS.includes(input) || input === state.player.faction) {
+        const others = FACTIONS.filter((f) => f !== state.player.faction);
+        return { reply: { text: 'Выбери станцию кнопкой ниже.', buttons: [...others, 'Назад'] }, nextState: state };
+      }
+      return startJourney(state.player, 'travel', { targetFaction: input }, rng);
+    }
+
+    // ───────────────────────────────────── ПУТЬ (JOURNEY) ─────────────────────────────────────
+
+    case 'journey': {
+      const stepsLeft = state.stepsLeft - 1;
+      if (stepsLeft > 0) {
+        const pool = state.kind === 'explore' ? (ZONE_TRAVEL_PHRASES[state.payload.zone] || ZONE_TRAVEL_PHRASES.blue) : STATION_TRAVEL_PHRASES;
+        const phraseText = pool[Math.floor(rng() * pool.length)];
+        return {
+          reply: { text: phraseText, buttons: ['Продолжить путь'] },
+          nextState: { scene: 'journey', player: state.player, kind: state.kind, payload: state.payload, stepsLeft }
+        };
+      }
+      if (state.kind === 'explore') {
+        return explore(state.player, state.payload.zone, rng);
+      }
+      const player = { ...state.player, faction: state.payload.targetFaction };
+      const curator = CURATORS[player.faction] || '';
+      return {
+        reply: { text: `Стыковка завершена. Станция «${player.faction}» приветствует тебя — куратор ${curator} на связи.`, buttons: HUB_BUTTONS },
+        nextState: { scene: 'station', player }
+      };
+    }
+
+    // ───────────────────────────────────── БОЙ ─────────────────────────────────────
+
+    case 'pre_combat': {
+      if (input === 'Отступить') {
+        return { reply: { text: 'Ты отступаешь на безопасное расстояние.', buttons: HUB_BUTTONS }, nextState: { scene: 'station', player: state.player } };
+      }
+      const buttons = ['Обычная атака', ...skillButtons(state.player)];
+      return {
+        reply: { text: `${state.enemy.name}: ❤️ ${state.enemy.hp}/${state.enemy.hpMax}\n\nВыбери действие:`, buttons },
+        nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone }
+      };
+    }
+
+    case 'combat': {
+      const skillId = input === 'Обычная атака' ? null : skillIdByName(input);
+      const skill = skillId ? SKILLS[skillId] : null;
+      if (input !== 'Обычная атака' && !skill) {
+        const buttons = ['Обычная атака', ...skillButtons(state.player)];
+        return { reply: { text: 'Выбери действие кнопкой ниже.', buttons }, nextState: state };
+      }
+
+      const result = resolveTurn({ attacker: state.player, defender: state.enemy, skill, rng });
+
+      if (result.finished) {
+        if (result.winner === 'attacker') {
+          if (state.trainingFight) {
+            return {
+              reply: { text: `💥 ${result.log.join(' ')}\n\n✅ Дрон-манекен деактивирован. Тренировка окончена — это была только симуляция, статы и HP полностью восстановлены.`, buttons: ['Доложить куратору'] },
+              nextState: { scene: 'quest_report', player: { ...result.attacker, hp: result.attacker.hpMax } }
+            };
+          }
+          const loot = rollLoot(state.zone || 'blue', rng);
+          const player = { ...result.attacker };
+          addToInventory(player, loot.resource, loot.tier, loot.qty);
+          player.credits = (player.credits || 0) + loot.credits;
+          const xpGain = xpForTier(state.enemy.tier || 1);
+          const { leveledUp, level } = grantXp(player, xpGain);
+          let victoryText = `💥 ${result.log.join(' ')}\n\n🏆 ${state.enemy.name} уничтожен.\n💳 +${loot.credits} кредитов, +${loot.qty}× ${loot.resource} T${loot.tier}\n✨ +${xpGain} XP`;
+          if (leveledUp) victoryText += `\n🆙 Новый уровень: ${level}! (+2 очка, +20 HP, полное исцеление)`;
+          return { reply: { text: victoryText, buttons: HUB_BUTTONS }, nextState: { scene: 'station', player } };
+        }
+        return {
+          reply: { text: `💥 ${result.log.join(' ')}\n\n💀 Скафандр пробит. Аварийная капсула эвакуирует тебя на станцию.`, buttons: HUB_BUTTONS },
+          nextState: { scene: 'station', player: { ...result.attacker, hp: Math.round(result.attacker.hpMax * 0.5) } }
+        };
+      }
+
+      const enemyTurn = resolveTurn({ attacker: result.defender, defender: result.attacker, rng });
+      const log = result.log.concat(enemyTurn.log).join(' ');
+
+      if (enemyTurn.finished && enemyTurn.winner === 'attacker') {
+        return {
+          reply: { text: `💥 ${log}\n\n💀 Скафандр пробит.`, buttons: HUB_BUTTONS },
+          nextState: { scene: 'station', player: { ...enemyTurn.defender, hp: Math.round(enemyTurn.defender.hpMax * 0.5) } }
+        };
+      }
+
+      const buttons = ['Обычная атака', ...skillButtons(enemyTurn.defender)];
+      return {
+        reply: { text: `💥 ${log}\n\n${state.enemy.name}: ❤️ ${enemyTurn.attacker.hp}/${enemyTurn.attacker.hpMax}`, buttons },
+        nextState: { scene: 'combat', player: enemyTurn.defender, enemy: enemyTurn.attacker, trainingFight: state.trainingFight, zone: state.zone }
+      };
+    }
+
+    default:
+      return { reply: { text: 'Что-то пошло не так, начнём заново.', buttons: [] }, nextState: { scene: 'start' } };
+  }
+}
+
+module.exports = {
+  step, freshPlayer, equippedSkillIds, addToInventory, sellInventory,
+  FACTIONS, FACTION_KIT, MAX_EQUIPPED_SKILLS, HUB_BUTTONS, ZONE_BUTTONS, MIN_LEVEL_FOR_ZONE
+};
