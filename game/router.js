@@ -9,6 +9,8 @@
 const { resolveTurn } = require('../engine/combat-engine.js');
 const { SKILLS } = require('../engine/skills-data.js');
 const { rollEvent, rollLoot } = require('../engine/exploration-engine.js');
+const { grantXp, xpToNext, xpForTier } = require('../engine/leveling.js');
+const { availableQuests, getQuest } = require('./quests-data.js');
 
 const FACTIONS = ['Приют', 'Терминус', 'Арсенал', 'Вуаль'];
 
@@ -22,20 +24,44 @@ const FACTION_KIT = {
 const MAX_EQUIPPED_SKILLS = 3;
 const RESET_COMMAND = 'Сброс';
 
-// Полный хаб станции — после завершения обучения доступны все локации.
-// Разбивается на ряды по 3 автоматически в vk/client.js.
 const HUB_BUTTONS = ['Исследовать', 'Мостик', 'Отсек', 'Декон-камера', 'Кантина', 'Врата Тракта', 'Статус', 'Профиль', 'Сброс'];
-const ZONE_BUTTONS = ['Патрулируемый', 'Спорный', 'Открытый космос', 'Назад'];
+const ZONE_BUTTONS = ['Патрулируемый', 'Спорный', 'Открытый космос', 'К другим станциям', 'Назад'];
 const ZONE_BY_LABEL = { 'Патрулируемый': 'blue', 'Спорный': 'yellow', 'Открытый космос': 'red' };
 const ZONE_LABEL = { blue: 'Патрулируемый сектор', yellow: 'Спорный сектор', red: 'Открытый космос' };
+// Минимальный уровень для входа в зону — первый рубеж защиты от "убило одним ударом".
+const MIN_LEVEL_FOR_ZONE = { blue: 1, yellow: 3, red: 7 };
 
 const CURATORS = { 'Приют': 'Ирис Вейл', 'Терминус': 'Дрого Кейн', 'Арсенал': 'Рен Окса', 'Вуаль': 'Шёпот' };
+
+const ZONE_TRAVEL_PHRASES = {
+  blue: [
+    'Патрульный дрон станции лениво сканирует твой позывной и отворачивается — путь свободен.',
+    'Знакомый гул генераторов станции затихает за спиной.',
+    'Курс проложен, приборы спокойны — сектор патрулируемый.'
+  ],
+  yellow: [
+    'Датчик радиации тихо щёлкает — пока в пределах нормы, но чаще, чем час назад.',
+    'Обрывок чужих переговоров на общей частоте — сектор явно оспаривается.',
+    'Обломки чужого корабля проплывают мимо — здесь недавно был бой.'
+  ],
+  red: [
+    'Здесь эхо Тракта не в приборах — оно в голове.',
+    'Связь со станцией слабеет с каждой секундой.',
+    'Приборы фиксируют резонанс, для которого нет описания в базе.'
+  ]
+};
+const STATION_TRAVEL_PHRASES = [
+  'Тракт прокладывает курс между станциями — недолго, но не мгновенно.',
+  'Обломки давно потерянных ковчегов мелькают за бортом.',
+  'Резонанс Тракта на секунду искажает показания приборов — обычное дело для прыжка.',
+  'Станция назначения уже видна вдалеке — почти на месте.'
+];
 
 /** Дежурный дрон-манекен — фиксированный слабый противник для тренировочного
  * боя, тот самый, что описан в тексте онбординга («Тренировочный отсек»). */
 function trainerDrone() {
   return {
-    name: 'Дрон-манекен',
+    name: 'Дрон-манекен', tier: 0,
     hp: 100, hpMax: 100,
     stats: { power: 8, mind: 8, reaction: 8, endurance: 10, firepower: 10, shielding: 5 },
     luck: 0, accuracy: 0.5, dodge: 0.05, focus: 0.4, periodic: []
@@ -63,12 +89,13 @@ function freshPlayer(name, faction) {
     inventory: [],
     credits: 0,
     radiation: 0,
-    zone: 'blue' // текущий сектор для "Исследовать" — меняется через Врата Тракта
+    zone: 'blue',
+    level: 1,
+    xp: 0,
+    completedQuests: []
   };
 }
 
-/** Экипированные умения игрока — если игрок ещё ни разу не настраивал их
- * через профиль (нет поля или оно пустое), используем стартовый набор фракции. */
 function equippedSkillIds(player) {
   if (player.equippedSkills && player.equippedSkills.length) return player.equippedSkills;
   return (FACTION_KIT[player.faction] || {}).skills || [];
@@ -80,7 +107,6 @@ function skillIdByName(name) {
   return Object.values(SKILLS).find((s) => s.name === name)?.id || null;
 }
 
-/** Добавляет ресурс в инвентарь игрока, объединяя с уже существующим стаком того же тира */
 function addToInventory(player, resource, tier, qty) {
   const inv = player.inventory || (player.inventory = []);
   const existing = inv.find((i) => i.resource === resource && i.tier === tier);
@@ -88,7 +114,6 @@ function addToInventory(player, resource, tier, qty) {
   else inv.push({ resource, tier, qty });
 }
 
-/** Продаёт весь инвентарь игрока за кредиты (простая ставка: 8 кредитов за единицу тира) */
 function sellInventory(player) {
   let total = 0;
   for (const item of player.inventory || []) total += item.qty * item.tier * 8;
@@ -97,10 +122,34 @@ function sellInventory(player) {
   return total;
 }
 
-/** Общий обработчик исследования сектора — используется и с главного хаба,
- * и из Врат Тракта. Возвращает { reply, nextState }. */
+function statusText(p) {
+  const next = xpToNext(p.level || 1);
+  return `${p.name} · ${p.faction}\n❤️ ${p.hp}/${p.hpMax}   💳 ${p.credits || 0}\n⭐ Ур. ${p.level || 1} (${p.xp || 0}/${next} XP)\n📍 Текущий сектор: ${ZONE_LABEL[p.zone] || 'Патрулируемый сектор'}${p.radiation ? `\n☢️ Облучение: ${p.radiation}%` : ''}${p.statPoints ? `\n✨ Нераспределённых очков: ${p.statPoints}` : ''}`;
+}
+
+function cantinaBoard(player) {
+  const quests = availableQuests(player);
+  if (quests.length === 0) {
+    return { reply: { text: '🍸 КАНТИНА\n\nБармен пожимает плечами — куратору сейчас нечего тебе предложить.', buttons: ['Назад'] }, nextState: { scene: 'loc_cantina', player } };
+  }
+  return { reply: { text: '🍸 КАНТИНА\n\nДоступные задания куратора:', buttons: [...quests.map((q) => q.title), 'Назад'] }, nextState: { scene: 'loc_cantina', player } };
+}
+
+/** Начинает "путь" (2-3 хода) вместо мгновенного результата — и для похода
+ * в сектор, и для перелёта между станциями. */
+function startJourney(player, kind, payload, rng) {
+  const stepsLeft = 2 + Math.floor(rng() * 2); // 2-3 шага
+  const pool = kind === 'explore' ? (ZONE_TRAVEL_PHRASES[payload.zone] || ZONE_TRAVEL_PHRASES.blue) : STATION_TRAVEL_PHRASES;
+  const text = pool[Math.floor(rng() * pool.length)];
+  return {
+    reply: { text, buttons: ['Продолжить путь'] },
+    nextState: { scene: 'journey', player, kind, payload, stepsLeft }
+  };
+}
+
+/** Общий обработчик исследования сектора — вызывается по прибытии (после journey) */
 function explore(player, zone, rng) {
-  const event = rollEvent(zone, rng);
+  const event = rollEvent(zone, rng, player.level || 1);
   if (event.type === 'ambush') {
     return {
       reply: { text: `⚠️ ОТГОЛОСОК\n\n${event.text}`, buttons: ['Атаковать', 'Отступить'] },
@@ -128,7 +177,6 @@ function explore(player, zone, rng) {
       nextState: { scene: 'station', player }
     };
   }
-  // find
   addToInventory(player, event.loot.resource, event.loot.tier, event.loot.qty);
   player.credits = (player.credits || 0) + event.loot.credits;
   return {
@@ -137,25 +185,12 @@ function explore(player, zone, rng) {
   };
 }
 
-/**
- * Основная точка входа. state — то, что лежит в хранилище для этого userId
- * (или null для нового игрока). deps.getProfileLink() — необязательная
- * функция без аргументов, отдаёт готовую персональную ссылку на сайт-профиль.
- * Возвращает { reply: {text, buttons}, nextState }. Ничего не мутирует
- * снаружи и не делает I/O — вызывающий код (webhook) сам решает, как
- * сохранить nextState и как физически отправить reply.
- */
 function step(state, text, rng = Math.random, deps = {}) {
   const input = (text || '').trim();
 
-  // Глобальная команда — работает из ЛЮБОЙ сцены, даже если где-то застряли
-  // в бою или в непонятном состоянии.
   if (input === RESET_COMMAND) {
     return {
-      reply: {
-        text: '🔄 Прогресс сброшен подчистую.\n\n🛰️ ПЕРИФЕРИЯ\n\nТракт оборвался триста лет назад. Как тебя записать в журнал станции?',
-        buttons: []
-      },
+      reply: { text: '🔄 Прогресс сброшен подчистую.\n\n🛰️ ПЕРИФЕРИЯ\n\nТракт оборвался триста лет назад. Как тебя записать в журнал станции?', buttons: [] },
       nextState: { scene: 'ask_name' }
     };
   }
@@ -193,8 +228,6 @@ function step(state, text, rng = Math.random, deps = {}) {
       };
     }
 
-    // ───────────────────────── ОБУЧЕНИЕ (после тренировочного боя) ─────────────────────────
-
     case 'quest_report': {
       const player = { ...state.player, statPoints: (state.player.statPoints || 0) + 1 };
       const curator = CURATORS[player.faction] || '';
@@ -208,7 +241,6 @@ function step(state, text, rng = Math.random, deps = {}) {
     }
 
     case 'quest_shop': {
-      // Первый визит в сцену — куратор приводит в отсек и вручает трофей на продажу
       if (!state.player.inventory || state.player.inventory.length === 0) {
         const player = { ...state.player };
         addToInventory(player, 'Сплавы', 1, 3);
@@ -220,14 +252,10 @@ function step(state, text, rng = Math.random, deps = {}) {
           nextState: { scene: 'quest_shop', player }
         };
       }
-      // второй шаг — продажа и переход дальше
       const player = { ...state.player };
       const gained = sellInventory(player);
       return {
-        reply: {
-          text: `💳 Завхоз отсчитывает ${gained} кредитов: «Вот и весь фокус — находишь, продаёшь, снаряжаешься». Последняя остановка — Врата Тракта.`,
-          buttons: ['Идём к вратам']
-        },
+        reply: { text: `💳 Завхоз отсчитывает ${gained} кредитов: «Вот и весь фокус — находишь, продаёшь, снаряжаешься». Последняя остановка — Врата Тракта.`, buttons: ['Идём к вратам'] },
         nextState: { scene: 'quest_gates', player }
       };
     }
@@ -236,7 +264,7 @@ function step(state, text, rng = Math.random, deps = {}) {
       const player = { ...state.player, zone: 'blue' };
       return {
         reply: {
-          text: `🌀 ВРАТА ТРАКТА\n\nКуратор указывает на мерцающий контур: «Патрулируемые секторы — спокойно, спорные — держи ухо востро, открытый космос — только если готов ко всему». Станция полностью открыта.`,
+          text: `🌀 ВРАТА ТРАКТА\n\nКуратор указывает на мерцающий контур: «Патрулируемые секторы — спокойно, спорные — держи ухо востро, открытый космос — только с седьмого уровня, и то по готовности». Станция полностью открыта.`,
           buttons: HUB_BUTTONS
         },
         nextState: { scene: 'station', player }
@@ -247,68 +275,40 @@ function step(state, text, rng = Math.random, deps = {}) {
 
     case 'station': {
       if (input === 'Статус') {
-        const p = state.player;
-        return {
-          reply: {
-            text: `${p.name} · ${p.faction}\n❤️ ${p.hp}/${p.hpMax}   💳 ${p.credits || 0}\n📍 Текущий сектор: ${ZONE_LABEL[p.zone] || 'Патрулируемый сектор'}${p.radiation ? `\n☢️ Облучение: ${p.radiation}%` : ''}${p.statPoints ? `\n✨ Нераспределённых очков: ${p.statPoints}` : ''}`,
-            buttons: HUB_BUTTONS
-          },
-          nextState: state
-        };
+        return { reply: { text: statusText(state.player), buttons: HUB_BUTTONS }, nextState: state };
       }
       if (input === 'Профиль') {
         const link = typeof deps.getProfileLink === 'function' ? deps.getProfileLink() : null;
-        if (!link) {
-          return { reply: { text: 'Терминал профиля сейчас недоступен, попробуйте позже.', buttons: HUB_BUTTONS }, nextState: state };
-        }
-        return {
-          reply: { text: 'Личный терминал профиля готов:', buttons: [{ label: 'Открыть профиль', url: link }, 'Исследовать', 'Статус', 'Сброс'] },
-          nextState: state
-        };
+        if (!link) return { reply: { text: 'Терминал профиля сейчас недоступен, попробуйте позже.', buttons: HUB_BUTTONS }, nextState: state };
+        return { reply: { text: 'Личный терминал профиля готов:', buttons: [{ label: 'Открыть профиль', url: link }, 'Исследовать', 'Статус', 'Сброс'] }, nextState: state };
       }
       if (input === 'Мостик') {
-        return {
-          reply: { text: '🎛️ МОСТИК\n\nЗдесь решают судьбу станции. Смена позывного и станции приписки — скоро.', buttons: ['Назад'] },
-          nextState: { scene: 'loc_bridge', player: state.player }
-        };
+        return { reply: { text: '🎛️ МОСТИК\n\nЗдесь решают судьбу станции. Смена позывного и станции приписки — скоро.', buttons: ['Назад'] }, nextState: { scene: 'loc_bridge', player: state.player } };
       }
       if (input === 'Отсек') {
         const p = state.player;
         const items = (p.inventory || []).map((i) => `${i.resource} T${i.tier} ×${i.qty}`).join(', ');
         return {
-          reply: {
-            text: `🔧 РЕМОНТНЫЙ ОТСЕК\n\n${items ? `В трюме: ${items}` : 'Трюм пуст.'}`,
-            buttons: items ? ['Продать всё', 'Назад'] : ['Назад']
-          },
+          reply: { text: `🔧 РЕМОНТНЫЙ ОТСЕК\n\n${items ? `В трюме: ${items}` : 'Трюм пуст.'}`, buttons: items ? ['Продать всё', 'Назад'] : ['Назад'] },
           nextState: { scene: 'loc_repair', player: state.player }
         };
       }
       if (input === 'Декон-камера') {
         const p = state.player;
         return {
-          reply: {
-            text: `☢️ ДЕКОН-КАМЕРА\n\nТекущее облучение: ${p.radiation || 0}%`,
-            buttons: p.radiation ? ['Снять облучение', 'Назад'] : ['Назад']
-          },
+          reply: { text: `☢️ ДЕКОН-КАМЕРА\n\nТекущее облучение: ${p.radiation || 0}%`, buttons: p.radiation ? ['Снять облучение', 'Назад'] : ['Назад'] },
           nextState: { scene: 'loc_decon', player: state.player }
         };
       }
       if (input === 'Кантина') {
-        return {
-          reply: { text: '🍸 КАНТИНА\n\nПриглушённый свет, бармен протирает стакан. Заказы куратора и коктейли — скоро.', buttons: ['Назад'] },
-          nextState: { scene: 'loc_cantina', player: state.player }
-        };
+        return cantinaBoard(state.player);
       }
       if (input === 'Врата Тракта') {
-        return {
-          reply: { text: '🌀 ВРАТА ТРАКТА\n\nВыбери, куда прыгнуть:', buttons: ZONE_BUTTONS },
-          nextState: { scene: 'loc_gates', player: state.player }
-        };
+        return { reply: { text: '🌀 ВРАТА ТРАКТА\n\nВыбери, куда прыгнуть:', buttons: ZONE_BUTTONS }, nextState: { scene: 'loc_gates', player: state.player } };
       }
       if (input === 'Исследовать') {
-        return explore(state.player, state.player.zone || 'blue', rng);
+        return startJourney(state.player, 'explore', { zone: state.player.zone || 'blue' }, rng);
       }
-      // неопознанная команда — не считаем это попыткой исследовать, просто показываем хаб снова
       return { reply: { text: 'Выбери действие кнопкой ниже.', buttons: HUB_BUTTONS }, nextState: state };
     }
 
@@ -322,114 +322,6 @@ function step(state, text, rng = Math.random, deps = {}) {
       if (input === 'Продать всё') {
         const player = { ...state.player };
         const gained = sellInventory(player);
-        return {
-          reply: { text: gained ? `Завхоз отсчитывает ${gained} кредитов за находки.` : 'Продавать нечего.', buttons: HUB_BUTTONS },
-          nextState: { scene: 'station', player }
-        };
+        return { reply: { text: gained ? `Завхоз отсчитывает ${gained} кредитов за находки.` : 'Продавать нечего.', buttons: HUB_BUTTONS }, nextState: { scene: 'station', player } };
       }
-      return { reply: { text: 'Возвращаешься в главный отсек станции.', buttons: HUB_BUTTONS }, nextState: { scene: 'station', player: state.player } };
-    }
-
-    case 'loc_decon': {
-      if (input === 'Снять облучение') {
-        const player = { ...state.player, radiation: 0 };
-        return { reply: { text: 'Мягкое гудение очистителей — облучение снято подчистую.', buttons: HUB_BUTTONS }, nextState: { scene: 'station', player } };
-      }
-      return { reply: { text: 'Возвращаешься в главный отсек станции.', buttons: HUB_BUTTONS }, nextState: { scene: 'station', player: state.player } };
-    }
-
-    case 'loc_cantina': {
-      return { reply: { text: 'Возвращаешься в главный отсек станции.', buttons: HUB_BUTTONS }, nextState: { scene: 'station', player: state.player } };
-    }
-
-    case 'loc_gates': {
-      if (input === 'Назад') {
-        return { reply: { text: 'Возвращаешься в главный отсек станции.', buttons: HUB_BUTTONS }, nextState: { scene: 'station', player: state.player } };
-      }
-      const zone = ZONE_BY_LABEL[input];
-      if (!zone) {
-        return { reply: { text: 'Выбери сектор кнопкой ниже.', buttons: ZONE_BUTTONS }, nextState: state };
-      }
-      const player = { ...state.player, zone };
-      return explore(player, zone, rng);
-    }
-
-    // ───────────────────────────────────── БОЙ ─────────────────────────────────────
-
-    case 'pre_combat': {
-      if (input === 'Отступить') {
-        return {
-          reply: { text: 'Ты отступаешь на безопасное расстояние.', buttons: HUB_BUTTONS },
-          nextState: { scene: 'station', player: state.player }
-        };
-      }
-      const buttons = ['Обычная атака', ...skillButtons(state.player)];
-      return {
-        reply: { text: `${state.enemy.name}: ❤️ ${state.enemy.hp}/${state.enemy.hpMax}\n\nВыбери действие:`, buttons },
-        nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone }
-      };
-    }
-
-    case 'combat': {
-      const skillId = input === 'Обычная атака' ? null : skillIdByName(input);
-      const skill = skillId ? SKILLS[skillId] : null;
-      if (input !== 'Обычная атака' && !skill) {
-        const buttons = ['Обычная атака', ...skillButtons(state.player)];
-        return { reply: { text: 'Выбери действие кнопкой ниже.', buttons }, nextState: state };
-      }
-
-      const result = resolveTurn({ attacker: state.player, defender: state.enemy, skill, rng });
-
-      if (result.finished) {
-        if (result.winner === 'attacker') {
-          if (state.trainingFight) {
-            return {
-              reply: { text: `💥 ${result.log.join(' ')}\n\n✅ Дрон-манекен деактивирован. Тренировка окончена — это была только симуляция, статы и HP полностью восстановлены.`, buttons: ['Доложить куратору'] },
-              nextState: { scene: 'quest_report', player: { ...result.attacker, hp: result.attacker.hpMax } }
-            };
-          }
-          const loot = rollLoot(state.zone || 'blue', rng);
-          const player = { ...result.attacker };
-          addToInventory(player, loot.resource, loot.tier, loot.qty);
-          player.credits = (player.credits || 0) + loot.credits;
-          return {
-            reply: {
-              text: `💥 ${result.log.join(' ')}\n\n🏆 ${state.enemy.name} уничтожен.\n💳 +${loot.credits} кредитов, +${loot.qty}× ${loot.resource} T${loot.tier}`,
-              buttons: HUB_BUTTONS
-            },
-            nextState: { scene: 'station', player }
-          };
-        }
-        return {
-          reply: { text: `💥 ${result.log.join(' ')}\n\n💀 Скафандр пробит. Аварийная капсула эвакуирует тебя на станцию.`, buttons: HUB_BUTTONS },
-          nextState: { scene: 'station', player: { ...result.attacker, hp: Math.round(result.attacker.hpMax * 0.5) } }
-        };
-      }
-
-      // враг тоже ходит (простая AI: обычная атака)
-      const enemyTurn = resolveTurn({ attacker: result.defender, defender: result.attacker, rng });
-      const log = result.log.concat(enemyTurn.log).join(' ');
-
-      if (enemyTurn.finished && enemyTurn.winner === 'attacker') {
-        return {
-          reply: { text: `💥 ${log}\n\n💀 Скафандр пробит.`, buttons: HUB_BUTTONS },
-          nextState: { scene: 'station', player: { ...enemyTurn.defender, hp: Math.round(enemyTurn.defender.hpMax * 0.5) } }
-        };
-      }
-
-      const buttons = ['Обычная атака', ...skillButtons(enemyTurn.defender)];
-      return {
-        reply: { text: `💥 ${log}\n\n${state.enemy.name}: ❤️ ${enemyTurn.attacker.hp}/${enemyTurn.attacker.hpMax}`, buttons },
-        nextState: { scene: 'combat', player: enemyTurn.defender, enemy: enemyTurn.attacker, trainingFight: state.trainingFight, zone: state.zone }
-      };
-    }
-
-    default:
-      return { reply: { text: 'Что-то пошло не так, начнём заново.', buttons: [] }, nextState: { scene: 'start' } };
-  }
-}
-
-module.exports = {
-  step, freshPlayer, equippedSkillIds, addToInventory, sellInventory,
-  FACTIONS, FACTION_KIT, MAX_EQUIPPED_SKILLS, HUB_BUTTONS, ZONE_BUTTONS
-};
+      return { reply: { text: 'Возвращаешься в главный отсек станции.', buttons: HUB_BUTTONS }, nextState: { scene: '
