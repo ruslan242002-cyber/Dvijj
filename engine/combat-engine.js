@@ -75,7 +75,16 @@ function useSkill(attacker, defender, skill, rng = Math.random) {
 
   let dmg = 0;
   if (skill.damaging !== false) {
-    dmg = skill.pure ? raw : raw * (1 - clamp(defender.stats.shielding ?? 0, 0, 85) / 100);
+    const baseShielding = defender.stats.shielding ?? 0;
+    const effectiveShielding = skill.shieldPierce ? baseShielding * (1 - skill.shieldPierce) : baseShielding;
+    dmg = skill.pure ? raw : raw * (1 - clamp(effectiveShielding, 0, 85) / 100);
+  }
+
+  // Коррозия и подобные умения снижают экранирование цели НАВСЕГДА до конца
+  // боя (мутируем сам объект defender) — в отличие от shieldPierce, который
+  // действует только на этот один удар и никак не сохраняется.
+  if (skill.shieldShred && defender.stats.shielding != null) {
+    defender.stats.shielding = Math.max(0, defender.stats.shielding - skill.shieldShred);
   }
 
   let selfHeal = 0;
@@ -185,4 +194,3 @@ module.exports = {
   clamp, critChance, basicAttack, useSkill, applyStim, tickPeriodic, resolveTurn,
   DEFAULT_ACCURACY, DEFAULT_DODGE, DEFAULT_FOCUS, CRIT_MULT
 };
-
