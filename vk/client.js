@@ -51,8 +51,9 @@ function vkClient({ token, apiUrl = 'https://api.vk.com/method' } = {}) {
   }
 
   return {
-    /** Отправляет текстовое сообщение с (опционально) кнопками пользователю peerId */
-    async sendMessage(peerId, text, buttons) {
+    /** Отправляет текстовое сообщение с (опционально) кнопками и/или прикреплённым
+     * фото. attachment — строка вида "photo123_456", которую даёт vk/photo-cache.js. */
+    async sendMessage(peerId, text, buttons, attachment) {
       const params = new URLSearchParams({
         access_token: accessToken,
         v: VK_API_VERSION,
@@ -62,6 +63,7 @@ function vkClient({ token, apiUrl = 'https://api.vk.com/method' } = {}) {
       });
       const keyboard = buildKeyboard(buttons);
       if (keyboard) params.set('keyboard', keyboard);
+      if (attachment) params.set('attachment', attachment);
 
       const res = await fetch(`${apiUrl}/messages.send?${params.toString()}`, { method: 'POST' });
       const data = await res.json();
