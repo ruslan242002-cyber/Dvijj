@@ -47,5 +47,15 @@ function rollEventWithContext(player, zone, rng = Math.random) {
 
   return { ...rollEvent(zone, rng, player.level ?? null), source: 'procedural' };
 }
+function rollEventWithContext(player, zone, rng = Math.random, depth = 0) {
+  const sectorVisit = maybeVisitSector(player, zone, rng);
+  if (sectorVisit) return sectorVisit;
+
+  const dynamicEvent = generateEvent(player, zone, rng);
+  if (dynamicEvent) return { ...dynamicEvent, source: 'dynamic' };
+
+  const effectiveLevel = depth > 0 ? (player.level ?? 1) + Math.floor(depth / 2) : player.level ?? null;
+  return { ...rollEvent(zone, rng, effectiveLevel), source: 'procedural' };
+}
 
 module.exports = { rollEventWithContext, maybeVisitSector, sectorsForZone };
