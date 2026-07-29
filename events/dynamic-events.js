@@ -71,14 +71,14 @@ const EVENT_TEMPLATES = {
   },
   
   // === ЖЁЛТАЯ ЗОНА (опасная) ===
-  
     'anomaly_whisper': {
     zones: ['yellow'],
     weight: 20,
-    condition: (state) => state.flags?.touched_abyss,
+    condition: (state) => state.flags?.touched_abyss && !state.flags?.anomaly_whisper_seen,
     generate: (state, rng) => {
       return {
         type: 'combat_choice',
+        flag: 'anomaly_whisper_seen',
         text: `Ты слышишь их снова. Но теперь — ближе. Яснее.\n\n«${state.player.name}... Ты коснулся. Теперь ты — часть. Присоединяйся. Или умри.»\n\nОтголоски окружают. Но они... ждут. Чего-то. Тебя?`,
         choices: [
           {
@@ -92,19 +92,12 @@ const EVENT_TEMPLATES = {
           {
             id: 'fight',
             text: 'Атаковать',
-            combat: {
-              enemyType: 'echo_whisperers',
-              count: 4,
-              special: 'mind_damage'
-            }
+            combat: { enemyType: 'echo_whisperers', count: 4, special: 'mind_damage' }
           },
           {
             id: 'flee',
             text: 'Бежать',
-            result: {
-              text: 'Ты бежал. Они позволили. Почему?',
-              flag: 'echo_mercy'
-            }
+            result: { text: 'Ты бежал. Они позволили. Почему?', flag: 'echo_mercy' }
           }
         ]
       };
