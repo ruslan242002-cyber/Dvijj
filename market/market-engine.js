@@ -201,3 +201,15 @@ module.exports = {
   removeFromInventory,
   addToInventory,
 };
+async function purchaseListing(deps, buyer, listingId, qty, feeDiscount = 0) {
+  // ...
+  result = await store.purchaseListingAtomic({
+    listingId,
+    buyerId: buyer.id,
+    qty,
+    expectedPrice: listing.price,
+    feePercent: Math.max(MARKET_LIMITS.LISTING_FEE_PERCENT - feeDiscount, 0),
+  });
+  // ...
+}
+
