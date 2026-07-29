@@ -7,6 +7,8 @@
  * Секторы имеют: историю, опасность, секреты, связи с другими.
  */
 
+const { getFragmentStatus } = require('../lore/trakt-mythos.js');
+
 const SECTOR_TYPES = {
   DERELICT: 'derelict',      // заброшенные объекты
   ANOMALY: 'anomaly',        // аномальные зоны
@@ -62,6 +64,18 @@ function getSectorInfo(sectorId, state) {
     unlocked,
     availableSecrets: sector.secrets.filter(s => !s.condition || checkCondition(state, s.condition))
   };
+}
+
+// ДОБАВЛЕНО: раньше вызывалась, но не была объявлена — падало с ReferenceError
+// на любом секторе с unlockCondition. Условие { fragments: N } проверяет
+// число СОБРАННЫХ (не просто разблокированных) фрагментов Тракта.
+function checkUnlock(state, condition) {
+  if (condition.fragments !== undefined) {
+    const fragments = getFragmentStatus(state);
+    const collected = fragments.filter(f => f.collected).length;
+    return collected >= condition.fragments;
+  }
+  return checkCondition(state, condition);
 }
 
 function checkCondition(state, condition) {
