@@ -120,4 +120,38 @@ module.exports = {
   getSectorInfo,
   getConnectedSectors,
   generateSectorDescription
+};  'sector_23': {
+    name: 'Точка Невозврата',
+    type: 'forbidden',
+    danger: 'red',
+    unlockCondition: { fragments: 4 },
+    history: 'Сканеры показывают: Тракт здесь НЕ оборван. Он СВЁРНУТ. Как ткань. Кто-то или что-то СЖАЛО его.',
+    secrets: [
+      { id: 'trakt_heart', condition: { fragments: 6 }, text: 'Ты видишь СЕРДЦЕ. Не метафорически. Орган. Пульсирующее. Размером со станцию. И оно ЗНАЕТ тебя.' }
+    ],
+    connections: ['sector_15']
+  },
+
+  'sector_8': {
+    name: 'Причал-Призрак «Девятый»',
+    type: 'debris',
+    danger: 'yellow',
+    history: 'Грузовой причал, обслуживавший рейсы к «Горизонтам». Не эвакуирован — просто замолчал в одну смену. Стыковочные захваты до сих пор раскрыты, будто кого-то ждут.',
+    secrets: [
+      { id: 'ninth_dock_manifest', condition: { quest: 'priyut_1_missing' }, text: 'Грузовой манифест «Девятого»: последний рейс числится за тем самым пилотом, которого вы искали для Приюта.' }
+    ],
+    connections: ['sector_7']
+  },
+
+  'sector_15': {
+    name: 'Слепая Прогалина',
+    type: 'anomaly',
+    danger: 'red',
+    history: 'Дальше по разлому, где Кейн потерял взвод, пространство ведёт себя иначе — время в этом кармане течёт рывками, будто что-то заикается, пытаясь досказать одно и то же.',
+    secrets: [
+      { id: 'silence_reading', condition: { flag: 'echo_allied' }, text: 'Отголоски здесь узнают тебя. Не как чужого. Как ЕЩЁ ОДНОГО, кто уже слушал.' }
+    ],
+    connections: ['sector_12', 'sector_23']
+  }
 };
+
