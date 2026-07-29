@@ -72,14 +72,14 @@ const EVENT_TEMPLATES = {
   
   // === ЖЁЛТАЯ ЗОНА (опасная) ===
   
-  'anomaly_whisper': {
+    'anomaly_whisper': {
     zones: ['yellow'],
     weight: 20,
     condition: (state) => state.flags?.touched_abyss,
     generate: (state, rng) => {
       return {
         type: 'combat_choice',
-        text: 'Ты слышишь их снова. Но теперь — ближе. Яснее.\n\n«${state.player.name}... Ты коснулся. Теперь ты — часть. Присоединяйся. Или умри.»\n\nОтголоски окружают. Но они... ждут. Чего-то. Тебя?',
+        text: `Ты слышишь их снова. Но теперь — ближе. Яснее.\n\n«${state.player.name}... Ты коснулся. Теперь ты — часть. Присоединяйся. Или умри.»\n\nОтголоски окружают. Но они... ждут. Чего-то. Тебя?`,
         choices: [
           {
             id: 'join',
@@ -95,7 +95,7 @@ const EVENT_TEMPLATES = {
             combat: {
               enemyType: 'echo_whisperers',
               count: 4,
-              special: 'mind_damage' // атаки снижают focus
+              special: 'mind_damage'
             }
           },
           {
@@ -110,7 +110,7 @@ const EVENT_TEMPLATES = {
       };
     }
   },
-  
+
   // === КРАСНАЯ ЗОНА (смертельная) ===
   
   'fragment_guardian': {
