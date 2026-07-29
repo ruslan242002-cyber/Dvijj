@@ -1,24 +1,11 @@
 'use strict';
 
-/*
- * Почему здесь compare-and-swap, а не Lua-скрипт, как в market-store-upstash.js:
- * логика хода (resolveTurn) слишком сложна, чтобы переписывать её на Lua
- * внутри Redis — там и формулы урона, и криты, и стимы, и периодические
- * эффекты. Вместо этого: читаем сырую JSON-строку дуэли, применяем applyFn
- * в обычном JS, и пишем результат обратно ТОЛЬКО если строка не изменилась
- * с момента чтения (проверяется маленьким Lua-скриптом — само сравнение
- * атомарно, а не сложная логика). Если кто-то успел записать между чтением
- * и записью — повторяем попытку с начала.
- *
- * Гонка здесь маловероятна по конструкции: только два конкретных игрока
- * могут писать в один и тот же duel, и делают это строго по очереди
- * (turnOf), так что несколько попыток ретрая — с большим запасом.
- */
-
 const CAS_MAX_RETRIES = 5;
+const MISSING_SENTINEL = '\0MISSING';
 
 const CAS_SCRIPT = `
 local current = redis.call('GET', KEYS[1])
+if current == false then current = ARGV[3] end
 if current ~= ARGV[1] then
   return 0
 end
@@ -68,12 +55,35 @@ function createUpstashPvpStore(redis) {
         const updated = applyFn(duel);
         const rawAfter = JSON.stringify(updated);
 
-        const casResult = await redis.eval(CAS_SCRIPT, [key], [rawBefore, rawAfter]);
+        const casResult = await redis.eval(CAS_SCRIPT, [key], [rawBefore, rawAfter, MISSING_SENTINEL]);
         if (casResult === 1) return updated;
       }
       throw new Error('PVP_CAS_CONFLICT_RETRIES_EXHAUSTED');
+    },
+
+    async matchmakeAtomic(myEntry, applyFn) {
+      const key = 'pvp:mm:queue';
+      for (let attempt = 0; attempt < CAS_MAX_RETRIES; attempt += 1) {
+        const rawBefore = await redis.get(key);
+        const queue = rawBefore ? JSON.parse(rawBefore) : [];
+        const { matchedEntry, queue: newQueue } = applyFn(queue);
+        const rawAfter = JSON.stringify(newQueue);
+        const expected = rawBefore === null ? MISSING_SENTINEL : rawBefore;
+
+        const casResult = await redis.eval(CAS_SCRIPT, [key], [expected, rawAfter, MISSING_SENTINEL]);
+        if (casResult === 1) return { matchedEntry };
+      }
+      throw new Error('MM_CAS_CONFLICT_RETRIES_EXHAUSTED');
+    },
+
+    async removeFromQueue(playerId) {
+      return this.matchmakeAtomic({ id: playerId }, (queue) => ({
+        matchedEntry: null,
+        queue: queue.filter((e) => e.id !== playerId),
+      }));
     },
   };
 }
 
 module.exports = { createUpstashPvpStore };
+
