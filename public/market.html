@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Биржа — Периферия</title>
+<style>
+  body { font-family: -apple-system, sans-serif; background:#0e0e12; color:#e6e6ea; margin:0; padding:16px; }
+  h1 { font-size:18px; margin-bottom:4px; }
+  .credits { color:#9fd0ff; margin-bottom:16px; font-size:14px; }
+  .tabs { display:flex; gap:8px; margin-bottom:12px; }
+  .tab { padding:6px 12px; border-radius:8px; background:#1c1c24; cursor:pointer; font-size:14px; }
+  .tab.active { background:#3a4a8a; }
+  .listing { background:#1a1a22; border-radius:10px; padding:12px; margin-bottom:8px; }
+  .listing .name { font-weight:600; font-size:15px; }
+  .listing .meta { color:#9a9aa5; font-size:13px; margin:4px 0; }
+  .listing button { background:#3a4a8a; border:none; color:#fff; padding:6px 14px; border-radius:6px; font-size:14px; }
+  .listing button.danger { background:#8a3a3a; }
+  .listing button:disabled { opacity:0.5; }
+  .empty { color:#777; text-align:center; padding:32px 0; }
+  .error { color:#ff8080; font-size:13px; margin-top:8px; }
+  .create-form { background:#1a1a22; border-radius:10px; padding:12px; margin-bottom:16px; display:none; }
+  .create-form.open { display:block; }
+  .create-form input { width:100%; box-sizing:border-box; margin-bottom:8px; padding:8px; border-radius:6px; border:none; background:#26262f; color:#fff; }
+</style>
+</head>
+<body>
+
+<h1>Биржа</h1>
+<div class="credits" id="credits">Кредиты: —</div>
+
+<div class="tabs">
+  <div class="tab active" data-tab="browse">Все лоты</div>
+  <div class="tab" data-tab="mine">Мои лоты</div>
+</div>
+
+<div class="create-form" id="createForm">
+  <input id="fItemId" placeholder="ID предмета (как в инвентаре)" />
+  <input id="fItemName" placeholder="Название" />
+  <input id="fQty" type="number" placeholder="Количество" />
+  <input id="fPrice" type="number" placeholder="Цена за весь стак" />
+  <button id="fSubmit">Выставить</button>
+</div>
+<div id="toggleCreate" class="tab" style="display:inline-block;margin-bottom:12px;">+ Выставить лот</div>
+
+<div id="list"></div>
+<div class="error" id="error"></div>
+
+<script>
+  const launchParams = window.location.search;
+
+  let currentTab = 'browse';
+
+  async function callMarket(action, body) {
+    const res = await fetch('/api/market' + launchParams + (launchParams ? '&' : '?') + 'action=' + action, {
+      method: body ? 'POST' : 'GET',
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'ERROR');
+    return data;
+  }
+
+  function renderListings(listings, mine) {
+    const el = document.getElementById('list');
+    el.innerHTML = '';
+    if (!listings.length) {
+      el.innerHTML = '<div class="empty">Пока пусто</div>';
+      return;
+    }
+    listings.forEach((l) => {
+      const div = document.createElement('div');
+      div.className = 'listing';
+      div.innerHTML = `
+        <div class="name">${l.itemName}</div>
+        <div class="meta">Количество: ${l.qty} · Цена: ${l.price} кр.</div>
+      `;
+      const btn = document.createElement('button');
+      if (mine) {
+        btn.textContent = 'Снять лот';
+        btn.className = 'danger';
+        btn.onclick = () => cancelListing(l.id);
+      } else {
+        btn.textContent = 'Купить всё';
+        btn.onclick = () => buyListing(l.id, l.qty);
+      }
+      div.appendChild(btn);
+      el.appendChild(div);
+    });
+  }
+
+  async function loadBrowse() {
+    try {
+      const { listings } = await callMarket('list');
+      renderListings(listings, false);
+    } catch (e) {
+      showError(e.message);
+    }
+  }
+
+  async function loadMine() {
+    try {
+      const { listings } = await callMarket('myListings');
+      renderListings(listings, true);
+    } catch (e) {
+      showError(e.message);
+    }
+  }
+
+  async function buyListing(listingId, qty) {
+    try {
+      const data = await callMarket('buy', { listingId, qty });
+      document.getElementById('credits').textContent = 'Кредиты: ' + data.credits;
+      loadBrowse();
+    } catch (e) {
+      showError(e.message);
+    }
+  }
+
+  async function cancelListing(listingId) {
+    try {
+      await callMarket('cancel', { listingId });
+      loadMine();
+    } catch (e) {
+      showError(e.message);
+    }
+  }
+
+  function showError(code) {
+    const messages = {
+      INSUFFICIENT_CREDITS: 'Не хватает кредитов',
+      INSUFFICIENT_QTY: 'Уже раскупили — попробуйте обновить',
+      CANNOT_BUY_OWN_LISTING: 'Нельзя купить свой же лот',
+      PRICE_CHANGED: 'Цена изменилась, обновите список',
+      LISTING_NOT_FOUND: 'Лот уже снят',
+      LISTING_LIMIT_REACHED: 'Слишком много активных лотов (макс. 10)',
+      INVALID_PRICE: 'Некорректная цена',
+      ITEM_NOT_FOUND: 'Нет столько предметов в трюме',
+    };
+    document.getElementById('error').textContent = messages[code] || 'Что-то пошло не так';
+    setTimeout(() => { document.getElementById('error').textContent = ''; }, 4000);
+  }
+
+  document.querySelectorAll('.tab[data-tab]').forEach((tab) => {
+    tab.onclick = () => {
+      document.querySelectorAll('.tab[data-tab]').forEach((t) => t.classList.remove('active'));
+      tab.classList.add('active');
+      currentTab = tab.dataset.tab;
+      currentTab === 'browse' ? loadBrowse() : loadMine();
+    };
+  });
+
+  document.getElementById('toggleCreate').onclick = () => {
+    document.getElementById('createForm').classList.toggle('open');
+  };
+
+  document.getElementById('fSubmit').onclick = async () => {
+    try {
+      await callMarket('create', {
+        itemId: document.getElementById('fItemId').value,
+        itemName: document.getElementById('fItemName').value,
+        qty: document.getElementById('fQty').value,
+        price: document.getElementById('fPrice').value,
+      });
+      document.getElementById('createForm').classList.remove('open');
+      loadMine();
+    } catch (e) {
+      showError(e.message);
+    }
+  };
+
+  loadBrowse();
+</script>
+
+</body>
+</html>
