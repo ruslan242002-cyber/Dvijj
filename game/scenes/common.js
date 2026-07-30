@@ -7,11 +7,42 @@
  */
 
 const { xpToNext } = require('../../engine/leveling.js');
+const { explorationStatusCard } = require('../../lib/status-card.js');
 const { SKILLS } = require('../../engine/skills-data.js');
 const { getDailyContracts, getReputationTitle } = require('../../contracts/contracts-engine.js');
 const { getDistrictAtmosphere } = require('../../city/city-engine.js');
+const { DISTRICTS } = require('../../city/districts-data.js');
+const { rollStationEvent } = require('../../city/station-events.js');
 const { trophyProgressText } = require('../../lib/trophies.js');
 const { stormStatusText, isStormActive, STORM_REWARD_MULTIPLIER } = require('../../lib/world-storm.js');
+
+const DANGER_LABEL = { low: 'низкая', medium: 'средняя', high: 'высокая' };
+
+/**
+ * Карточка станции при заходе на хаб — картинка (см. imageForLocation
+ * ('station', faction) в hub.js) + описание в духе "Вы находитесь на
+ * станции: X", плюс редкое случайное событие станции (station-events.js)
+ * простым текстом внизу, если повезло сработать.
+ *
+ * Возвращает { text, reward } — reward нужно применить к игроку в hub.js
+ * (эта функция сама player не мутирует, только читает).
+ */
+function stationArrivalCard(player, rng = Math.random) {
+  const district = DISTRICTS[player.faction];
+  const curator = CURATORS[player.faction] || 'куратор станции';
+  const atmosphere = getDistrictAtmosphere(player.faction);
+  const dangerLabel = district ? (DANGER_LABEL[district.danger] || district.danger) : '—';
+
+  let text = `📍 Вы находитесь на станции: ${player.faction}\nКуратор: ${curator}\nОпасность станции: ${dangerLabel}`;
+  if (district) text += `\n\n${district.description}`;
+  if (atmosphere) text += `\n\n${atmosphere.time}`;
+  if (isStormActive()) text += `\n\n${stormStatusText()}`;
+
+  const event = district ? rollStationEvent(district.events, rng) : null;
+  if (event) text += `\n\n${event.text}`;
+
+  return { text, reward: event?.reward || null };
+}
 
 const FACTIONS = ['Приют', 'Терминус', 'Арсенал', 'Вуаль'];
 
@@ -188,7 +219,7 @@ function journeyContinueButtons(zone, isBossContext = false) {
 
 function safeReturnChoice(text, player, zone, depth, isBossContext = false, extra = {}) {
   return {
-    reply: { text, buttons: journeyContinueButtons(zone, isBossContext) },
+    reply: { text: `${text}\n\n${explorationStatusCard(player)}`, buttons: journeyContinueButtons(zone, isBossContext) },
     nextState: { scene: 'journey_continue', player, zone, depth, isBossContext, ...extra }
   };
 }
@@ -249,5 +280,5 @@ module.exports = {
   trainerDrone, freshPlayer, equippedSkillIds, skillButtons, skillIdByName,
   addToInventory, sellInventory, stationButtons, hubMessage, statusText,
   startJourney, buildGuardianEnemy, journeyContinueButtons, safeReturnChoice,
-  stormRewardMult, districtGroupsFor,
+  stormRewardMult, districtGroupsFor, stationArrivalCard,
 };
