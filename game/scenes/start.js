@@ -6,6 +6,7 @@
  */
 
 const { FACTIONS, CURATORS, freshPlayer, trainerDrone, sellInventory, addToInventory, stationButtons } = require('./common.js');
+const { imageForCurator } = require('../curator-images.js');
 const { SCENES } = require('./ids.js');
 
 function handleStart(state, input, rng, deps) {
@@ -46,7 +47,8 @@ function handleStart(state, input, rng, deps) {
       return {
         reply: {
           text: `Куратор ${curator}: «Неплохо для начала. Держи премию за инициативу — одно очко параметров сверху». Прежде чем отпустить тебя в космос, пройдёмся по станции — тут всё, что понадобится.`,
-          buttons: ['Идём']
+          buttons: ['Идём'],
+          imageKey: imageForCurator(player.faction)
         },
         nextState: { scene: 'quest_shop', player }
       };
