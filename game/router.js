@@ -3,12 +3,29 @@
  * обычная функция от (текущая сцена, входящее сообщение) к (ответ, новая сцена).
  * Ничего не завязано на ВК напрямую — vk.sendMessage(peerId, text, buttons)
  * это единственная точка выхода, поэтому в тестах подставляется fake-клиент.
+ *
+ * ВАЖНО — ДВЕ ВЕЩИ, КОТОРЫЕ МЕНЯЮТСЯ ДЛЯ ВЫЗЫВАЮЩЕГО КОДА (webhook-handler.js):
+ *
+ * 1. step() теперь ASYNC. Биржа и PvP делают запросы в Redis (deps.marketStore /
+ *    deps.pvpStore), это не может быть синхронным. Вызывающий код должен
+ *    писать `await step(...)`, а не `step(...)`.
+ *
+ * 2. У step() новый 5-й параметр — playerId (стабильный ID игрока, скорее
+ *    всего ваш VK user id). Он нужен ТОЛЬКО бирже и PvP, чтобы отличать
+ *    покупателя от продавца и сторону дуэли — больше нигде в игре такого
+ *    ID не было (player раньше идентифицировался только по ключу в Redis
+ *    снаружи, не по полю внутри себя). Без playerId «Биржа» и «Дуэль»
+ *    вежливо ответят «недоступно», не уронив всё остальное.
+ *
+ * Deps теперь ожидает (в дополнение к уже знакомому getProfileLink):
+ *   deps.marketStore — результат createUpstashMarketStore(redis) из market/market-store-upstash.js
+ *   deps.pvpStore     — результат createUpstashPvpStore(redis) из pvp/pvp-store-upstash.js
  */
 'use strict';
 
 const { resolveTurn } = require('../engine/combat-engine.js');
-const { SKILLS } = require('../engine/skills-data.js');
-const { rollEvent, rollLoot, ZONE_WEIGHTS } = require('../engine/exploration-engine.js');
+const { SKILLS, STIMS } = require('../engine/skills-data.js');
+const { rollEvent, rollLoot, ZONE_WEIGHTS, generateEnemy } = require('../engine/exploration-engine.js');
 const { rollLootByEnemyName } = require('../engine/bestiary.js');
 const { grantXp, xpToNext, xpForTier } = require('../engine/leveling.js');
 const { availableQuests, getQuest, describeObjective, progressText, objectiveMet, consumeObjective } = require('./quests-data.js');
@@ -24,9 +41,24 @@ const {
   getFragmentStatus, collectFragment, describeCondition, conditionProgress,
   getActiveHypothesis, setHypothesis, discoverHypothesis, getEnding
 } = require('../lore/trakt-mythos.js');
+const { getCurrentAct } = require('../lore/trakt-acts.js');
 const { RECIPES, hasResourcesFor, describeRecipe, craft } = require('../crafting/crafting-engine.js');
 const { createQuestState, advanceQuest, completeQuest, renderQuestText } = require('../quests/quest-engine.js');
 const { SHYOPOT_HYPOTHESES_QUEST } = require('../quests/narrative/shyopot-hypotheses.js');
+
+// ── новое в этой сессии ──
+const { rollEventWithDepth } = require('../engine/deep-exploration.js');
+const { attemptEvacuation } = require('../engine/evacuation.js');
+const { resolvePlayerTurn } = require('../engine/combat-turn.js');
+const { stimButtons, stimIdByName } = require('../engine/stim-buttons.js');
+const {
+  HOUSING, HOUSE_ITEMS, HousingError, HOUSING_ERRORS,
+  ownsHousing, purchaseHousing, purchaseHouseItem,
+  getMarketFeeDiscount, getRadiationDiscount, getEvacChanceBonus,
+} = require('../lib/housing.js');
+const { createListing, purchaseListing, listActiveListings, MarketError } = require('../market/market-engine.js');
+const { createDuel, submitTurn: submitPvpTurn, getDuel, winnerReward, PvpError } = require('../pvp/pvp-engine.js');
+const { findRandomOpponent } = require('../pvp/matchmaking-engine.js');
 
 const FACTIONS = ['Приют', 'Терминус', 'Арсенал', 'Вуаль'];
 
@@ -40,7 +72,7 @@ const FACTION_KIT = {
 const MAX_EQUIPPED_SKILLS = 3;
 const RESET_COMMAND = 'Сброс';
 
-const HUB_BUTTONS = ['Исследовать', 'Мостик', 'Отсек', 'Декон-камера', 'Кантина', 'Контракты', 'Врата Тракта', 'Статус', 'Профиль', 'Сброс'];
+const HUB_BUTTONS = ['Исследовать', 'Мостик', 'Отсек', 'Декон-камера', 'Кантина', 'Контракты', 'Биржа', 'Дуэль', 'Жильё', 'Врата Тракта', 'Статус', 'Профиль', 'Сброс'];
 const ZONE_BUTTONS = ['Патрулируемый', 'Спорный', 'Открытый космос', 'К другим станциям', 'Назад'];
 const ZONE_BY_LABEL = { 'Патрулируемый': 'blue', 'Спорный': 'yellow', 'Открытый космос': 'red' };
 const ZONE_LABEL = { blue: 'Патрулируемый сектор', yellow: 'Спорный сектор', red: 'Открытый космос' };
@@ -139,8 +171,6 @@ function sellInventory(player) {
   return total;
 }
 
-/** Персональная ссылка на профиль как кнопка-ссылка — добавляется к хабу
- * станции почти везде, где игрок туда возвращается. */
 function stationButtons(deps, player) {
   const link = typeof deps.getProfileLink === 'function' ? deps.getProfileLink() : null;
   let buttons = link ? [{ label: 'Открыть профиль', url: link }, ...HUB_BUTTONS] : [...HUB_BUTTONS];
@@ -156,8 +186,6 @@ function stationButtons(deps, player) {
   return buttons;
 }
 
-/** Богатое сообщение станции — статы, сектор, куратор. Показывается при
- * обычном возврате в хаб, а не при особых событиях (там своя сводка). */
 function hubMessage(player) {
   const next = xpToNext(player.level || 1);
   const curator = CURATORS[player.faction] || 'куратор станции';
@@ -188,10 +216,6 @@ function contractsBoard(player) {
   };
 }
 
-/** Разговор с Шёпотом про 4 гипотезы Тракта — первый настоящий диалоговый
- * квест на quests/quest-engine.js. input=null форсирует свежий старт
- * разговора (используется при входе через кнопку «Гипотезы»); иначе
- * input — подпись выбранной кнопки текущего этапа. */
 function stepShyopotQuest(playerIn, input) {
   const player = { ...playerIn };
   player.questStates = { ...(player.questStates || {}) };
@@ -227,6 +251,7 @@ function stepShyopotQuest(playerIn, input) {
 }
 
 function mythosScreen(player, prefixText = '') {
+  const act = getCurrentAct(player);
   const statuses = getFragmentStatus(player);
   const hyp = getActiveHypothesis(player);
   const lines = statuses.map((f) => {
@@ -239,7 +264,7 @@ function mythosScreen(player, prefixText = '') {
   const buttons = [...collectible.map((f) => `Собрать: ${f.shortName}`), 'Гипотезы', 'Назад'];
   const hypLine = hyp ? `Твоя гипотеза: ${HYPOTHESIS_INFO[hyp].name}` : 'Гипотеза ещё не выбрана.';
   return {
-    reply: { text: `${prefixText}📜 МИФОЛОГИЯ ТРАКТА\n\n${hypLine}\n\n${lines.join('\n')}`, buttons },
+    reply: { text: `${prefixText}📜 МИФОЛОГИЯ ТРАКТА\n\n${act.name}\n\n${hypLine}\n\n${lines.join('\n')}`, buttons },
     nextState: { scene: 'lore_mythos', player }
   };
 }
@@ -257,7 +282,8 @@ function cantinaBoard(player) {
       reply: { text: `🍸 КАНТИНА\n\n${greeting ? `${greeting}\n\n` : ''}Куратору сейчас нечего тебе предложить.`, buttons: ['Назад'] },
       nextState: { scene: 'loc_cantina', player }
     };
-  }const lines = quests.map((q, i) => `${i + 1}. «${q.title}» — ${describeObjective(q.objective)} (${progressText(player, q.objective)})`);
+  }
+  const lines = quests.map((q, i) => `${i + 1}. «${q.title}» — ${describeObjective(q.objective)} (${progressText(player, q.objective)})`);
   return {
     reply: { text: `🍸 КАНТИНА\n\n${greeting ? `${greeting}\n\n` : ''}Доступные задания куратора:\n${lines.join('\n')}`, buttons: [...quests.map((q) => q.title), 'Назад'] },
     nextState: { scene: 'loc_cantina', player }
@@ -274,64 +300,225 @@ function startJourney(player, kind, payload, rng) {
   };
 }
 
-function explore(player, zone, rng, deps, stealthMode = false) {
+function buildGuardianEnemy(name, tier, rng) {
+  const dangerMult = 1.4;
+  const hp = Math.round((80 + rng() * 120) * dangerMult * (1 + tier * 0.1));
+  const base = 12 + tier * 4;
+  return {
+    name: name || 'Страж фрагмента', tier, hp, hpMax: hp,
+    stats: {
+      power: Math.round(base * 1.1), mind: Math.round(base * 1.1), reaction: Math.round(base * 1.1),
+      endurance: Math.round(base * 1.1), firepower: Math.round(base * 1.3), shielding: Math.min(70, Math.round(base * 0.7))
+    },
+    luck: Math.round(8 + tier * 1.5),
+    accuracy: 0.72 + Math.min(tier, 5) * 0.02,
+    dodge: 0.08 + Math.min(tier, 5) * 0.015,
+    focus: 0.65 + Math.min(tier, 5) * 0.02,
+    periodic: []
+  };
+}
+
+function safeReturnChoice(text, player, zone, depth) {
+  return {
+    reply: { text, buttons: ['Углубиться дальше', 'Вернуться на станцию', 'Эвакуироваться'] },
+    nextState: { scene: 'journey_continue', player, zone, depth }
+  };
+}
+
+function resolveExplorationEvent(player, event, zone, depth, deps, rng, prefixText = '', allowContinue = true) {
+  const safe = (text) => allowContinue
+    ? safeReturnChoice(text, player, zone, depth)
+    : { reply: { text, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
+
+  switch (event.type) {
+    case 'ambush': {
+      const bonusNote = event.depthBonusTier ? `\n(усилен глубиной вылазки: +${event.depthBonusTier} к тиру)` : '';
+      return {
+        reply: { text: `${prefixText}⚠️ ОТГОЛОСОК\n\n${event.text}${bonusNote}`, buttons: ['Атаковать', 'Отступить'], imageKey: imageForEnemy(event.enemy.name) },
+        nextState: { scene: 'pre_combat', player, enemy: event.enemy, zone, depth }
+      };
+    }
+    case 'anomaly': {
+      const discount = getRadiationDiscount(player);
+      const gain = Math.max(0, Math.round(event.radiationGain * (1 - discount)));
+      player.radiation = Math.min(100, (player.radiation || 0) + gain);
+      return {
+        reply: { text: `${prefixText}🌀 АНОМАЛИЯ\n\n${event.text}\n☢️ Облучение: ${player.radiation}%\n\nЧто делать с находкой?`, buttons: ['Доложить куратору', 'Утаить находку'] },
+        nextState: { scene: 'anomaly_choice', player, zone, depth }
+      };
+    }
+    case 'distress': {
+      player.credits = (player.credits || 0) + event.reward.credits;
+      return safe(`${prefixText}📡 СИГНАЛ БЕДСТВИЯ\n\n${event.text}\n💳 +${event.reward.credits} кредитов за спасательный рейс.`);
+    }
+    case 'node': {
+      addToInventory(player, event.resource, event.tier, 1);
+      checkContractProgress(player, 'loot', { resource: event.resource, amount: 1 });
+      return safe(`${prefixText}⛏️ ЗАЛЕЖЬ\n\n${event.text}\nВ трюм добавлено: 1× ${event.resource} T${event.tier}.`);
+    }
+    case 'find': {
+      addToInventory(player, event.loot.resource, event.loot.tier, event.loot.qty);
+      player.credits = (player.credits || 0) + event.loot.credits;
+      checkContractProgress(player, 'loot', { resource: event.loot.resource, amount: event.loot.qty });
+      return safe(`${prefixText}🔭 ${event.text}`);
+    }
+    case 'sector': {
+      player.currentSectorId = event.sectorId;
+      return safe(`${prefixText}${event.text}`);
+    }
+    case 'story': {
+      return safe(`${prefixText}📨 ${event.text}`);
+    }
+    case 'discovery': {
+      if (event.hypothesisConfirm) discoverHypothesis(player, event.hypothesisConfirm);
+      if (event.reward?.credits) player.credits = (player.credits || 0) + event.reward.credits;
+      return safe(`${prefixText}📖 ${event.text}`);
+    }
+    case 'choice':
+    case 'combat_choice': {
+      if (!allowContinue) {
+        return safe(`${prefixText}${event.text}`);
+      }
+      return {
+        reply: { text: `${prefixText}${event.text}`, buttons: event.choices.map((c) => c.text) },
+        nextState: { scene: 'exploration_event_choice', player, zone, depth, event }
+      };
+    }
+    case 'boss': {
+      const enemy = buildGuardianEnemy(event.combat?.guardianName, event.combat?.tier || 5, rng);
+      return {
+        reply: { text: `${prefixText}👁️ ${event.text}`, buttons: ['Атаковать', 'Отступить'], imageKey: imageForEnemy(enemy.name) },
+        nextState: { scene: 'pre_combat', player, enemy, zone, depth, fragmentId: event.fragmentId }
+      };
+    }
+    default:
+      return safe(`${prefixText}${event.text || 'Ничего не произошло.'}`);
+  }
+}
+
+function explore(player, zone, rng, deps, stealthMode = false, depth = 0) {
   player.zoneVisits = player.zoneVisits || { blue: 0, yellow: 0, red: 0 };
   player.zoneVisits[zone] = (player.zoneVisits[zone] || 0) + 1;
   checkContractProgress(player, 'explore', { zone });
 
-  let weightsOverride = null;
   if (stealthMode) {
     const base = ZONE_WEIGHTS[zone] || ZONE_WEIGHTS.blue;
     const spared = Math.round(base.ambush * 0.6);
-    weightsOverride = { ...base, ambush: base.ambush - spared, find: base.find + spared };
+    const weightsOverride = { ...base, ambush: base.ambush - spared, find: base.find + spared };
+    const event = rollEvent(zone, rng, player.level || 1, weightsOverride);
+    if (event.type !== 'ambush') {
+      player.stealthLog = [...(player.stealthLog || []), `Уклонение в ${ZONE_LABEL[zone] || zone}`].slice(-5);
+    }
+    return resolveExplorationEvent(player, event, zone, 0, deps, rng, '', false);
   }
 
-  const event = rollEvent(zone, rng, player.level || 1, weightsOverride);
+  const event = rollEventWithDepth(player, zone, depth, rng);
+  return resolveExplorationEvent(player, event, zone, depth, deps, rng);
+}
 
-  if (stealthMode && event.type !== 'ambush') {
-    player.stealthLog = [...(player.stealthLog || []), `Уклонение в ${ZONE_LABEL[zone] || zone}`].slice(-5);
+function marketItemId(resource, tier) { return `${resource}__T${tier}`; }
+function marketItemName(resource, tier) { return `${resource} T${tier}`; }
+function parseMarketItemId(itemId) {
+  const m = /^(.+)__T(\d+)$/.exec(itemId || '');
+  return m ? { resource: m[1], tier: Number(m[2]) } : null;
+}
+function suggestedListingPrice(tier) {
+  // За ЕДИНИЦУ — market-engine.js сам умножает на qty при покупке
+  // (purchaseListing: totalCost = listing.price * qty). Передавать сюда
+  // уже умноженную на qty сумму — баг, из-за которого покупатель платит
+  // в qty раз больше, чем должен.
+  return Math.max(1, Math.round(tier * 8 * 1.5));
+}
+
+async function buyFromMarket(deps, player, playerId, listing) {
+  const feeDiscount = getMarketFeeDiscount(player);
+  const proxyBuyer = { id: playerId, credits: player.credits || 0, inventory: [] };
+  const { purchase } = await purchaseListing({ store: deps.marketStore }, proxyBuyer, listing.id, listing.qty, feeDiscount);
+  const nextPlayer = { ...player, credits: proxyBuyer.credits };
+  const parsed = parseMarketItemId(listing.itemId);
+  if (parsed) addToInventory(nextPlayer, parsed.resource, parsed.tier, purchase.qtyBought);
+  return nextPlayer;
+}
+
+async function sellToMarket(deps, player, playerId, resource, tier, qty, price) {
+  const proxySeller = { id: playerId, inventory: [{ id: marketItemId(resource, tier), name: marketItemName(resource, tier), qty }] };
+  const { listing } = await createListing({ store: deps.marketStore }, proxySeller, {
+    itemId: marketItemId(resource, tier), itemName: marketItemName(resource, tier), qty, price,
+  });
+  const inv = player.inventory || [];
+  const item = inv.find((i) => i.resource === resource && i.tier === tier);
+  if (item) {
+    item.qty -= qty;
+    player.inventory = item.qty > 0 ? inv : inv.filter((i) => i !== item);
   }
-  if (event.type === 'ambush') {
-    return {
-      reply: { text: `⚠️ ОТГОЛОСОК\n\n${event.text}`, buttons: ['Атаковать', 'Отступить'], imageKey: imageForEnemy(event.enemy.name) },
-      nextState: { scene: 'pre_combat', player, enemy: event.enemy, zone }
-    };
+  return listing;
+}
+
+async function marketHub(deps, player, playerId) {
+  if (!deps.marketStore || !playerId) {
+    return { reply: { text: '📈 Биржа сейчас недоступна.', buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
   }
-  if (event.type === 'anomaly') {
-    player.radiation = Math.min(100, (player.radiation || 0) + event.radiationGain);
-    return {
-      reply: {
-        text: `🌀 АНОМАЛИЯ\n\n${event.text}\n☢️ Облучение: ${player.radiation}%\n\nЧто делать с находкой?`,
-        buttons: ['Доложить куратору', 'Утаить находку']
-      },
-      nextState: { scene: 'anomaly_choice', player }
-    };
-  }
-  if (event.type === 'distress') {
-    player.credits = (player.credits || 0) + event.reward.credits;
-    return {
-      reply: { text: `📡 СИГНАЛ БЕДСТВИЯ\n\n${event.text}\n💳 +${event.reward.credits} кредитов за спасательный рейс.`, buttons: stationButtons(deps, player) },
-      nextState: { scene: 'station', player }
-    };
-  }
-  if (event.type === 'node') {
-    addToInventory(player, event.resource, event.tier, 1);
-    checkContractProgress(player, 'loot', { resource: event.resource, amount: 1 });
-    return {
-      reply: { text: `⛏️ ЗАЛЕЖЬ\n\n${event.text}\nВ трюм добавлено: 1× ${event.resource} T${event.tier}.`, buttons: stationButtons(deps, player) },
-      nextState: { scene: 'station', player }
-    };
-  }
-  addToInventory(player, event.loot.resource, event.loot.tier, event.loot.qty);
-  player.credits = (player.credits || 0) + event.loot.credits;
-  checkContractProgress(player, 'loot', { resource: event.loot.resource, amount: event.loot.qty });
+  const listings = await listActiveListings({ store: deps.marketStore }, { limit: 6 });
+  const lines = listings.length
+    ? listings.map((l) => `${l.itemName} ×${l.qty} — 💳${l.price}/шт (итого 💳${l.price * l.qty})${l.sellerId === playerId ? ' (ваш лот)' : ''}`)
+    : ['Пока пусто.'];
+  const buyable = listings.filter((l) => l.sellerId !== playerId);
+  const buttons = [...buyable.map((l) => `Купить: ${l.itemName}`), 'Выставить из трюма', 'Назад'];
   return {
-    reply: { text: `🔭 ${event.text}`, buttons: stationButtons(deps, player) },
-    nextState: { scene: 'station', player }
+    reply: { text: `📈 БИРЖА\n\n${lines.join('\n')}`, buttons },
+    nextState: { scene: 'market_hub', player, listings }
   };
 }
 
-function step(state, text, rng = Math.random, deps = {}) {
+async function pvpDuelScreen(deps, player, playerId, duelId, duelMaybe) {
+  const duel = duelMaybe || await getDuel({ store: deps.pvpStore }, duelId);
+  if (!duel || duel.status === 'finished') {
+    return { reply: { text: 'Дуэль не найдена или уже завершена.', buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
+  }
+  const side = duel.fighterA.id === playerId ? 'A' : 'B';
+  const myTurn = side === duel.turnOf;
+  const me = side === 'A' ? duel.fighterA : duel.fighterB;
+  const opp = side === 'A' ? duel.fighterB : duel.fighterA;
+
+  if (!myTurn) {
+    return {
+      reply: { text: `⚔️ Дуэль с ${opp.name}\n\nТы: ❤️${me.hp}/${me.hpMax} — Соперник: ❤️${opp.hp}/${opp.hpMax}\n\nСейчас не твой ход — жди ответа соперника и загляни попозже.`, buttons: ['Обновить', 'Назад'] },
+      nextState: { scene: 'pvp_duel', player, duelId }
+    };
+  }
+  const buttons = ['Обычная атака', ...(me.equippedSkills || []).map((id) => SKILLS[id]?.name).filter(Boolean), 'Назад'];
+  return {
+    reply: { text: `⚔️ Дуэль с ${opp.name}\n\nТы: ❤️${me.hp}/${me.hpMax} — Соперник: ❤️${opp.hp}/${opp.hpMax}\n\nТвой ход:`, buttons },
+    nextState: { scene: 'pvp_duel', player, duelId }
+  };
+}
+
+async function pvpHub(deps, player, playerId) {
+  if (!deps.pvpStore || !playerId) {
+    return { reply: { text: '⚔️ PvP сейчас недоступен.', buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
+  }
+  const activeDuelId = await deps.pvpStore.getActiveDuelId(playerId);
+  if (activeDuelId) return pvpDuelScreen(deps, player, playerId, activeDuelId);
+  return {
+    reply: { text: '⚔️ ДУЭЛЬНАЯ АРЕНА\n\nНайти случайного соперника близкой силы?', buttons: ['Искать соперника', 'Назад'] },
+    nextState: { scene: 'pvp_menu', player }
+  };
+}
+
+function housingHub(deps, player) {
+  const lines = Object.entries(HOUSING).map(([station, listing]) => {
+    const owned = ownsHousing(player, station);
+    return `${owned ? '🏠' : '🔒'} ${station}: ${listing.name} — ${owned ? 'куплено' : `💳${listing.price}`}`;
+  });
+  const buyButtons = Object.keys(HOUSING).filter((s) => !ownsHousing(player, s)).map((s) => `Купить дом: ${s}`);
+  const itemButtons = Object.keys(HOUSING).filter((s) => ownsHousing(player, s)).map((s) => `Интерьер: ${s}`);
+  return {
+    reply: { text: `🏠 ЖИЛЬЁ\n\n${lines.join('\n')}`, buttons: [...buyButtons, ...itemButtons, 'Назад'] },
+    nextState: { scene: 'housing_hub', player }
+  };
+}
+
+async function step(state, text, rng = Math.random, deps = {}, playerId = null) {
   const input = (text || '').trim();
 
   if (input === RESET_COMMAND) {
@@ -452,6 +639,15 @@ function step(state, text, rng = Math.random, deps = {}) {
       if (input === 'Контракты') {
         return contractsBoard({ ...state.player });
       }
+      if (input === 'Биржа') {
+        return marketHub(deps, state.player, playerId);
+      }
+      if (input === 'Дуэль') {
+        return pvpHub(deps, state.player, playerId);
+      }
+      if (input === 'Жильё') {
+        return housingHub(deps, state.player);
+      }
       if (input === 'Мастерская') {
         if (state.player.faction !== 'Вуаль') {
           return { reply: { text: 'Мастерская есть только у Вуали — здесь пока не доступна.', buttons: stationButtons(deps, state.player) }, nextState: state };
@@ -475,7 +671,7 @@ function step(state, text, rng = Math.random, deps = {}) {
         return { reply: { text: '🌀 ВРАТА ТРАКТА\n\nВыбери, куда прыгнуть:', buttons: ZONE_BUTTONS, imageKey: imageForLocation('gates') }, nextState: { scene: 'loc_gates', player: state.player } };
       }
       if (input === 'Исследовать') {
-        return startJourney(state.player, 'explore', { zone: state.player.zone || 'blue' }, rng);
+        return startJourney(state.player, 'explore', { zone: state.player.zone || 'blue', depth: 0 }, rng);
       }
       return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station') }, nextState: state };
     }
@@ -516,7 +712,8 @@ function step(state, text, rng = Math.random, deps = {}) {
 
     case 'quest_shyopot': {
       if (input === 'Назад') {
-        return mythosScreen(state.player)}
+        return mythosScreen(state.player);
+      }
       return stepShyopotQuest(state.player, input);
     }
 
@@ -611,7 +808,7 @@ function step(state, text, rng = Math.random, deps = {}) {
         };
       }
       const player = { ...state.player, zone };
-      return startJourney(player, 'explore', { zone }, rng);
+      return startJourney(player, 'explore', { zone, depth: 0 }, rng);
     }
 
     case 'loc_gates_travel': {
@@ -667,7 +864,7 @@ function step(state, text, rng = Math.random, deps = {}) {
         };
       }
       if (state.kind === 'explore') {
-        return explore(state.player, state.payload.zone, rng, deps);
+        return explore(state.player, state.payload.zone, rng, deps, false, state.payload.depth || 0);
       }
       const player = { ...state.player, faction: state.payload.targetFaction };
       const curator = CURATORS[player.faction] || '';
@@ -677,22 +874,63 @@ function step(state, text, rng = Math.random, deps = {}) {
       };
     }
 
+    case 'journey_continue': {
+      const { player, zone, depth } = state;
+      if (input === 'Углубиться дальше') {
+        return startJourney(player, 'explore', { zone, depth: (depth || 0) + 1 }, rng);
+      }
+      if (input === 'Эвакуироваться') {
+        const bonus = getEvacChanceBonus(player);
+        const result = attemptEvacuation(player, zone, depth || 0, rng, bonus);
+        if (result.success) {
+          return { reply: { text: `🛰️ ${result.text}`, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
+        }
+        return resolveExplorationEvent(player, result.blockingEvent, zone, depth || 0, deps, rng, `⚠️ ${result.text}\n\n`);
+      }
+      if (input === 'Вернуться на станцию') {
+        return { reply: { text: 'Ты не торопясь идёшь назад пешком — вылазка окончена, всё добытое уже в трюме.', buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
+      }
+      return { reply: { text: 'Выбери действие кнопкой ниже.', buttons: ['Углубиться дальше', 'Вернуться на станцию', 'Эвакуироваться'] }, nextState: state };
+    }
+
+    case 'exploration_event_choice': {
+      const { player, zone, depth, event } = state;
+      const choice = (event.choices || []).find((c) => c.text === input);
+      if (!choice) {
+        return { reply: { text: `${event.text}`, buttons: event.choices.map((c) => c.text) }, nextState: state };
+      }
+      if (choice.combat) {
+        const combatZone = choice.combat.zoneOverride || zone;
+        const enemy = generateEnemy(combatZone, rng, player.level || 1);
+        return {
+          reply: { text: `⚔️ ${event.text}`, buttons: ['Атаковать', 'Отступить'], imageKey: imageForEnemy(enemy.name) },
+          nextState: { scene: 'pre_combat', player, enemy, zone, depth }
+        };
+      }
+      const nextPlayer = { ...player };
+      const result = choice.result || {};
+      if (result.reward) {
+        if (result.reward.credits) nextPlayer.credits = (nextPlayer.credits || 0) + result.reward.credits;
+        if (result.reward.reputation) nextPlayer.reputation = (nextPlayer.reputation || 0) + result.reward.reputation;
+        if (result.reward.flag) { nextPlayer.flags = nextPlayer.flags || {}; nextPlayer.flags[result.reward.flag] = true; }
+      }
+      if (result.flag) { nextPlayer.flags = nextPlayer.flags || {}; nextPlayer.flags[result.flag] = true; }
+      if (choice.consequenceId) applyConsequence(nextPlayer, choice.consequenceId);
+      if (event.flag) { nextPlayer.flags = nextPlayer.flags || {}; nextPlayer.flags[event.flag] = true; }
+      return safeReturnChoice(result.text || event.text, nextPlayer, zone, depth);
+    }
+
     case 'anomaly_choice': {
       const player = { ...state.player };
+      const zone = state.zone, depth = state.depth;
       if (input === 'Доложить куратору') {
         applyConsequence(player, 'report_anomaly_find');
         const rep = CONSEQUENCE_TRIGGERS.report_anomaly_find.immediate.reputation;
-        return {
-          reply: { text: `Куратор внимательно выслушивает доклад и кивает. +${rep} репутации станции.`, buttons: stationButtons(deps, state.player) },
-          nextState: { scene: 'station', player }
-        };
+        return safeReturnChoice(`Куратор внимательно выслушивает доклад и кивает. +${rep} репутации станции.`, player, zone, depth);
       }
       if (input === 'Утаить находку') {
         applyConsequence(player, 'hide_anomaly_find');
-        return {
-          reply: { text: 'Ты решаешь промолчать об увиденном. Что-то в этом решении отзывается в теле неприятным холодом — но, возможно, не только в теле.', buttons: stationButtons(deps, state.player) },
-          nextState: { scene: 'station', player }
-        };
+        return safeReturnChoice('Ты решаешь промолчать об увиденном. Что-то в этом решении отзывается в теле неприятным холодом — но, возможно, не только в теле.', player, zone, depth);
       }
       return { reply: { text: 'Выбери: доложить куратору или утаить находку.', buttons: ['Доложить куратору', 'Утаить находку'] }, nextState: state };
     }
@@ -701,76 +939,269 @@ function step(state, text, rng = Math.random, deps = {}) {
       if (input === 'Отступить') {
         return { reply: { text: 'Ты отступаешь на безопасное расстояние.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
       }
-      const buttons = ['Обычная атака', ...skillButtons(state.player)];
+      const buttons = ['Обычная атака', ...skillButtons(state.player), 'Стим'];
       return {
         reply: { text: `${state.enemy.name}: ❤️ ${state.enemy.hp}/${state.enemy.hpMax}\n\nВыбери действие:`, buttons },
-        nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone }
+        nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: false }
       };
     }
 
+    case 'combat_stim_select': {
+      const backButtons = ['Обычная атака', ...skillButtons(state.player)];
+      if (!state.stimUsedThisFight) backButtons.push('Стим');
+      if (input === 'Назад') {
+        return {
+          reply: { text: `${state.enemy.name}: ❤️ ${state.enemy.hp}/${state.enemy.hpMax}\n\nВыбери действие:`, buttons: backButtons },
+          nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight }
+        };
+      }
+      const stimId = stimIdByName(input);
+      if (!stimId) {
+        return { reply: { text: 'Выбери стим кнопкой ниже.', buttons: [...stimButtons(), 'Назад'] }, nextState: state };
+      }
+      const result = resolvePlayerTurn({ player: state.player, enemy: state.enemy, skill: null, stimId, stimUsedThisFight: state.stimUsedThisFight, rng });
+      return resolveCombatTurn(deps, state, result, rng);
+    }
+
     case 'combat': {
+      if (input === 'Стим') {
+        if (state.stimUsedThisFight) {
+          const buttons = ['Обычная атака', ...skillButtons(state.player)];
+          return { reply: { text: 'Стим уже использован в этом бою.', buttons }, nextState: state };
+        }
+        return {
+          reply: { text: 'Выбери стим:', buttons: [...stimButtons(), 'Назад'] },
+          nextState: { scene: 'combat_stim_select', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight }
+        };
+      }
       const skillId = input === 'Обычная атака' ? null : skillIdByName(input);
       const skill = skillId ? SKILLS[skillId] : null;
       if (input !== 'Обычная атака' && !skill) {
         const buttons = ['Обычная атака', ...skillButtons(state.player)];
+        if (!state.stimUsedThisFight) buttons.push('Стим');
         return { reply: { text: 'Выбери действие кнопкой ниже.', buttons }, nextState: state };
       }
 
-      const result = resolveTurn({ attacker: state.player, defender: state.enemy, skill, rng });
+      const result = resolvePlayerTurn({ player: state.player, enemy: state.enemy, skill, stimId: null, stimUsedThisFight: state.stimUsedThisFight, rng });
+      return resolveCombatTurn(deps, state, result, rng);
+    }
 
-      if (result.finished) {
-        if (result.winner === 'attacker') {
-          if (state.trainingFight) {
-            return {
-              reply: { text: `💥 ${result.log.join(' ')}\n\n✅ Дрон-манекен деактивирован. Тренировка окончена — это была только симуляция, статы и HP полностью восстановлены.`, buttons: ['Доложить куратору'] },
-              nextState: { scene: 'quest_report', player: { ...result.attacker, hp: result.attacker.hpMax } }
-            };
-          }
-          const loot = rollLoot(state.zone || 'blue', rng);
-          const player = { ...result.attacker };
-          addToInventory(player, loot.resource, loot.tier, loot.qty);
-          player.credits = (player.credits || 0) + loot.credits;
-          player.killCount = (player.killCount || 0) + 1;
-          if ((state.enemy.tier || 0) >= 5) player.highTierKills = (player.highTierKills || 0) + 1;
-          checkContractProgress(player, 'combat_win', { zone: state.zone || 'blue' });
-          checkContractProgress(player, 'loot', { resource: loot.resource, amount: loot.qty });
-          const xpGain = xpForTier(state.enemy.tier || 1);
-          const { leveledUp, level } = grantXp(player, xpGain);
-          const bestiaryDrops = rollLootByEnemyName(state.enemy.name, rng);
-          if (bestiaryDrops.length) {
-            player.bestiaryItems = [...(player.bestiaryItems || []), ...bestiaryDrops.map((d) => d.id)];
-          }
-          let victoryText = `💥 ${result.log.join(' ')}\n\n🏆 ${state.enemy.name} уничтожен.\n💳 +${loot.credits} кредитов, +${loot.qty}× ${loot.resource} T${loot.tier}\n✨ +${xpGain} XP`;
-          if (bestiaryDrops.length) victoryText += `\n🎖️ Особая добыча: ${bestiaryDrops.map((d) => d.name).join(', ')}`;
-          if (leveledUp) victoryText += `\n🆙 Новый уровень: ${level}! (+2 очка, +20 HP, полное исцеление)`;
-          return { reply: { text: victoryText, buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player } };
+    case 'market_hub': {
+      if (input === 'Назад') {
+        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station') }, nextState: { scene: 'station', player: state.player } };
+      }
+      if (input === 'Выставить из трюма') {
+        const inv = state.player.inventory || [];
+        if (!inv.length) {
+          return { reply: { text: 'Трюм пуст — нечего выставлять.', buttons: ['Назад'] }, nextState: { scene: 'market_hub', player: state.player, listings: state.listings || [] } };
         }
-        return {
-          reply: { text: `💥 ${result.log.join(' ')}\n\n💀 Скафандр пробит. Аварийная капсула эвакуирует тебя на станцию.`, buttons: stationButtons(deps, state.player) },
-          nextState: { scene: 'station', player: { ...result.attacker, hp: Math.round(result.attacker.hpMax * 0.5) } }
-        };
+        const buttons = inv.map((i) => `Лот: ${i.resource} T${i.tier} ×${i.qty}`).concat('Назад');
+        return { reply: { text: 'Что выставить целиком?', buttons }, nextState: { scene: 'market_sell_pick', player: state.player } };
       }
-
-      const enemyTurn = resolveTurn({ attacker: result.defender, defender: result.attacker, rng });
-      const log = result.log.concat(enemyTurn.log).join(' ');
-
-      if (enemyTurn.finished && enemyTurn.winner === 'attacker') {
-        return {
-          reply: { text: `💥 ${log}\n\n💀 Скафандр пробит.`, buttons: stationButtons(deps, state.player) },
-          nextState: { scene: 'station', player: { ...enemyTurn.defender, hp: Math.round(enemyTurn.defender.hpMax * 0.5) } }
-        };
+      const buyMatch = /^Купить: (.+)$/.exec(input);
+      if (buyMatch) {
+        const listing = (state.listings || []).find((l) => l.itemName === buyMatch[1] && l.sellerId !== playerId);
+        if (!listing) return marketHub(deps, state.player, playerId);
+        try {
+          const player = await buyFromMarket(deps, state.player, playerId, listing);
+          return { reply: { text: `Куплено: ${listing.itemName}.`, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
+        } catch (e) {
+          if (e instanceof MarketError) {
+            return { reply: { text: `Не удалось купить: ${e.code}`, buttons: ['Назад'] }, nextState: { scene: 'market_hub', player: state.player, listings: state.listings || [] } };
+          }
+          throw e;
+        }
       }
+      return marketHub(deps, state.player, playerId);
+    }
 
-      const buttons = ['Обычная атака', ...skillButtons(enemyTurn.defender)];
-      return {
-        reply: { text: `💥 ${log}\n\n${state.enemy.name}: ❤️ ${enemyTurn.attacker.hp}/${enemyTurn.attacker.hpMax}`, buttons },
-        nextState: { scene: 'combat', player: enemyTurn.defender, enemy: enemyTurn.attacker, trainingFight: state.trainingFight, zone: state.zone }
-      };
+    case 'market_sell_pick': {
+      if (input === 'Назад') return marketHub(deps, state.player, playerId);
+      const match = /^Лот: (.+) T(\d+) ×(\d+)$/.exec(input);
+      if (!match) return marketHub(deps, state.player, playerId);
+      const [, resource, tierStr, qtyStr] = match;
+      const tier = Number(tierStr), qty = Number(qtyStr);
+      const price = suggestedListingPrice(tier);
+      const player = { ...state.player, inventory: (state.player.inventory || []).map((i) => ({ ...i })) };
+      try {
+        await sellToMarket(deps, player, playerId, resource, tier, qty, price);
+        return { reply: { text: `Выставлено: ${resource} T${tier} ×${qty} по 💳${price}/шт (итого 💳${price * qty} за весь стек).`, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
+      } catch (e) {
+        if (e instanceof MarketError) {
+          return { reply: { text: `Не удалось выставить: ${e.code}`, buttons: ['Назад'] }, nextState: { scene: 'market_hub', player: state.player, listings: [] } };
+        }
+        throw e;
+      }
+    }
+
+    case 'pvp_menu': {
+      if (input === 'Назад') {
+        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station') }, nextState: { scene: 'station', player: state.player } };
+      }
+      if (input === 'Искать соперника') {
+        try {
+          const result = await findRandomOpponent({ store: deps.pvpStore }, { ...state.player, id: playerId });
+          if (result.matched) return pvpDuelScreen(deps, state.player, playerId, result.duel.id, result.duel);
+          return { reply: { text: 'Ты встал в очередь — при следующем заходе в «Дуэль» проверим, не нашёлся ли соперник.', buttons: ['Назад'] }, nextState: { scene: 'pvp_menu', player: state.player } };
+        } catch (e) {
+          if (e instanceof PvpError) return { reply: { text: `Не удалось: ${e.code}`, buttons: ['Назад'] }, nextState: state };
+          throw e;
+        }
+      }
+      return pvpHub(deps, state.player, playerId);
+    }
+
+    case 'pvp_duel': {
+      if (input === 'Назад') {
+        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station') }, nextState: { scene: 'station', player: state.player } };
+      }
+      if (input === 'Обновить') {
+        return pvpDuelScreen(deps, state.player, playerId, state.duelId);
+      }
+      const skillId = input === 'Обычная атака' ? null : skillIdByName(input);
+      if (input !== 'Обычная атака' && !skillId) {
+        return pvpDuelScreen(deps, state.player, playerId, state.duelId);
+      }
+      try {
+        const duel = await submitPvpTurn({ store: deps.pvpStore }, playerId, state.duelId, { skillId }, SKILLS, STIMS, rng);
+        if (duel.status === 'finished') {
+          const mySide = duel.fighterA.id === playerId ? 'A' : 'B';
+          const won = duel.winner === mySide;
+          const player = { ...state.player };
+          const reward = winnerReward();
+          if (won) {
+            player.credits = (player.credits || 0) + reward.credits;
+            player.reputation = (player.reputation || 0) + reward.reputation;
+          }
+          return {
+            reply: { text: `⚔️ Дуэль окончена. ${won ? `Победа! +${reward.credits} кредитов, +${reward.reputation} репутации.` : 'Поражение.'}`, buttons: stationButtons(deps, player) },
+            nextState: { scene: 'station', player }
+          };
+        }
+        return pvpDuelScreen(deps, state.player, playerId, state.duelId, duel);
+      } catch (e) {
+        if (e instanceof PvpError) return { reply: { text: `Не удалось: ${e.code}`, buttons: ['Обновить', 'Назад'] }, nextState: state };
+        throw e;
+      }
+    }
+
+    case 'housing_hub': {
+      if (input === 'Назад') {
+        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station') }, nextState: { scene: 'station', player: state.player } };
+      }
+      const buyMatch = /^Купить дом: (.+)$/.exec(input);
+      if (buyMatch) {
+        try {
+          const player = { ...state.player };
+          purchaseHousing(player, buyMatch[1]);
+          return housingHub(deps, player);
+        } catch (e) {
+          if (e instanceof HousingError) {
+            const msg = e.code === HOUSING_ERRORS.INSUFFICIENT_CREDITS ? 'не хватает кредитов' : e.code;
+            return { reply: { text: `Не получилось: ${msg}`, buttons: ['Назад'] }, nextState: { scene: 'housing_hub', player: state.player } };
+          }
+          throw e;
+        }
+      }
+      const itemMatch = /^Интерьер: (.+)$/.exec(input);
+      if (itemMatch) {
+        const station = itemMatch[1];
+        const catalog = HOUSE_ITEMS[station] || [];
+        const owned = (state.player.housing?.[station]?.items) || [];
+        const available = catalog.filter((i) => !owned.includes(i.id));
+        if (!available.length) {
+          return { reply: { text: 'Всё уже куплено для этого дома.', buttons: ['Назад'] }, nextState: { scene: 'housing_hub', player: state.player } };
+        }
+        const buttons = available.map((i) => `Купить: ${i.name} (💳${i.price})`).concat('Назад');
+        return { reply: { text: HOUSING[station].flavor, buttons }, nextState: { scene: 'housing_item_pick', player: state.player, station } };
+      }
+      return housingHub(deps, state.player);
+    }
+
+    case 'housing_item_pick': {
+      if (input === 'Назад') return housingHub(deps, state.player);
+      const match = /^Купить: (.+?) \(/.exec(input);
+      const catalog = HOUSE_ITEMS[state.station] || [];
+      const item = match ? catalog.find((i) => i.name === match[1]) : null;
+      if (!item) return housingHub(deps, state.player);
+      try {
+        const player = { ...state.player };
+        purchaseHouseItem(player, state.station, item.id);
+        return housingHub(deps, player);
+      } catch (e) {
+        if (e instanceof HousingError) {
+          return { reply: { text: `Не получилось: ${e.code}`, buttons: ['Назад'] }, nextState: { scene: 'housing_hub', player: state.player } };
+        }
+        throw e;
+      }
     }
 
     default:
       return { reply: { text: 'Что-то пошло не так, начнём заново.', buttons: [] }, nextState: { scene: 'start' } };
   }
+}
+
+function resolveCombatTurn(deps, state, result, rng) {
+  if (result.finished) {
+    if (result.winner === 'attacker') {
+      if (state.trainingFight) {
+        return {
+          reply: { text: `💥 ${result.log.join(' ')}\n\n✅ Дрон-манекен деактивирован. Тренировка окончена — это была только симуляция, статы и HP полностью восстановлены.`, buttons: ['Доложить куратору'] },
+          nextState: { scene: 'quest_report', player: { ...result.attacker, hp: result.attacker.hpMax } }
+        };
+      }
+      const zone = state.zone || 'blue';
+      const depth = state.depth || 0;
+      const loot = rollLoot(zone, rng);
+      const player = { ...result.attacker };
+      addToInventory(player, loot.resource, loot.tier, loot.qty);
+      player.credits = (player.credits || 0) + loot.credits;
+      player.killCount = (player.killCount || 0) + 1;
+      if ((state.enemy.tier || 0) >= 5) player.highTierKills = (player.highTierKills || 0) + 1;
+      checkContractProgress(player, 'combat_win', { zone });
+      checkContractProgress(player, 'loot', { resource: loot.resource, amount: loot.qty });
+      const xpGain = xpForTier(state.enemy.tier || 1);
+      const { leveledUp, level } = grantXp(player, xpGain);
+      const bestiaryDrops = rollLootByEnemyName(state.enemy.name, rng);
+      if (bestiaryDrops.length) player.bestiaryItems = [...(player.bestiaryItems || []), ...bestiaryDrops.map((d) => d.id)];
+
+      let fragmentNote = '';
+      if (state.fragmentId) {
+        const res = collectFragment(player, state.fragmentId);
+        if (res.success) fragmentNote = `\n✨ Фрагмент собран за победу над стражем.`;
+      }
+
+      let victoryText = `💥 ${result.log.join(' ')}\n\n🏆 ${state.enemy.name} уничтожен.\n💳 +${loot.credits} кредитов, +${loot.qty}× ${loot.resource} T${loot.tier}\n✨ +${xpGain} XP${fragmentNote}`;
+      if (bestiaryDrops.length) victoryText += `\n🎖️ Особая добыча: ${bestiaryDrops.map((d) => d.name).join(', ')}`;
+      if (leveledUp) victoryText += `\n🆙 Новый уровень: ${level}! (+2 очка, +20 HP, полное исцеление)`;
+
+      return {
+        reply: { text: victoryText, buttons: ['Углубиться дальше', 'Вернуться на станцию', 'Эвакуироваться'] },
+        nextState: { scene: 'journey_continue', player, zone, depth }
+      };
+    }
+    return {
+      reply: { text: `💥 ${result.log.join(' ')}\n\n💀 Скафандр пробит. Аварийная капсула эвакуирует тебя на станцию.`, buttons: stationButtons(deps, state.player) },
+      nextState: { scene: 'station', player: { ...result.attacker, hp: Math.round(result.attacker.hpMax * 0.5) } }
+    };
+  }
+
+  const enemyTurn = resolveTurn({ attacker: result.defender, defender: result.attacker, rng });
+  const log = result.log.concat(enemyTurn.log).join(' ');
+
+  if (enemyTurn.finished && enemyTurn.winner === 'attacker') {
+    return {
+      reply: { text: `💥 ${log}\n\n💀 Скафандр пробит.`, buttons: stationButtons(deps, state.player) },
+      nextState: { scene: 'station', player: { ...enemyTurn.defender, hp: Math.round(enemyTurn.defender.hpMax * 0.5) } }
+    };
+  }
+
+  const buttons = ['Обычная атака', ...skillButtons(enemyTurn.defender)];
+  if (!result.stimUsedThisFight) buttons.push('Стим');
+  return {
+    reply: { text: `💥 ${log}\n\n${state.enemy.name}: ❤️ ${enemyTurn.attacker.hp}/${enemyTurn.attacker.hpMax}`, buttons },
+    nextState: { scene: 'combat', player: enemyTurn.defender, enemy: enemyTurn.attacker, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: result.stimUsedThisFight }
+  };
 }
 
 module.exports = {
