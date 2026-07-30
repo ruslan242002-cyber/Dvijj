@@ -45,6 +45,7 @@ const { getCurrentAct } = require('../lore/trakt-acts.js');
 const { RECIPES, hasResourcesFor, describeRecipe, craft } = require('../crafting/crafting-engine.js');
 const { createQuestState, advanceQuest, completeQuest, renderQuestText } = require('../quests/quest-engine.js');
 const { SHYOPOT_HYPOTHESES_QUEST } = require('../quests/narrative/shyopot-hypotheses.js');
+const { getArcForFaction, getNextAvailableQuest } = require('../storylines/curator-arcs.js');
 
 // ── новое в этой сессии ──
 const { rollEventWithDepth } = require('../engine/deep-exploration.js');
@@ -173,7 +174,12 @@ function sellInventory(player) {
 
 function stationButtons(deps, player) {
   const link = typeof deps.getProfileLink === 'function' ? deps.getProfileLink() : null;
-  let buttons = link ? [{ label: 'Открыть профиль', url: link }, ...HUB_BUTTONS] : [...HUB_BUTTONS];
+  // Если есть прямая ссылка на профиль, убираем текстовую кнопку "Профиль"
+  // из HUB_BUTTONS — иначе получаются две кнопки профиля одновременно:
+  // готовая ссылка и текстовая, которая при нажатии просто покажет ту же
+  // ссылку ещё раз.
+  const baseButtons = link ? HUB_BUTTONS.filter((b) => b !== 'Профиль') : HUB_BUTTONS;
+  let buttons = link ? [{ label: 'Открыть профиль', url: link }, ...baseButtons] : [...baseButtons];
 
   const extras = [];
   if (player?.faction === 'Вуаль') extras.push('Мастерская');
@@ -250,14 +256,69 @@ function stepShyopotQuest(playerIn, input) {
   return { reply: { text: rendered.text, buttons }, nextState: { scene: 'quest_shyopot', player } };
 }
 
+/**
+ * Диалоговый движок для квестов арок кураторов (storylines/curator-arcs.js).
+ * Отдельно от stepShyopotQuest — тот полагается на quest-engine.js
+ * (createQuestState/advanceQuest/renderQuestText), формат которого не
+ * подтверждён под isCombat/winNext/loseNext/reward/terminal, а именно эти
+ * поля arc-квесты используют насквозь. Интерпретирую stage-объекты
+ * напрямую, раз я сам их и написал в этом формате.
+ */
+function renderCuratorStage(player, questId, stageId) {
+  const arc = getArcForFaction(player.faction);
+  const quest = arc?.quests.find((q) => q.id === questId);
+  if (!quest || !quest.stages[stageId]) return null;
+  return { arc, quest, stage: quest.stages[stageId] };
+}
+
+function curatorQuestScreen(deps, player, questId, stageId) {
+  const found = renderCuratorStage(player, questId, stageId);
+  if (!found) {
+    return { reply: { text: hubMessage(player), buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
+  }
+  const { stage } = found;
+  const text = (stage.text || '').replace(/\$\{playerName\}/g, player.name || '');
+
+  if (stage.isCombat) {
+    return {
+      reply: { text, buttons: ['Атаковать', 'Отступить'], imageKey: imageForEnemy(stage.enemy.name) },
+      nextState: { scene: 'pre_combat', player, enemy: { ...stage.enemy, periodic: [] }, curatorQuest: { questId, winNext: stage.winNext, loseNext: stage.loseNext } }
+    };
+  }
+
+  if (stage.terminal) {
+    const nextPlayer = { ...player };
+    const rewardLines = [];
+    if (stage.reward) {
+      if (stage.reward.reputation) { nextPlayer.reputation = (nextPlayer.reputation || 0) + stage.reward.reputation; rewardLines.push(`⭐ ${stage.reward.reputation > 0 ? '+' : ''}${stage.reward.reputation} репутации`); }
+      if (stage.reward.credits) { nextPlayer.credits = (nextPlayer.credits || 0) + stage.reward.credits; rewardLines.push(`💳 +${stage.reward.credits} кредитов`); }
+      if (stage.reward.statPoints) { nextPlayer.statPoints = (nextPlayer.statPoints || 0) + stage.reward.statPoints; rewardLines.push(`🔧 +${stage.reward.statPoints} очков параметров`); }
+    }
+    nextPlayer.completedQuests = [...(nextPlayer.completedQuests || [])];
+    if (!nextPlayer.completedQuests.includes(questId)) nextPlayer.completedQuests.push(questId);
+    const fullText = rewardLines.length ? `${text}\n\n${rewardLines.join('\n')}` : text;
+    return { reply: { text: fullText, buttons: ['Назад'] }, nextState: { scene: 'station', player: nextPlayer } };
+  }
+
+  return {
+    reply: { text, buttons: (stage.choices || []).map((c) => c.label) },
+    nextState: { scene: 'curator_quest', player, questId, stageId }
+  };
+}
+
 function mythosScreen(player, prefixText = '') {
   const act = getCurrentAct(player);
   const statuses = getFragmentStatus(player);
   const hyp = getActiveHypothesis(player);
+  // Защита: если в реальном lore/trakt-mythos.js нет describeCondition/
+  // conditionProgress (или они называются иначе) — не роняем экран
+  // мифологии, а показываем нейтральный текст вместо конкретного условия.
+  const describe = typeof describeCondition === 'function' ? describeCondition : () => 'условие ещё не описано';
+  const progress = typeof conditionProgress === 'function' ? conditionProgress : () => '';
   const lines = statuses.map((f) => {
     const icon = f.collected ? '✅' : f.unlocked ? '🔓' : '🔒';
     let extra = '';
-    if (!f.collected) extra = f.unlocked ? ' — готов к сбору!' : ` — ${describeCondition(f.unlockCondition)} (${conditionProgress(player, f.unlockCondition)})`;
+    if (!f.collected) extra = f.unlocked ? ' — готов к сбору!' : ` — ${describe(f.unlockCondition)} (${progress(player, f.unlockCondition)})`;
     return `${icon} ${f.shortName}${extra}`;
   });
   const collectible = statuses.filter((f) => f.unlocked && !f.collected);
@@ -277,15 +338,20 @@ function cantinaBoard(player) {
   player.npcMeetings[curatorId] = meetCount + 1;
 
   const quests = availableQuests(player);
-  if (quests.length === 0) {
+  const arc = getArcForFaction(player.faction);
+  const arcQuest = arc ? getNextAvailableQuest(player, arc) : null;
+
+  if (quests.length === 0 && !arcQuest) {
     return {
       reply: { text: `🍸 КАНТИНА\n\n${greeting ? `${greeting}\n\n` : ''}Куратору сейчас нечего тебе предложить.`, buttons: ['Назад'] },
       nextState: { scene: 'loc_cantina', player }
     };
   }
   const lines = quests.map((q, i) => `${i + 1}. «${q.title}» — ${describeObjective(q.objective)} (${progressText(player, q.objective)})`);
+  if (arcQuest) lines.push(`✨ Куратор ${CURATORS[player.faction] || ''} хочет поговорить лично: «${arcQuest.name}»`);
+  const buttons = [...quests.map((q) => q.title), ...(arcQuest ? [`Поговорить: ${arcQuest.name}`] : []), 'Назад'];
   return {
-    reply: { text: `🍸 КАНТИНА\n\n${greeting ? `${greeting}\n\n` : ''}Доступные задания куратора:\n${lines.join('\n')}`, buttons: [...quests.map((q) => q.title), 'Назад'] },
+    reply: { text: `🍸 КАНТИНА\n\n${greeting ? `${greeting}\n\n` : ''}Доступные задания куратора:\n${lines.join('\n')}`, buttons },
     nextState: { scene: 'loc_cantina', player }
   };
 }
@@ -318,10 +384,20 @@ function buildGuardianEnemy(name, tier, rng) {
   };
 }
 
-function safeReturnChoice(text, player, zone, depth) {
+/** Кнопки после безопасного события/победы во время вылазки. "Эвакуироваться"
+ * — только для красной зоны или после боя со стражем фрагмента (isBossContext) —
+ * в обычных вылазках уже есть бесплатный "Вернуться на станцию", отдельная
+ * рискованная эвакуация там просто не нужна. */
+function journeyContinueButtons(zone, isBossContext = false) {
+  const buttons = ['Углубиться дальше', 'Вернуться на станцию'];
+  if (zone === 'red' || isBossContext) buttons.push('Эвакуироваться');
+  return buttons;
+}
+
+function safeReturnChoice(text, player, zone, depth, isBossContext = false) {
   return {
-    reply: { text, buttons: ['Углубиться дальше', 'Вернуться на станцию', 'Эвакуироваться'] },
-    nextState: { scene: 'journey_continue', player, zone, depth }
+    reply: { text, buttons: journeyContinueButtons(zone, isBossContext) },
+    nextState: { scene: 'journey_continue', player, zone, depth, isBossContext }
   };
 }
 
@@ -738,6 +814,15 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
       if (input === 'Назад') {
         return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station') }, nextState: { scene: 'station', player: state.player } };
       }
+      const talkMatch = /^Поговорить: (.+)$/.exec(input);
+      if (talkMatch) {
+        const arc = getArcForFaction(state.player.faction);
+        const arcQuest = arc ? getNextAvailableQuest(state.player, arc) : null;
+        if (arcQuest && arcQuest.name === talkMatch[1]) {
+          return curatorQuestScreen(deps, state.player, arcQuest.id, 'start');
+        }
+        return cantinaBoard(state.player);
+      }
       const quest = availableQuests(state.player).find((q) => q.title === input);
       if (!quest) return cantinaBoard(state.player);
 
@@ -875,11 +960,16 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
     }
 
     case 'journey_continue': {
-      const { player, zone, depth } = state;
+      const { player, zone, depth, isBossContext } = state;
       if (input === 'Углубиться дальше') {
         return startJourney(player, 'explore', { zone, depth: (depth || 0) + 1 }, rng);
       }
       if (input === 'Эвакуироваться') {
+        if (zone !== 'red' && !isBossContext) {
+          // Эвакуация не предлагалась в этой ситуации — не даём случайно
+          // сработать на нераспознанном вводе.
+          return { reply: { text: 'Выбери действие кнопкой ниже.', buttons: journeyContinueButtons(zone, isBossContext) }, nextState: state };
+        }
         const bonus = getEvacChanceBonus(player);
         const result = attemptEvacuation(player, zone, depth || 0, rng, bonus);
         if (result.success) {
@@ -890,7 +980,7 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
       if (input === 'Вернуться на станцию') {
         return { reply: { text: 'Ты не торопясь идёшь назад пешком — вылазка окончена, всё добытое уже в трюме.', buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
       }
-      return { reply: { text: 'Выбери действие кнопкой ниже.', buttons: ['Углубиться дальше', 'Вернуться на станцию', 'Эвакуироваться'] }, nextState: state };
+      return { reply: { text: 'Выбери действие кнопкой ниже.', buttons: journeyContinueButtons(zone, isBossContext) }, nextState: state };
     }
 
     case 'exploration_event_choice': {
@@ -920,6 +1010,22 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
       return safeReturnChoice(result.text || event.text, nextPlayer, zone, depth);
     }
 
+    case 'curator_quest': {
+      const found = renderCuratorStage(state.player, state.questId, state.stageId);
+      if (!found) {
+        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
+      }
+      const choice = (found.stage.choices || []).find((c) => c.label === input);
+      if (!choice) {
+        return { reply: { text: found.stage.text, buttons: found.stage.choices.map((c) => c.label) }, nextState: state };
+      }
+      const nextPlayer = { ...state.player };
+      if (choice.flags) {
+        nextPlayer.flags = { ...(nextPlayer.flags || {}), ...choice.flags };
+      }
+      return curatorQuestScreen(deps, nextPlayer, state.questId, choice.next);
+    }
+
     case 'anomaly_choice': {
       const player = { ...state.player };
       const zone = state.zone, depth = state.depth;
@@ -942,7 +1048,7 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
       const buttons = ['Обычная атака', ...skillButtons(state.player), 'Стим'];
       return {
         reply: { text: `${state.enemy.name}: ❤️ ${state.enemy.hp}/${state.enemy.hpMax}\n\nВыбери действие:`, buttons },
-        nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: false }
+        nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: false, curatorQuest: state.curatorQuest }
       };
     }
 
@@ -952,7 +1058,7 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
       if (input === 'Назад') {
         return {
           reply: { text: `${state.enemy.name}: ❤️ ${state.enemy.hp}/${state.enemy.hpMax}\n\nВыбери действие:`, buttons: backButtons },
-          nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight }
+          nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest }
         };
       }
       const stimId = stimIdByName(input);
@@ -971,7 +1077,7 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
         }
         return {
           reply: { text: 'Выбери стим:', buttons: [...stimButtons(), 'Назад'] },
-          nextState: { scene: 'combat_stim_select', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight }
+          nextState: { scene: 'combat_stim_select', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest }
         };
       }
       const skillId = input === 'Обычная атака' ? null : skillIdByName(input);
@@ -1150,6 +1256,9 @@ function resolveCombatTurn(deps, state, result, rng) {
           nextState: { scene: 'quest_report', player: { ...result.attacker, hp: result.attacker.hpMax } }
         };
       }
+      if (state.curatorQuest) {
+        return curatorQuestScreen(deps, { ...result.attacker, hp: result.attacker.hpMax }, state.curatorQuest.questId, state.curatorQuest.winNext);
+      }
       const zone = state.zone || 'blue';
       const depth = state.depth || 0;
       const loot = rollLoot(zone, rng);
@@ -1176,9 +1285,12 @@ function resolveCombatTurn(deps, state, result, rng) {
       if (leveledUp) victoryText += `\n🆙 Новый уровень: ${level}! (+2 очка, +20 HP, полное исцеление)`;
 
       return {
-        reply: { text: victoryText, buttons: ['Углубиться дальше', 'Вернуться на станцию', 'Эвакуироваться'] },
-        nextState: { scene: 'journey_continue', player, zone, depth }
+        reply: { text: victoryText, buttons: journeyContinueButtons(zone, !!state.fragmentId) },
+        nextState: { scene: 'journey_continue', player, zone, depth, isBossContext: !!state.fragmentId }
       };
+    }
+    if (state.curatorQuest) {
+      return curatorQuestScreen(deps, { ...result.attacker, hp: Math.round(result.attacker.hpMax * 0.5) }, state.curatorQuest.questId, state.curatorQuest.loseNext);
     }
     return {
       reply: { text: `💥 ${result.log.join(' ')}\n\n💀 Скафандр пробит. Аварийная капсула эвакуирует тебя на станцию.`, buttons: stationButtons(deps, state.player) },
@@ -1190,6 +1302,9 @@ function resolveCombatTurn(deps, state, result, rng) {
   const log = result.log.concat(enemyTurn.log).join(' ');
 
   if (enemyTurn.finished && enemyTurn.winner === 'attacker') {
+    if (state.curatorQuest) {
+      return curatorQuestScreen(deps, { ...enemyTurn.defender, hp: Math.round(enemyTurn.defender.hpMax * 0.5) }, state.curatorQuest.questId, state.curatorQuest.loseNext);
+    }
     return {
       reply: { text: `💥 ${log}\n\n💀 Скафандр пробит.`, buttons: stationButtons(deps, state.player) },
       nextState: { scene: 'station', player: { ...enemyTurn.defender, hp: Math.round(enemyTurn.defender.hpMax * 0.5) } }
@@ -1200,7 +1315,7 @@ function resolveCombatTurn(deps, state, result, rng) {
   if (!result.stimUsedThisFight) buttons.push('Стим');
   return {
     reply: { text: `💥 ${log}\n\n${state.enemy.name}: ❤️ ${enemyTurn.attacker.hp}/${enemyTurn.attacker.hpMax}`, buttons },
-    nextState: { scene: 'combat', player: enemyTurn.defender, enemy: enemyTurn.attacker, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: result.stimUsedThisFight }
+    nextState: { scene: 'combat', player: enemyTurn.defender, enemy: enemyTurn.attacker, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: result.stimUsedThisFight, curatorQuest: state.curatorQuest }
   };
 }
 
