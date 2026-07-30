@@ -16,7 +16,7 @@ const { pvpHub } = require('./pvp.js');
 const { housingHub } = require('./housing.js');
 const { cantinaBoard, contractsBoard } = require('./locations/cantina.js');
 const {
-  hubMessage, statusText, stationButtons, startJourney, districtGroupsFor, ZONE_BUTTONS,
+  hubMessage, statusText, stationButtons, startJourney, districtGroupsFor, ZONE_BUTTONS, stationArrivalCard,
 } = require('./common.js');
 const { SCENES } = require('./ids.js');
 
@@ -94,6 +94,20 @@ function resolveStationAction(input, state, deps, rng, playerId) {
   return null;
 }
 
+function stationDefaultView(deps, player, rng) {
+  const card = stationArrivalCard(player, rng);
+  let nextPlayer = player;
+  if (card.reward) {
+    nextPlayer = { ...player };
+    if (card.reward.credits) nextPlayer.credits = (nextPlayer.credits || 0) + card.reward.credits;
+    if (card.reward.reputation) nextPlayer.reputation = (nextPlayer.reputation || 0) + card.reward.reputation;
+  }
+  return {
+    reply: { text: card.text, buttons: stationButtons(deps, nextPlayer), imageKey: imageForLocation('station', nextPlayer.faction) },
+    nextState: { scene: 'station', player: nextPlayer }
+  };
+}
+
 function handleHub(state, input, rng, deps, playerId) {
   switch (state.scene) {
     case SCENES.STATION: {
@@ -116,12 +130,12 @@ function handleHub(state, input, rng, deps, playerId) {
           nextState: { scene: 'district_hub', player, groupLabel: group.label }
         };
       }
-      return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: state };
+      return stationDefaultView(deps, state.player, rng);
     }
 
     case SCENES.DISTRICT_HUB: {
       if (input === 'Назад') {
-        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
+        return stationDefaultView(deps, state.player, rng);
       }
       const direct = resolveStationAction(input, state, deps, rng, playerId);
       if (direct) return direct;
