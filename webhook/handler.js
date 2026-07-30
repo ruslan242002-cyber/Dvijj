@@ -1,69 +1,56 @@
-/**
- * Общая логика обработки запроса — не зависит от того, Vercel это,
- * Cloudflare Worker или локальный http-сервер. Один вход, один выход,
- * никакого состояния снаружи payload (SaleBot хранит state в переменных
- * клиента и присылает его в каждом запросе).
- *
- * Контракт (то, что нужно один раз прописать в блоке "Исходящий вебхук" в
- * SaleBot/BotHelp):
- *
- *   POST https://<ваш-домен>/api/turn
- *   body: {
- *     "action": "attack" | "skill",
- *     "skillId": "plasma_bolt",      // только если action == "skill"
- *     "stimId": "field_stim",        // необязательно, любое действие
- *     "state": { "player": {...}, "enemy": {...} }   // JSON-строка из переменной клиента
- *   }
- *
- *   ответ: { "log": "...", "state": {...}, "finished": bool, "winner": "attacker"|"defender"|null }
- *
- *   POST https://<ваш-домен>/api/explore
- *   body: { "zone": "blue" | "yellow" | "red" }
- *   ответ: { "type": "find"|"ambush"|"anomaly"|"distress"|"node", "text": "...", ... }
- *
- * В SaleBot после вызова вебхука результат приходит в переменные —
- * подставьте {webhook_result.log} прямо в текст сообщения блока.
- */
 'use strict';
 
-const { resolveTurn } = require('../engine/combat-engine.js');
-const { SKILLS, STIMS } = require('../engine/skills-data.js');
-const { rollEvent } = require('../engine/exploration-engine.js');
+const { step } = require('../game/router.js');
 
-function handleTurn(body) {
-  const { action, skillId, stimId, state } = body;
-  if (!state || !state.player || !state.enemy) {
-    return { error: 'Нужен state.player и state.enemy в запросе.' };
+async function handleVkEvent(body, deps) {
+  const { store, vk, rng = Math.random, confirmationCode, secret, getProfileLink, resolveEnemyImage, marketStore, pvpStore } = deps;
+
+  if (body.type === 'confirmation') {
+    return confirmationCode || '';
   }
 
-  const attacker = state.player;
-  const defender = state.enemy;
-  const skill = action === 'skill' ? SKILLS[skillId] : null;
-  if (action === 'skill' && !skill) return { error: `Неизвестный навык: ${skillId}` };
-  const stim = stimId ? STIMS[stimId] : null;
-  if (stimId && !stim) return { error: `Неизвестный стим: ${stimId}` };
+  if (secret && body.secret !== secret) {
+    return 'ok';
+  }
 
-  const result = resolveTurn({ attacker, defender, stim, skill });
+  if (body.type === 'message_new') {
+    const message = body.object?.message || body.object;
+    const peerId = message.peer_id ?? message.from_id;
+    const text = message.text || '';
 
-  return {
-    log: result.log.join(' '),
-    state: { player: result.attacker, enemy: result.defender },
-    finished: result.finished,
-    winner: result.winner
-  };
+    const prevState = await store.get(peerId);
+    const routerDeps = {
+      ...(getProfileLink ? { getProfileLink: () => getProfileLink(peerId) } : {}),
+      marketStore,
+      pvpStore,
+    };
+
+    let reply, nextState;
+    try {
+      ({ reply, nextState } = await step(prevState, text, rng, routerDeps, peerId));
+    } catch (err) {
+      console.error('vk webhook: step() упал, возвращаю игрока на станцию:', err);
+      const player = prevState?.player;
+      if (player) {
+        nextState = { scene: 'station', player };
+        reply = { text: '⚠️ Что-то пошло не так на этом экране. Возвращаю тебя на станцию — прогресс не потерян.', buttons: [] };
+      } else {
+        nextState = { scene: 'start' };
+        reply = { text: '⚠️ Что-то пошло не так. Начнём заново — напиши что угодно.', buttons: [] };
+      }
+    }
+
+    await store.set(peerId, nextState);
+
+    let attachment;
+    if (reply.imageKey && typeof resolveEnemyImage === 'function') {
+      attachment = await resolveEnemyImage(reply.imageKey).catch(() => null);
+    }
+    await vk.sendMessage(peerId, reply.text, reply.buttons, attachment);
+    return 'ok';
+  }
+
+  return 'ok';
 }
 
-function handleExplore(body) {
-  const zone = body.zone || 'blue';
-  const event = rollEvent(zone);
-  return event;
-}
-
-/** Универсальный обработчик: (path, body) => ответ (обычный JS-объект) */
-function route(path, body) {
-  if (path.endsWith('/turn')) return handleTurn(body || {});
-  if (path.endsWith('/explore')) return handleExplore(body || {});
-  return { error: `Неизвестный путь: ${path}. Используйте /api/turn или /api/explore.` };
-}
-
-module.exports = { handleTurn, handleExplore, route };
+module.exports = { handleVkEvent };
