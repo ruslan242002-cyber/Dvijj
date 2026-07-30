@@ -13,6 +13,7 @@ const { DISTRICTS } = require('../../../city/districts-data.js');
 const { discoverHypothesis } = require('../../../lore/trakt-mythos.js');
 const { grantXp } = require('../../../engine/leveling.js');
 const { imageForLocation } = require('../../location-images.js');
+const { imageForCurator } = require('../../curator-images.js');
 const { curatorQuestScreen } = require('../quests/curator.js');
 const { hubMessage, stationButtons, CURATORS } = require('../common.js');
 const { SCENES } = require('../ids.js');
@@ -47,7 +48,7 @@ function cantinaBoard(player) {
 
   if (quests.length === 0 && !arcQuest) {
     return {
-      reply: { text: `🍸 КАНТИНА\n\n${greeting ? `${greeting}\n\n` : ''}Куратору сейчас нечего тебе предложить.`, buttons: ['Назад'] },
+      reply: { text: `🍸 КАНТИНА\n\n${greeting ? `${greeting}\n\n` : ''}Куратору сейчас нечего тебе предложить.`, buttons: ['Назад'], imageKey: imageForCurator(player.faction) },
       nextState: { scene: 'loc_cantina', player }
     };
   }
@@ -55,7 +56,7 @@ function cantinaBoard(player) {
   if (arcQuest) lines.push(`✨ Куратор ${CURATORS[player.faction] || ''} хочет поговорить лично: «${arcQuest.name}»`);
   const buttons = [...quests.map((q) => q.title), ...(arcQuest ? [`Поговорить: ${arcQuest.name}`] : []), 'Назад'];
   return {
-    reply: { text: `🍸 КАНТИНА\n\n${greeting ? `${greeting}\n\n` : ''}Доступные задания куратора:\n${lines.join('\n')}`, buttons },
+    reply: { text: `🍸 КАНТИНА\n\n${greeting ? `${greeting}\n\n` : ''}Доступные задания куратора:\n${lines.join('\n')}`, buttons, imageKey: imageForCurator(player.faction) },
     nextState: { scene: 'loc_cantina', player }
   };
 }
