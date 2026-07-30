@@ -177,22 +177,11 @@ function sellInventory(player) {
 
 function stationButtons(deps, player) {
   const link = typeof deps.getProfileLink === 'function' ? deps.getProfileLink() : null;
-  // Если есть прямая ссылка на профиль, убираем текстовую кнопку "Профиль"
-  // из HUB_BUTTONS — иначе получаются две кнопки профиля одновременно:
-  // готовая ссылка и текстовая, которая при нажатии просто покажет ту же
-  // ссылку ещё раз.
-  const baseButtons = link ? HUB_BUTTONS.filter((b) => b !== 'Профиль') : HUB_BUTTONS;
-  let buttons = link ? [{ label: 'Открыть профиль', url: link }, ...baseButtons] : [...baseButtons];
-
-  const extras = [];
-  if (player?.faction === 'Вуаль') extras.push('Мастерская');
-  if (player?.faction === 'Терминус') extras.push('Архив теней');
-  if (extras.length) {
-    const idx = buttons.findIndex((b) => b === 'Исследовать');
-    const insertAt = idx === -1 ? buttons.length : idx + 1;
-    buttons = [...buttons.slice(0, insertAt), ...extras, ...buttons.slice(insertAt)];
-  }
-  return buttons;
+  const groups = (DISTRICT_GROUPS[player?.faction] || DISTRICT_GROUPS['Приют']).map((g) => g.label);
+  const flatTail = ['Сброс'];
+  return link
+    ? [{ label: 'Открыть профиль', url: link }, ...groups, ...flatTail]
+    : [...groups, 'Профиль', ...flatTail];
 }
 
 function hubMessage(player) {
@@ -666,6 +655,122 @@ function housingHub(deps, player) {
   };
 }
 
+/** Районы хаба станции — разные названия по станциям, взятые из
+ * настоящей атмосферы district-data.js (не выдуманы с нуля). */
+const DISTRICT_GROUPS = {
+  'Приют': [
+    { label: 'Кабинет куратора', buttons: ['Мостик', 'Статус'] },
+    { label: 'Медотсек', buttons: ['Отсек', 'Декон-камера'] },
+    { label: 'Жилые палубы', buttons: ['Кантина', 'Биржа', 'Жильё'] },
+    { label: 'Причал', buttons: ['Врата Тракта', 'Исследовать'] },
+    { label: 'Двор станции', buttons: ['Дуэль', 'Контракты'] },
+  ],
+  'Терминус': [
+    { label: 'Штаб гарнизона', buttons: ['Мостик', 'Статус'] },
+    { label: 'Ремонтный блок', buttons: ['Отсек', 'Декон-камера'] },
+    { label: 'Казармы', buttons: ['Кантина', 'Биржа', 'Жильё'] },
+    { label: 'Рубеж', buttons: ['Врата Тракта', 'Исследовать'] },
+    { label: 'Плац', buttons: ['Дуэль', 'Контракты', 'Архив теней'] },
+  ],
+  'Арсенал': [
+    { label: 'Командный пункт', buttons: ['Мостик', 'Статус'] },
+    { label: 'Мастерские', buttons: ['Отсек', 'Декон-камера'] },
+    { label: 'Склад деталей', buttons: ['Кантина', 'Биржа', 'Жильё'] },
+    { label: 'Стапели', buttons: ['Врата Тракта', 'Исследовать'] },
+    { label: 'Стрельбище', buttons: ['Дуэль', 'Контракты'] },
+  ],
+  'Вуаль': [
+    { label: 'Диспетчерская', buttons: ['Мостик', 'Статус'] },
+    { label: 'Сборочный цех', buttons: ['Отсек', 'Декон-камера', 'Мастерская'] },
+    { label: 'Жилой модуль', buttons: ['Кантина', 'Биржа', 'Жильё'] },
+    { label: 'Причал верфи', buttons: ['Врата Тракта', 'Исследовать'] },
+    { label: 'Испытательный полигон', buttons: ['Дуэль', 'Контракты'] },
+  ],
+};
+
+function districtGroupsFor(player) {
+  return DISTRICT_GROUPS[player?.faction] || DISTRICT_GROUPS['Приют'];
+}
+
+/** Общая логика конкретной кнопки станции (Мостик/Отсек/Кантина/...) —
+ * используется и из 'station' (обратная совместимость на случай прямого
+ * ввода без районов), и из 'district_hub'. Возвращает null, если input
+ * не распознан этой функцией — тогда вызывающая сторона решает, что
+ * показать дальше (либо район, либо переспросить). */
+function resolveStationAction(input, state, deps, rng, playerId) {
+  if (input === 'Статус') {
+    return { reply: { text: statusText(state.player), buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
+  }
+  if (input === 'Профиль') {
+    const link = typeof deps.getProfileLink === 'function' ? deps.getProfileLink() : null;
+    if (!link) return { reply: { text: 'Терминал профиля сейчас недоступен, попробуйте позже.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
+    return { reply: { text: 'Личный терминал профиля готов:', buttons: [{ label: 'Открыть профиль', url: link }, 'Исследовать', 'Статус', 'Сброс'] }, nextState: { scene: 'station', player: state.player } };
+  }
+  if (input === 'Мостик') {
+    return { reply: { text: '🎛️ МОСТИК\n\nЗдесь решают судьбу станции. Смена позывного и станции приписки — скоро.', buttons: ['Мифология Тракта', 'Назад'], imageKey: imageForLocation('bridge', state.player.faction) }, nextState: { scene: 'loc_bridge', player: state.player } };
+  }
+  if (input === 'Отсек') {
+    const p = state.player;
+    const items = (p.inventory || []).map((i) => `${i.resource} T${i.tier} ×${i.qty}`).join(', ');
+    return {
+      reply: { text: `🔧 РЕМОНТНЫЙ ОТСЕК\n\n${items ? `В трюме: ${items}` : 'Трюм пуст.'}`, buttons: items ? ['Продать всё', 'Назад'] : ['Назад'], imageKey: imageForLocation('repair', p.faction) },
+      nextState: { scene: 'loc_repair', player: state.player }
+    };
+  }
+  if (input === 'Декон-камера') {
+    const p = state.player;
+    const isFree = p.faction === 'Вуаль';
+    const feeLabel = isFree ? 'Снять облучение (бесплатно)' : 'Снять облучение (💳300)';
+    return {
+      reply: { text: `☢️ ДЕКОН-КАМЕРА\n\nТекущее облучение: ${p.radiation || 0}%${p.radiation ? `\nСтоимость очистки: ${isFree ? 'бесплатно' : '💳300'}` : ''}`, buttons: p.radiation ? [feeLabel, 'Назад'] : ['Назад'], imageKey: imageForLocation('decon', p.faction) },
+      nextState: { scene: 'loc_decon', player: state.player }
+    };
+  }
+  if (input === 'Кантина') {
+    const board = cantinaBoard(state.player);
+    board.reply.imageKey = imageForLocation('cantina', state.player.faction);
+    return board;
+  }
+  if (input === 'Контракты') {
+    return contractsBoard({ ...state.player });
+  }
+  if (input === 'Биржа') {
+    return marketHub(deps, state.player, playerId);
+  }
+  if (input === 'Дуэль') {
+    return pvpHub(deps, state.player, playerId);
+  }
+  if (input === 'Жильё') {
+    return housingHub(deps, state.player);
+  }
+  if (input === 'Мастерская') {
+    if (state.player.faction !== 'Вуаль') {
+      return { reply: { text: 'Мастерская есть только у Вуали — здесь пока не доступна.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
+    }
+    const lines = RECIPES.map((r, i) => `${i + 1}. ${describeRecipe(r)}${hasResourcesFor(state.player, r) ? ' ✅' : ''}`);
+    return {
+      reply: { text: `🔧 МАСТЕРСКАЯ\n\nВуаль первой из станций открыла настоящую мастерскую — превращай находки в постоянные модули.\n\n${lines.join('\n')}`, buttons: [...RECIPES.map((r) => r.name), 'Назад'] },
+      nextState: { scene: 'workshop', player: state.player }
+    };
+  }
+  if (input === 'Архив теней') {
+    if (state.player.faction !== 'Терминус') {
+      return { reply: { text: 'Архив теней есть только у Терминуса — здесь пока не доступен.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
+    }
+    return {
+      reply: { text: '🕶️ АРХИВ ТЕНЕЙ\n\nСкрытная вылазка — шанс нарваться на засаду заметно ниже обычного, но и находки скромнее: аккуратность стоит времени.', buttons: ['Уйти в тень', 'Назад'] },
+      nextState: { scene: 'stealth_explore', player: state.player }
+    };
+  }
+  if (input === 'Врата Тракта') {
+    return { reply: { text: '🌀 ВРАТА ТРАКТА\n\nВыбери, куда прыгнуть:', buttons: ZONE_BUTTONS, imageKey: imageForLocation('gates', state.player.faction) }, nextState: { scene: 'loc_gates', player: state.player } };
+  }
+  if (input === 'Исследовать') {
+    return startJourney(state.player, 'explore', { zone: state.player.zone || 'blue', depth: 0 }, rng);
+  }
+  return null;
+}
+
 async function step(state, text, rng = Math.random, deps = {}, playerId = null) {
   const input = (text || '').trim();
 
@@ -752,76 +857,41 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
       };
     }
 
+
+
     case 'station': {
-      if (input === 'Статус') {
-        return { reply: { text: statusText(state.player), buttons: stationButtons(deps, state.player) }, nextState: state };
-      }
-      if (input === 'Профиль') {
-        const link = typeof deps.getProfileLink === 'function' ? deps.getProfileLink() : null;
-        if (!link) return { reply: { text: 'Терминал профиля сейчас недоступен, попробуйте позже.', buttons: HUB_BUTTONS }, nextState: state };
-        return { reply: { text: 'Личный терминал профиля готов:', buttons: [{ label: 'Открыть профиль', url: link }, 'Исследовать', 'Статус', 'Сброс'] }, nextState: state };
-      }
-      if (input === 'Мостик') {
-        return { reply: { text: '🎛️ МОСТИК\n\nЗдесь решают судьбу станции. Смена позывного и станции приписки — скоро.', buttons: ['Мифология Тракта', 'Назад'], imageKey: imageForLocation('bridge', state.player.faction) }, nextState: { scene: 'loc_bridge', player: state.player } };
-      }
-      if (input === 'Отсек') {
-        const p = state.player;
-        const items = (p.inventory || []).map((i) => `${i.resource} T${i.tier} ×${i.qty}`).join(', ');
-        return {
-          reply: { text: `🔧 РЕМОНТНЫЙ ОТСЕК\n\n${items ? `В трюме: ${items}` : 'Трюм пуст.'}`, buttons: items ? ['Продать всё', 'Назад'] : ['Назад'], imageKey: imageForLocation('repair', p.faction) },
-          nextState: { scene: 'loc_repair', player: state.player }
-        };
-      }
-      if (input === 'Декон-камера') {
-        const p = state.player;
-        return {
-          reply: { text: `☢️ ДЕКОН-КАМЕРА\n\nТекущее облучение: ${p.radiation || 0}%`, buttons: p.radiation ? ['Снять облучение', 'Назад'] : ['Назад'], imageKey: imageForLocation('decon', p.faction) },
-          nextState: { scene: 'loc_decon', player: state.player }
-        };
-      }
-      if (input === 'Кантина') {
-        const board = cantinaBoard(state.player);
-        board.reply.imageKey = imageForLocation('cantina', state.player.faction);
-        return board;
-      }
-      if (input === 'Контракты') {
-        return contractsBoard({ ...state.player });
-      }
-      if (input === 'Биржа') {
-        return marketHub(deps, state.player, playerId);
-      }
-      if (input === 'Дуэль') {
-        return pvpHub(deps, state.player, playerId);
-      }
-      if (input === 'Жильё') {
-        return housingHub(deps, state.player);
-      }
-      if (input === 'Мастерская') {
-        if (state.player.faction !== 'Вуаль') {
-          return { reply: { text: 'Мастерская есть только у Вуали — здесь пока не доступна.', buttons: stationButtons(deps, state.player) }, nextState: state };
-        }
-        const lines = RECIPES.map((r, i) => `${i + 1}. ${describeRecipe(r)}${hasResourcesFor(state.player, r) ? ' ✅' : ''}`);
-        return {
-          reply: { text: `🔧 МАСТЕРСКАЯ\n\nВуаль первой из станций открыла настоящую мастерскую — превращай находки в постоянные модули.\n\n${lines.join('\n')}`, buttons: [...RECIPES.map((r) => r.name), 'Назад'] },
-          nextState: { scene: 'workshop', player: state.player }
-        };
-      }
-      if (input === 'Архив теней') {
-        if (state.player.faction !== 'Терминус') {
-          return { reply: { text: 'Архив теней есть только у Терминуса — здесь пока не доступен.', buttons: stationButtons(deps, state.player) }, nextState: state };
+      const direct = resolveStationAction(input, state, deps, rng, playerId);
+      if (direct) return direct;
+
+      const groups = districtGroupsFor(state.player);
+      const group = groups.find((g) => g.label === input);
+      if (group) {
+        const stationEvent = rollStationEvent((DISTRICTS[state.player.faction] || {}).events, rng);
+        const prefix = stationEvent ? `${stationEvent.text}\n\n` : '';
+        let player = state.player;
+        if (stationEvent?.reward) {
+          player = { ...player };
+          if (stationEvent.reward.credits) player.credits = (player.credits || 0) + stationEvent.reward.credits;
+          if (stationEvent.reward.reputation) player.reputation = (player.reputation || 0) + stationEvent.reward.reputation;
         }
         return {
-          reply: { text: '🕶️ АРХИВ ТЕНЕЙ\n\nСкрытная вылазка — шанс нарваться на засаду заметно ниже обычного, но и находки скромнее: аккуратность стоит времени.', buttons: ['Уйти в тень', 'Назад'] },
-          nextState: { scene: 'stealth_explore', player: state.player }
+          reply: { text: `${prefix}📍 ${group.label}`, buttons: [...group.buttons, 'Назад'] },
+          nextState: { scene: 'district_hub', player, groupLabel: group.label }
         };
-      }
-      if (input === 'Врата Тракта') {
-        return { reply: { text: '🌀 ВРАТА ТРАКТА\n\nВыбери, куда прыгнуть:', buttons: ZONE_BUTTONS, imageKey: imageForLocation('gates', state.player.faction) }, nextState: { scene: 'loc_gates', player: state.player } };
-      }
-      if (input === 'Исследовать') {
-        return startJourney(state.player, 'explore', { zone: state.player.zone || 'blue', depth: 0 }, rng);
       }
       return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: state };
+    }
+
+    case 'district_hub': {
+      if (input === 'Назад') {
+        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
+      }
+      const direct = resolveStationAction(input, state, deps, rng, playerId);
+      if (direct) return direct;
+
+      const groups = districtGroupsFor(state.player);
+      const group = groups.find((g) => g.label === state.groupLabel) || groups[0];
+      return { reply: { text: `📍 ${state.groupLabel}`, buttons: [...group.buttons, 'Назад'] }, nextState: state };
     }
 
     case 'loc_bridge': {
