@@ -17,13 +17,15 @@ const { xpForTier, grantXp } = require('../../engine/leveling.js');
 const { collectFragment } = require('../../lore/trakt-mythos.js');
 const { checkContractProgress } = require('../../contracts/contracts-engine.js');
 const { recordKill } = require('../../lib/trophies.js');
+const { combatFullCard } = require('../../lib/combat-card.js');
+const { imageForEnemy } = require('../enemy-images.js');
 const { curatorQuestScreen } = require('./quests/curator.js');
 const {
   stationButtons, skillButtons, skillIdByName, addToInventory, journeyContinueButtons,
 } = require('./common.js');
 const { SCENES } = require('./ids.js');
 
-function resolveCombatTurn(deps, state, result, rng) {
+function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prevEnemyHp = null } = {}) {
   // Контракт "применить стим 2 раза" — засчитываем именно в момент, когда
   // стим реально применился в этот ход (false -> true), а не при каждом
   // ходе после этого.
@@ -107,8 +109,9 @@ function resolveCombatTurn(deps, state, result, rng) {
 
   const buttons = ['Обычная атака', ...skillButtons(enemyTurn.defender)];
   if (!result.stimUsedThisFight) buttons.push('Стим');
+  const card = combatFullCard(enemyTurn.defender, enemyTurn.attacker, { prevPlayerHp, prevEnemyHp });
   return {
-    reply: { text: `💥 ${log}\n\n${state.enemy.name}: ❤️ ${enemyTurn.attacker.hp}/${enemyTurn.attacker.hpMax}`, buttons },
+    reply: { text: `💥 ${log}\n\n${card}`, buttons, imageKey: imageForEnemy(enemyTurn.attacker.name) },
     nextState: { scene: 'combat', player: enemyTurn.defender, enemy: enemyTurn.attacker, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: result.stimUsedThisFight, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident }
   };
 }
@@ -121,7 +124,7 @@ function handleCombat(state, input, rng, deps) {
       }
       const buttons = ['Обычная атака', ...skillButtons(state.player), 'Стим'];
       return {
-        reply: { text: `${state.enemy.name}: ❤️ ${state.enemy.hp}/${state.enemy.hpMax}\n\nВыбери действие:`, buttons },
+        reply: { text: `${combatFullCard(state.player, state.enemy)}\n\nВыбери действие:`, buttons, imageKey: imageForEnemy(state.enemy.name) },
         nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: false, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident }
       };
     }
@@ -130,16 +133,18 @@ function handleCombat(state, input, rng, deps) {
       if (!state.stimUsedThisFight) backButtons.push('Стим');
       if (input === 'Назад') {
         return {
-          reply: { text: `${state.enemy.name}: ❤️ ${state.enemy.hp}/${state.enemy.hpMax}\n\nВыбери действие:`, buttons: backButtons },
+          reply: { text: `${combatFullCard(state.player, state.enemy)}\n\nВыбери действие:`, buttons: backButtons, imageKey: imageForEnemy(state.enemy.name) },
           nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident }
         };
       }
+      const prevPlayerHp = state.player.hp;
+      const prevEnemyHp = state.enemy.hp;
       const stimId = stimIdByName(input);
       if (!stimId) {
         return { reply: { text: 'Выбери стим кнопкой ниже.', buttons: [...stimButtons(), 'Назад'] }, nextState: state };
       }
       const result = resolvePlayerTurn({ player: state.player, enemy: state.enemy, skill: null, stimId, stimUsedThisFight: state.stimUsedThisFight, rng });
-      return resolveCombatTurn(deps, state, result, rng);
+      return resolveCombatTurn(deps, state, result, rng, { prevPlayerHp, prevEnemyHp });
     }
     case SCENES.COMBAT: {
       if (input === 'Стим') {
@@ -160,8 +165,10 @@ function handleCombat(state, input, rng, deps) {
         return { reply: { text: 'Выбери действие кнопкой ниже.', buttons }, nextState: state };
       }
 
+      const prevPlayerHp = state.player.hp;
+      const prevEnemyHp = state.enemy.hp;
       const result = resolvePlayerTurn({ player: state.player, enemy: state.enemy, skill, stimId: null, stimUsedThisFight: state.stimUsedThisFight, rng });
-      return resolveCombatTurn(deps, state, result, rng);
+      return resolveCombatTurn(deps, state, result, rng, { prevPlayerHp, prevEnemyHp });
     }
     default:
       return null;
