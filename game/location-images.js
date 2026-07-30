@@ -6,7 +6,8 @@
  * ВАЖНО: router.js сейчас вызывает imageForLocation('bridge') без станции —
  * чтобы эта структура заработала, вызовы нужно поменять на
  * imageForLocation('bridge', player.faction). Держу эту правку в памяти,
- * скажите, когда прислать router.js.
+ * скажите, когда прислать router.js. Заодно там же нужно добавить
+ * imageForLocation('market', player.faction) в сцену биржи — тоже в памяти.
  *
  * Как добавить картинку:
  *   1. Положите файл (jpg/png, до ~5 МБ) в public/locations/имя-файла.jpg
@@ -17,36 +18,40 @@
 
 const LOCATION_IMAGES = {
   'Приют': {
-    bridge: 'priyut-shtab.jpg',   // Мостик — «Штаб города Приют» (тронный зал с голотаблицей)
-    repair: null,                  // Ремонтный отсек — не прислано
-    decon: null,                   // Декон-камера — не прислано
-    cantina: 'priyut-bar.jpg',     // Кантина — «Последний Глоток»
-    gates: 'priyut-gates.jpg',     // Врата Тракта — синий портал
-    station: 'priyut-overview.jpg',// Общий хаб — «Добро пожаловать в Приют»
+    bridge: 'priyut-shtab.jpg',    // Мостик — «Штаб города Приют»
+    repair: null,                   // Ремонтный отсек — не прислано
+    decon: 'decon-generic.jpg',     // Декон-камера — общая для всех станций
+    cantina: 'priyut-bar.jpg',      // Кантина — «Последний Глоток»
+    gates: 'priyut-gates.jpg',      // Врата Тракта — синий портал
+    station: 'priyut-overview.jpg', // Общий хаб — «Добро пожаловать в Приют»
+    market: 'priyut-market.jpg',    // Биржа — «Главный аукционный рынок Приют»
   },
   'Терминус': {
-    bridge: 'terminus-most.jpg',   // Мостик — командный зал, фиолетовый
+    bridge: 'terminus-most.jpg',
     repair: null,
-    decon: null,
-    cantina: null,                 // Кантина — не прислано
-    gates: 'terminus-gates.jpg',   // Врата Тракта — фиолетовые
-    station: 'terminus-hub.jpg',   // Общий хаб — вид города
+    decon: 'decon-generic.jpg',
+    cantina: null,
+    gates: 'terminus-gates.jpg',
+    station: 'terminus-hub.jpg',
+    market: null,
   },
   'Арсенал': {
-    bridge: 'arsenal-shtab.jpg',   // Мостик — «Штаб Арсенала», красный
-    repair: 'arsenal-repair.jpg',  // Ремонтный отсек — проверьте, подходит ли (образ с «МАГАЗИН»)
-    decon: null,
-    cantina: 'arsenal-bar.jpg',    // Кантина — «Бар города Арсенал»
-    gates: 'arsenal-gates.jpg',    // Врата Тракта Арсенала, красные
-    station: 'arsenal-hub.jpg',    // Общий хаб — «Главный вход в город Арсенал»
+    bridge: 'arsenal-shtab.jpg',
+    repair: 'arsenal-repair.jpg',
+    decon: 'decon-generic.jpg',
+    cantina: 'arsenal-bar.jpg',
+    gates: 'arsenal-gates.jpg',
+    station: 'arsenal-hub.jpg',
+    market: null,
   },
   'Вуаль': {
-    bridge: 'vual-shtab.jpg',      // Мостик — «Вуаль / Штаб города» (новое)
-    repair: 'vual-repair.jpg',     // Ремонтный отсек — «Ремонтный цех Вуали»
-    decon: null,
-    cantina: null,                 // Кантина — не прислано
-    gates: 'vual-gates.jpg',       // Врата Тракта — «Вуаль в цифрах» внизу (новое)
-    station: 'vual-hub.jpg',       // Общий хаб — «Жилой сектор города Вуаль»
+    bridge: 'vual-shtab.jpg',
+    repair: 'vual-scavenger.jpg',   // Отсек барахольщиков — продажа вещей за кредиты
+    decon: 'decon-generic.jpg',
+    cantina: null,
+    gates: 'vual-gates.jpg',
+    station: 'vual-hub.jpg',
+    market: null,
   },
 };
 
