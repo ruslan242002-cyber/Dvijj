@@ -50,9 +50,7 @@ function resolveStationAction(input, state, deps, rng, playerId) {
     };
   }
   if (input === 'Кантина') {
-    const board = cantinaBoard(state.player);
-    board.reply.imageKey = imageForLocation('cantina', state.player.faction);
-    return board;
+    return cantinaBoard(state.player);
   }
   if (input === 'Контракты') {
     return contractsBoard({ ...state.player });
