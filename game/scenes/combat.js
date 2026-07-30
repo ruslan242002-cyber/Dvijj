@@ -18,6 +18,7 @@ const { collectFragment } = require('../../lore/trakt-mythos.js');
 const { checkContractProgress } = require('../../contracts/contracts-engine.js');
 const { recordKill } = require('../../lib/trophies.js');
 const { combatFullCard } = require('../../lib/combat-card.js');
+const { explorationStatusCard } = require('../../lib/status-card.js');
 const { imageForEnemy } = require('../enemy-images.js');
 const { curatorQuestScreen } = require('./quests/curator.js');
 const {
@@ -81,7 +82,7 @@ function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prev
       if (leveledUp) victoryText += `\n🆙 Новый уровень: ${level}! (+2 очка, +20 HP, полное исцеление)`;
 
       return {
-        reply: { text: victoryText, buttons: journeyContinueButtons(zone, !!state.fragmentId) },
+        reply: { text: `${victoryText}\n\n${explorationStatusCard(player)}`, buttons: journeyContinueButtons(zone, !!state.fragmentId) },
         nextState: { scene: 'journey_continue', player, zone, depth, isBossContext: !!state.fragmentId }
       };
     }
