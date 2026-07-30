@@ -1,215 +1,227 @@
-/**
- * ПЕРИФЕРИЯ — бестиарий именных существ: у части врагов из уже
- * существующего ростера (engine/exploration-engine.js) есть отдельная,
- * фиксированная вручную (не от tier) таблица редкой добычи поверх
- * обычного rollLoot().
- *
- * Что поменял при переносе из присланного архива:
- *
- *  1. Присланный вариант предполагал, что генератор врага заранее кладёт
- *     enemy.bestiaryId = 'graviarch' и т.п. — но exploration-engine.js
- *     сейчас ничего такого не делает, и без этого поля вся система была
- *     бы мертва. Вместо правки generateEnemy() (рискованно трогать
- *     хорошо протестированный код без необходимости) добавил обратный
- *     поиск getBestiaryIdByName(enemy.name) — раз имена монстров и так
- *     совпадают 1-в-1 с ENEMY_NAMES, привязка по имени работает
- *     надёжно и не требует ни одной правки в exploration-engine.js.
- *
- *  2. Из 9 монстров присланного архива для 9 нашёлся прямой аналог по
- *     имени в уже существующем ростере (Гравиарх, Игольник, Разломник,
- *     Пылевой Падальщик, Нулевой жнец, Скиталец-щелкун, Пульсарид,
- *     Пустотный пожиратель, Пожиратель сигналов) — они просто получили
- *     таблицу добычи. Хроножнец в ростере отсутствовал — добавил его
- *     (и все 10 монстров из второго сообщения) в
- *     engine/exploration-engine.js, иначе их таблицы добычи никогда
- *     не имели бы шанса сработать — мёртвый контент, как и в прошлые разы.
- */
 'use strict';
 
+const DANGER_TIER = { E: 1, D: 2, C: 3, B: 5, A: 6, S: 7 };
+
+function statsForTier(tier, mult = {}) {
+  const base = 12 + tier * 4;
+  return {
+    power: Math.round(base * (mult.power ?? 1)),
+    mind: Math.round(base * (mult.mind ?? 1)),
+    reaction: Math.round(base * (mult.reaction ?? 1)),
+    endurance: Math.round(base * (mult.endurance ?? 1)),
+    firepower: Math.round(base * (mult.firepower ?? 1.1)),
+    shielding: Math.min(70, Math.round(base * (mult.shielding ?? 0.6))),
+  };
+}
+
+function hpForTier(tier, mult = 1) {
+  return Math.round((90 + tier * 22) * mult);
+}
+
 const BESTIARY = {
-  graviarch: {
-    name: 'Гравиарх', threatLevel: 'B',
+  scrap_zhuk: {
+    id: 'scrap_zhuk', name: 'Скрап-жук', danger: 'E', zones: ['blue'],
+    lore: 'Мелкий бронированный падальщик, кормится обшивкой брошенных капсул. Безопасен поодиночке, но станции жалуются на рои в трюмах.',
+    tier: DANGER_TIER.E,
+    stats: statsForTier(DANGER_TIER.E, { shielding: 0.9 }),
     loot: [
-      { id: 'gravi_crystal', name: 'Грави-кристалл', chance: 8 },
-      { id: 'gravi_gland_fragment', name: 'Фрагмент грави-железы', chance: 6 },
-      { id: 'exoarmor_plates', name: 'Пластины экзопанциря', chance: 5 },
-      { id: 'gravi_venom', name: 'Гравитационный яд', chance: 3 },
-      { id: 'graviarch_meat', name: 'Мясо гравиарха', chance: 1 }
-    ]
+      { id: 'obl_splava', name: 'Обломки сплава', chance: 0.10 },
+      { id: 'org_kley', name: 'Органический клей', chance: 0.08 },
+      { id: 'sensor_glaz', name: 'Сенсорный глаз', chance: 0.03 },
+    ],
   },
-  needler: {
-    name: 'Игольник', threatLevel: 'C',
+  pylevoy_padalschik: {
+    id: 'pylevoy_padalschik', name: 'Пылевой Падальщик', danger: 'E', zones: ['blue'],
+    lore: 'Небольшое насекомоподобное существо, санитар мёртвых миров — очищает территории от останков, не давая распространяться инфекции.',
+    tier: DANGER_TIER.E,
+    stats: statsForTier(DANGER_TIER.E, { reaction: 1.2 }),
     loot: [
-      { id: 'crystal_needle', name: 'Кристаллическая игла', chance: 9 },
-      { id: 'toxic_sac', name: 'Токсичный мешочек', chance: 7 },
-      { id: 'neurotoxin', name: 'Нейротоксин', chance: 4 },
-      { id: 'chitin_fragment', name: 'Фрагмент хитинового покрова', chance: 6 }
-    ]
+      { id: 'hitin_plastiny', name: 'Хитиновые пластины', chance: 0.12 },
+      { id: 'biomusor', name: 'Биомусор', chance: 0.15 },
+      { id: 'tehnolom', name: 'Технолом', chance: 0.08 },
+    ],
   },
-  riftbreaker: {
-    name: 'Разломник', threatLevel: 'D',
+  skitalets_schelkun: {
+    id: 'skitalets_schelkun', name: 'Скиталец-щелкун', danger: 'C', zones: ['blue', 'yellow'],
+    lore: 'Разведчик падальщиков — мелкое шестилапое существо с развитым слуховым аппаратом. Не нападает первым, но защищается роем.',
+    tier: DANGER_TIER.C,
+    stats: statsForTier(DANGER_TIER.C, { reaction: 1.15 }),
     loot: [
-      { id: 'rift_fang', name: 'Разломный клык', chance: 10 },
-      { id: 'stable_fragment', name: 'Стабильный фрагмент', chance: 6 },
-      { id: 'riftbreaker_flesh', name: 'Плоть разломника', chance: 5 },
-      { id: 'adaptive_module', name: 'Адаптивный нейромодуль', chance: 2 }
-    ]
+      { id: 'biomassa', name: 'Биомасса', chance: 0.12 },
+      { id: 'hitin', name: 'Хитин', chance: 0.10 },
+      { id: 'zhelezy_schelkuna', name: 'Железы щелкуна', chance: 0.04 },
+    ],
   },
-  dust_scavenger: {
-    name: 'Пылевой Падальщик', threatLevel: 'E',
+  igolnik: {
+    id: 'igolnik', name: 'Игольник', danger: 'C', zones: ['yellow'],
+    lore: 'Дальний ассасин аномальных зон — стреляет полыми кристаллическими иглами с нейротоксином, избегает прямого контакта.',
+    tier: DANGER_TIER.C,
+    stats: statsForTier(DANGER_TIER.C, { reaction: 1.3, power: 0.9 }),
     loot: [
-      { id: 'chitin_plates', name: 'Хитиновые пластины', chance: 10 },
-      { id: 'bio_waste', name: 'Биомусор', chance: 10 },
-      { id: 'techscrap', name: 'Технолом', chance: 8 }
-    ]
+      { id: 'kristal_igla', name: 'Кристаллическая игла', chance: 0.10 },
+      { id: 'toksich_meshochek', name: 'Токсичный мешочек', chance: 0.08 },
+      { id: 'neyrotoksin', name: 'Нейротоксин', chance: 0.05 },
+      { id: 'fragment_hitina', name: 'Фрагмент хитинового покрова', chance: 0.06 },
+    ],
   },
-  chronoreaper: {
-    name: 'Хроножнец', threatLevel: 'D',
+  hitin_tkach: {
+    id: 'hitin_tkach', name: 'Хитин-ткач', danger: 'C', zones: ['yellow'],
+    lore: 'Строительный рой — плетёт хитиновые баррикады в спорных секторах, иногда перекрывая проходы между станциями.',
+    tier: DANGER_TIER.C,
+    stats: statsForTier(DANGER_TIER.C, { shielding: 1.1, endurance: 1.1 }),
     loot: [
-      { id: 'chrono_core', name: 'Хроноядро', chance: 3 },
-      { id: 'reality_fragment', name: 'Фрагменты реальности', chance: 5 },
-      { id: 'quantum_resonator', name: 'Квантовый резонатор', chance: 1 }
-    ]
+      { id: 'hitinovaya_nit', name: 'Хитиновая нить', chance: 0.10 },
+      { id: 'stroit_smola', name: 'Строительная смола', chance: 0.07 },
+      { id: 'pleteniy_pancir', name: 'Плетёный панцирь', chance: 0.04 },
+    ],
   },
-  zero_reaper: {
-    name: 'Нулевой жнец', threatLevel: 'S',
+  signalniy_kleshch: {
+    id: 'signalniy_kleshch', name: 'Сигнальный клещ', danger: 'D', zones: ['yellow'],
+    lore: 'Паразит-ретранслятор, присасывается к дронам-разведчикам. Куратор Вуали подозревает, что через клещей сливают координаты патрулей.',
+    tier: DANGER_TIER.D,
+    stats: statsForTier(DANGER_TIER.D, { reaction: 1.3 }),
     loot: [
-      { id: 'energy_core', name: 'Энергоядро', chance: 2 },
-      { id: 'nichron_alloy', name: 'Сплав «Нихрон»', chance: 1 }
-    ]
+      { id: 'retranslyator_kleshnya', name: 'Ретранслятор-клешня', chance: 0.07 },
+      { id: 'zaryazh_pancir', name: 'Заряженный панцирь', chance: 0.05 },
+      { id: 'ukraden_log_chip', name: 'Украденный лог-чип', chance: 0.02 },
+    ],
   },
-  wanderer_clicker: {
-    name: 'Скиталец-щелкун', threatLevel: 'C',
+  trakt_plakalschitsa: {
+    id: 'trakt_plakalschitsa', name: 'Тракт-плакальщица', danger: 'D', zones: ['yellow'],
+    lore: 'Хищный мимик — издаёт звук, неотличимый от крика о помощи, эксплуатируя distress-сигналы, чтобы заманить пилотов в засаду.',
+    tier: DANGER_TIER.D,
+    stats: statsForTier(DANGER_TIER.D, { reaction: 1.2 }),
     loot: [
-      { id: 'biomass', name: 'Биомасса', chance: 10 },
-      { id: 'chitin', name: 'Хитин', chance: 9 },
-      { id: 'clicker_glands', name: 'Железы щелкуна', chance: 5 }
-    ]
+      { id: 'golosovaya_membrana', name: 'Голосовая мембрана', chance: 0.09 },
+      { id: 'falshiviy_mayak', name: 'Фальшивый маяк', chance: 0.06 },
+      { id: 'rezonans_zheleza', name: 'Резонансная железа', chance: 0.03 },
+    ],
+  },
+  razlomnik: {
+    id: 'razlomnik', name: 'Разломник', danger: 'D', zones: ['yellow', 'red'],
+    lore: 'Хищник пространственных трещин — тело частично фазировано, позволяет проскальзывать сквозь трещины реальности. Охотится стаей.',
+    tier: DANGER_TIER.D + 1,
+    stats: statsForTier(DANGER_TIER.D + 1, { reaction: 1.4, shielding: 0.6 }),
+    loot: [
+      { id: 'razlomniy_klyk', name: 'Разломный клык', chance: 0.08 },
+      { id: 'stabilniy_fragment', name: 'Стабильный фрагмент', chance: 0.05 },
+      { id: 'plot_razlomnika', name: 'Плоть разломника', chance: 0.06 },
+      { id: 'adaptiv_neyromodul', name: 'Адаптивный нейромодуль', chance: 0.02 },
+    ],
+  },
+  hronozhnets: {
+    id: 'hronozhnets', name: 'Хроножнец', danger: 'D', zones: ['red'],
+    lore: 'Повелитель искажённого времени — питается временной энергией, искажая причинно-следственные связи. Рекомендуется избегать любой ценой.',
+    tier: DANGER_TIER.D + 2,
+    stats: statsForTier(DANGER_TIER.D + 2, { mind: 1.3, reaction: 0.7 }),
+    loot: [
+      { id: 'hronoyadro', name: 'Хроноядро', chance: 0.06 },
+      { id: 'fragmenty_realnosti', name: 'Фрагменты реальности', chance: 0.04 },
+      { id: 'kvant_rezonator', name: 'Квантовый резонатор', chance: 0.02 },
+    ],
+  },
+  graviarh: {
+    id: 'graviarh', name: 'Гравиарх', danger: 'B', zones: ['yellow', 'red'],
+    lore: 'Гравитационный хищник — искажает локальное поле тяжести, притягивает добычу и сдавливает её под огромным давлением. Медлителен, но неотвратим.',
+    tier: DANGER_TIER.B,
+    stats: statsForTier(DANGER_TIER.B, { endurance: 1.3, reaction: 0.6 }),
+    loot: [
+      { id: 'gravi_kristall', name: 'Грави-кристалл', chance: 0.10 },
+      { id: 'fragment_gravizhelezy', name: 'Фрагмент грави-железы', chance: 0.07 },
+      { id: 'plastiny_ekzopancirya', name: 'Пластины экзопанциря', chance: 0.05 },
+      { id: 'gravitac_yad', name: 'Гравитационный яд', chance: 0.04 },
+      { id: 'myaso_graviarha', name: 'Мясо гравиарха', chance: 0.01 },
+    ],
   },
   pulsarid: {
-    name: 'Пульсарид', threatLevel: 'B',
+    id: 'pulsarid', name: 'Пульсарид', danger: 'B', zones: ['yellow', 'red'],
+    lore: 'Скаут роя улья — лёгкий разведчик, созданный для поиска жертв и передачи координат улью. Атакует стаями, избегая прямого боя.',
+    tier: DANGER_TIER.B,
+    stats: statsForTier(DANGER_TIER.B, { reaction: 1.3 }),
     loot: [
-      { id: 'chitin', name: 'Хитин', chance: 8 },
-      { id: 'pulsarid_glands', name: 'Железы пульсарида', chance: 5 },
-      { id: 'neural_node', name: 'Нейронный узел', chance: 3 }
-    ]
+      { id: 'hitin', name: 'Хитин', chance: 0.10 },
+      { id: 'zhelezy_pulsarida', name: 'Железы пульсарида', chance: 0.06 },
+      { id: 'neyronniy_uzel', name: 'Нейронный узел', chance: 0.03 },
+    ],
   },
-  void_eater: {
-    name: 'Пустотный пожиратель', threatLevel: 'A',
+  pustotniy_pozhiratel: {
+    id: 'pustotniy_pozhiratel', name: 'Пустотный Пожиратель', danger: 'A', zones: ['red'],
+    lore: 'Биокосмическая форма жизни из межзвёздной пустоты. Появляется там, где нарушен баланс пространства. Рекомендуется полное уничтожение или бегство.',
+    tier: DANGER_TIER.A,
+    stats: statsForTier(DANGER_TIER.A, { mind: 1.2, shielding: 1.2 }),
     loot: [
-      { id: 'dark_energy', name: 'Тёмная энергия', chance: 4 },
-      { id: 'bioplasma', name: 'Биоплазма', chance: 3 },
-      { id: 'distortion_fragment', name: 'Фрагменты искажения', chance: 1 }
-    ]
+      { id: 'temnaya_energiya', name: 'Тёмная энергия', chance: 0.08 },
+      { id: 'bioplazma', name: 'Биоплазма', chance: 0.06 },
+      { id: 'fragmenty_iskazheniya', name: 'Фрагменты искажения', chance: 0.03 },
+    ],
   },
-
-  // ── Добавлены вторым сообщением ──
-  scrap_beetle: {
-    name: 'Скрап-жук', threatLevel: 'E',
+  kuratorskiy_strazh: {
+    id: 'kuratorskiy_strazh', name: 'Кураторский страж', danger: 'A', zones: ['yellow', 'red'],
+    lore: 'Автоматизированный конструкт древней постройки, патрулирующий руины у станций. Нейтрален, только пока его не трогают.',
+    tier: DANGER_TIER.A,
+    stats: statsForTier(DANGER_TIER.A, { power: 1.2, endurance: 1.2 }),
     loot: [
-      { id: 'alloy_debris', name: 'Обломки сплава', chance: 10 },
-      { id: 'organic_glue', name: 'Органический клей', chance: 8 },
-      { id: 'sensor_eye', name: 'Сенсорный глаз', chance: 3 }
-    ]
+      { id: 'strazh_plata', name: 'Страж-плата', chance: 0.06 },
+      { id: 'reliktoviy_splav', name: 'Реликтовый сплав', chance: 0.04 },
+      { id: 'fragment_protokola', name: 'Фрагмент протокола', chance: 0.01 },
+    ],
   },
-  signal_tick: {
-    name: 'Сигнальный клещ', threatLevel: 'D',
+  nulevoy_zhnets: {
+    id: 'nulevoy_zhnets', name: 'Нулевой жнец', danger: 'S', zones: ['red'],
+    lore: 'Враждебный юнит неизвестного происхождения. Создан для тотального сбора энергии и ресурсов. Не испытывает страха, не отступает, не останавливается.',
+    tier: DANGER_TIER.S,
+    stats: statsForTier(DANGER_TIER.S, { power: 1.3, firepower: 1.3 }),
     loot: [
-      { id: 'relay_claw', name: 'Ретранслятор-клешня', chance: 7 },
-      { id: 'charged_shell', name: 'Заряженный панцирь', chance: 5 },
-      { id: 'stolen_logchip', name: 'Украденный лог-чип', chance: 2 }
-    ]
+      { id: 'energoyadro', name: 'Энергоядро', chance: 0.05 },
+      { id: 'splav_nihron', name: 'Сплав «Нихрон»', chance: 0.03 },
+    ],
   },
-  tract_weeper: {
-    name: 'Тракт-плакальщица', threatLevel: 'D',
+  trakt_eho_matka: {
+    id: 'trakt_eho_matka', name: 'Тракт-эхо-матка', danger: 'A', zones: ['red'],
+    lore: 'Генератор Отголосков — крупная неподвижная тварь, глубоко вплетённая в структуру Тракта. Сама не атакует напрямую, но её присутствие искажает пространство, создавая постоянные засадные события в радиусе сектора. Уничтожение матки снижает уровень искажений и частоту засад.',
+    tier: DANGER_TIER.A,
+    stationary: true,
+    stats: statsForTier(DANGER_TIER.A, { shielding: 1.4, reaction: 0.3 }),
     loot: [
-      { id: 'vocal_membrane', name: 'Голосовая мембрана', chance: 9 },
-      { id: 'fake_beacon', name: 'Фальшивый маяк', chance: 6 },
-      { id: 'resonant_gland', name: 'Резонансная железа', chance: 3 }
-    ]
+      { id: 'matochnoe_yadro', name: 'Маточное ядро', chance: 0.04 },
+      { id: 'eho_ikra', name: 'Эхо-икра', chance: 0.05 },
+      { id: 'redkaya_matrica_rosta', name: 'Редкая матрица роста', chance: 0.01 },
+    ],
   },
-  chitin_weaver: {
-    name: 'Хитин-ткач', threatLevel: 'C',
-    loot: [
-      { id: 'chitin_thread', name: 'Хитиновая нить', chance: 10 },
-      { id: 'build_resin', name: 'Строительная смола', chance: 7 },
-      { id: 'woven_carapace', name: 'Плетёный панцирь', chance: 4 }
-    ]
-  },
-  pulse_wanderer: {
-    name: 'Импульсный странник', threatLevel: 'C',
-    loot: [
-      { id: 'charged_core', name: 'Заряженный сердечник', chance: 8 },
-      { id: 'conductive_scale', name: 'Проводящая чешуя', chance: 6 },
-      { id: 'pulse_crystal', name: 'Импульсный кристалл', chance: 2 }
-    ]
-  },
-  exo_parser: {
-    name: 'Экзо-парсер', threatLevel: 'B',
-    loot: [
-      { id: 'parser_module', name: 'Парсер-модуль', chance: 7 },
-      { id: 'synth_muscle', name: 'Синтетическая мышца', chance: 5 },
-      { id: 'stolen_blueprint', name: 'Украденный чертёж навыка', chance: 2 }
-    ]
-  },
-  curator_sentinel: {
-    name: 'Кураторский страж', threatLevel: 'B',
-    loot: [
-      { id: 'sentinel_board', name: 'Страж-плата', chance: 6 },
-      { id: 'relic_alloy', name: 'Реликтовый сплав', chance: 4 },
-      { id: 'protocol_fragment', name: 'Фрагмент протокола', chance: 1 }
-    ]
-  },
-  echo_matriarch: {
-    name: 'Тракт-эхо-матка', threatLevel: 'A',
-    loot: [
-      { id: 'matriarch_core', name: 'Маточное ядро', chance: 4 },
-      { id: 'echo_spawn', name: 'Эхо-икра', chance: 5 },
-      { id: 'growth_matrix', name: 'Редкая матрица роста', chance: 1 }
-    ]
-  },
-  signal_eater: {
-    name: 'Пожиратель сигналов', threatLevel: 'A',
-    loot: [
-      { id: 'jamming_organ', name: 'Глушащий орган', chance: 3 },
-      { id: 'silence_fragment', name: 'Фрагмент тишины', chance: 4 },
-      { id: 'absorbed_signal', name: 'Поглощённый сигнал', chance: 1 }
-    ]
-  },
-  tract_shard: {
-    name: 'Осколок Тракта', threatLevel: 'S',
-    loot: [
-      { id: 'tract_shard_core', name: 'Осколок Тракта', chance: 2 },
-      { id: 'memory_crystal', name: 'Кристалл памяти', chance: 1 },
-      { id: 'lore_finale_fragment', name: 'Лорный фрагмент финала', chance: 1 }
-    ]
-  }
 };
 
-let _nameIndex = null;
-function getBestiaryIdByName(enemyName) {
-  if (!_nameIndex) {
-    _nameIndex = {};
-    for (const [id, monster] of Object.entries(BESTIARY)) _nameIndex[monster.name] = id;
-  }
-  return _nameIndex[enemyName] || null;
-}
-
-/** Роллит добычу с побеждённого монстра. Каждый предмет — независимый бросок 0..100. */
-function rollBestiaryLoot(monsterId, rng = Math.random) {
-  const monster = BESTIARY[monsterId];
-  if (!monster) return [];
-  return monster.loot
-    .filter((item) => rng() * 100 < item.chance)
-    .map((item) => ({ id: item.id, name: item.name }));
-}
-
-/** Удобный вход по имени врага (как оно приходит из engine/exploration-engine.js),
- * а не по внутреннему bestiaryId — избавляет вызывающий код от необходимости
- * помнить оба идентификатора. */
 function rollLootByEnemyName(enemyName, rng = Math.random) {
-  const id = getBestiaryIdByName(enemyName);
-  return id ? rollBestiaryLoot(id, rng) : [];
+  const entry = Object.values(BESTIARY).find((m) => m.name === enemyName);
+  if (!entry) return [];
+  return entry.loot.filter((item) => rng() < item.chance).map((item) => ({ id: item.id, name: item.name }));
 }
 
-module.exports = { BESTIARY, rollBestiaryLoot, getBestiaryIdByName, rollLootByEnemyName };
+function buildBestiaryFighter(entry, playerLevel) {
+  let tier = entry.tier;
+  if (playerLevel) tier = Math.max(1, Math.min(tier, playerLevel + 2));
+  const hp = hpForTier(tier);
+  return {
+    name: entry.name,
+    tier,
+    hp, hpMax: hp,
+    stats: { ...entry.stats },
+    luck: Math.round(5 + tier * 1.4),
+    accuracy: 0.68 + Math.min(tier, 5) * 0.02,
+    dodge: 0.06 + Math.min(tier, 5) * 0.015,
+    focus: 0.6 + Math.min(tier, 5) * 0.02,
+    periodic: [],
+    bestiaryId: entry.id,
+  };
+}
+
+const NAMED_ENCOUNTER_CHANCE = 0.12;
+
+function rollNamedEncounter(zone, playerLevel, rng = Math.random) {
+  if (rng() > NAMED_ENCOUNTER_CHANCE) return null;
+  const candidates = Object.values(BESTIARY).filter((m) => !m.stationary && m.zones.includes(zone));
+  if (candidates.length === 0) return null;
+  const entry = candidates[Math.floor(rng() * candidates.length)];
+  return buildBestiaryFighter(entry, playerLevel);
+}
+
+module.exports = { BESTIARY, rollLootByEnemyName, rollNamedEncounter, buildBestiaryFighter };
