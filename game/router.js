@@ -26,7 +26,7 @@
 const { resolveTurn } = require('../engine/combat-engine.js');
 const { SKILLS, STIMS } = require('../engine/skills-data.js');
 const { rollEvent, rollLoot, ZONE_WEIGHTS, generateEnemy } = require('../engine/exploration-engine.js');
-const { rollLootByEnemyName } = require('../engine/bestiary.js');
+const { rollLootByEnemyName, rollNamedEncounter, buildBestiaryFighter, BESTIARY } = require('../engine/bestiary.js');
 const { grantXp, xpToNext, xpForTier } = require('../engine/leveling.js');
 const { availableQuests, getQuest, describeObjective, progressText, objectiveMet, consumeObjective } = require('./quests-data.js');
 const { imageForEnemy } = require('./enemy-images.js');
@@ -60,6 +60,9 @@ const {
 const { createListing, purchaseListing, listActiveListings, MarketError } = require('../market/market-engine.js');
 const { createDuel, submitTurn: submitPvpTurn, getDuel, winnerReward, PvpError } = require('../pvp/pvp-engine.js');
 const { findRandomOpponent } = require('../pvp/matchmaking-engine.js');
+const { recordKill, trophyProgressText } = require('../lib/trophies.js');
+const { isStormActive, stormStatusText, STORM_REWARD_MULTIPLIER, STORM_TIER_BONUS } = require('../lib/world-storm.js');
+const { rollStationEvent } = require('../city/station-events.js');
 
 const FACTIONS = ['Приют', 'Терминус', 'Арсенал', 'Вуаль'];
 
@@ -197,12 +200,14 @@ function hubMessage(player) {
   const curator = CURATORS[player.faction] || 'куратор станции';
   const atmosphere = getDistrictAtmosphere(player.faction);
   const atmosphereLine = atmosphere ? `\n\n${atmosphere.time}` : '';
-  return `🛰️ СТАНЦИЯ «${player.faction}»\n${curator} на связи.${atmosphereLine}\n\n${player.name} · Ур. ${player.level || 1} (${player.xp || 0}/${next} XP)\n❤️ ${player.hp}/${player.hpMax}   💳 ${player.credits || 0}\n📍 ${ZONE_LABEL[player.zone] || 'Патрулируемый сектор'}${player.radiation ? `\n☢️ Облучение: ${player.radiation}%` : ''}${player.statPoints ? `\n✨ Нераспределённых очков: ${player.statPoints}` : ''}`;
+  const stormLine = `\n\n${stormStatusText()}`;
+  return `🛰️ СТАНЦИЯ «${player.faction}»\n${curator} на связи.${atmosphereLine}${stormLine}\n\n${player.name} · Ур. ${player.level || 1} (${player.xp || 0}/${next} XP)\n❤️ ${player.hp}/${player.hpMax}   💳 ${player.credits || 0}\n📍 ${ZONE_LABEL[player.zone] || 'Патрулируемый сектор'}${player.radiation ? `\n☢️ Облучение: ${player.radiation}%` : ''}${player.statPoints ? `\n✨ Нераспределённых очков: ${player.statPoints}` : ''}`;
 }
 
 function statusText(p) {
   const repLine = p.reputation ? `\n⭐ Репутация: ${p.reputation} (${getReputationTitle(p.reputation)})` : '';
-  return hubMessage(p) + repLine;
+  const trophyLine = `\n\n${trophyProgressText(p).summary}`;
+  return hubMessage(p) + repLine + trophyLine;
 }
 
 function contractsBoard(player) {
@@ -226,13 +231,13 @@ function stepShyopotQuest(playerIn, input) {
   const player = { ...playerIn };
   player.questStates = { ...(player.questStates || {}) };
   let qs = player.questStates.shyopot_hypotheses;
-  const needsFreshStart = !qs || qs.status !== 'active';
+  const needsFreshStart = !qs || qs.completed;
 
   if (needsFreshStart) {
     qs = createQuestState('shyopot_hypotheses');
     player.questStates.shyopot_hypotheses = qs;
   } else if (input) {
-    const rendered = renderQuestText(SHYOPOT_HYPOTHESES_QUEST, qs, player);
+    const rendered = renderQuestText(SHYOPOT_HYPOTHESES_QUEST, qs, { player });
     const choice = rendered.choices.find((c) => c.label === input);
     if (choice) {
       advanceQuest(qs, choice.next, choice.choiceId || null, choice.flags || {});
@@ -246,8 +251,8 @@ function stepShyopotQuest(playerIn, input) {
     }
   }
 
-  const rendered = renderQuestText(SHYOPOT_HYPOTHESES_QUEST, qs, player);
-  if (rendered.isTerminal && qs.status === 'active') {
+  const rendered = renderQuestText(SHYOPOT_HYPOTHESES_QUEST, qs, { player });
+  if (rendered.isTerminal && !qs.completed) {
     completeQuest(qs, {});
     player.completedQuests = player.completedQuests || [];
     if (!player.completedQuests.includes('shyopot_hypotheses')) player.completedQuests.push('shyopot_hypotheses');
@@ -394,24 +399,70 @@ function journeyContinueButtons(zone, isBossContext = false) {
   return buttons;
 }
 
-function safeReturnChoice(text, player, zone, depth, isBossContext = false) {
+function safeReturnChoice(text, player, zone, depth, isBossContext = false, extra = {}) {
   return {
     reply: { text, buttons: journeyContinueButtons(zone, isBossContext) },
-    nextState: { scene: 'journey_continue', player, zone, depth, isBossContext }
+    nextState: { scene: 'journey_continue', player, zone, depth, isBossContext, ...extra }
   };
 }
 
+/** Множитель награды за находки/сигналы, пока активен резонансный шторм —
+ * см. lib/world-storm.js. Комбат-тир во время шторма НЕ трогаем (враг уже
+ * сгенерирован выше по цепочке с playerLevel-капом) — шторм действует
+ * только на награду, не на силу противников. */
+function stormRewardMult() {
+  return isStormActive() ? STORM_REWARD_MULTIPLIER : 1;
+}
+
 function resolveExplorationEvent(player, event, zone, depth, deps, rng, prefixText = '', allowContinue = true) {
-  const safe = (text) => allowContinue
-    ? safeReturnChoice(text, player, zone, depth)
+  // ВАЖНО: применяем event.flag ЗДЕСЬ, для любого типа события, а не только
+  // в exploration_event_choice. Раньше это применялось только для веток с
+  // выбором — 'story' (curator_message) никогда не ставил свой флаг
+  // curator_message_seen, из-за чего сообщение куратора зацикливалось
+  // навсегда и блокировало вообще все остальные события в зоне для любого
+  // игрока с доступным квестом куратора (реальный баг, не связанный с
+  // бестиарием, просто раньше не проявлялся в тестах).
+  if (event.flag) {
+    player.flags = player.flags || {};
+    player.flags[event.flag] = true;
+  }
+
+  const safe = (text, extra) => allowContinue
+    ? safeReturnChoice(text, player, zone, depth, false, extra)
     : { reply: { text, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
 
   switch (event.type) {
     case 'ambush': {
+      // Успокоенный сектор (убит "хозяин" вроде эхо-матки) — шанс, что
+      // засада вообще не происходит, вместо неё спокойная находка.
+      const calmedFlag = player.currentSectorId && `sector_${player.currentSectorId}_calmed`;
+      if (calmedFlag && player.flags?.[calmedFlag] && rng() < 0.5) {
+        const loot = rollLoot(zone, rng);
+        const mult = stormRewardMult();
+        addToInventory(player, loot.resource, loot.tier, loot.qty);
+        player.credits = (player.credits || 0) + Math.round(loot.credits * mult);
+        return safe(`${prefixText}🔭 Здесь непривычно тихо после того, как что-то в этом секторе умолкло навсегда. ${loot.qty}× ${loot.resource} T${loot.tier} находится без сопротивления.`);
+      }
+
+      // Редкий шанс встретить ИМЕННОГО монстра бестиария вместо обычного
+      // процедурного врага.
+      const namedEnemy = rollNamedEncounter(zone, player.level, rng);
+      const enemy = namedEnemy || event.enemy;
       const bonusNote = event.depthBonusTier ? `\n(усилен глубиной вылазки: +${event.depthBonusTier} к тиру)` : '';
+
+      // "Нейтральные" именные монстры (см. engine/bestiary.js: neutral:true,
+      // например Кураторский страж) не нападают сами — игроку решать.
+      if (enemy.neutral) {
+        return {
+          reply: { text: `${prefixText}👁️ ${enemy.name}\n\n${enemy.name} пока не проявляет враждебности — патрулирует, не приближаясь.`, buttons: ['Обойти стороной', 'Атаковать'], imageKey: imageForEnemy(enemy.name) },
+          nextState: { scene: 'neutral_encounter', player, enemy, zone, depth }
+        };
+      }
+
+      const nameLine = namedEnemy ? `⚠️ ${enemy.name}\n\n${BESTIARY[enemy.bestiaryId]?.lore || ''}` : `⚠️ ОТГОЛОСОК\n\n${event.text}`;
       return {
-        reply: { text: `${prefixText}⚠️ ОТГОЛОСОК\n\n${event.text}${bonusNote}`, buttons: ['Атаковать', 'Отступить'], imageKey: imageForEnemy(event.enemy.name) },
-        nextState: { scene: 'pre_combat', player, enemy: event.enemy, zone, depth }
+        reply: { text: `${prefixText}${nameLine}${bonusNote}`, buttons: ['Атаковать', 'Отступить'], imageKey: imageForEnemy(enemy.name) },
+        nextState: { scene: 'pre_combat', player, enemy, zone, depth }
       };
     }
     case 'anomaly': {
@@ -424,8 +475,18 @@ function resolveExplorationEvent(player, event, zone, depth, deps, rng, prefixTe
       };
     }
     case 'distress': {
-      player.credits = (player.credits || 0) + event.reward.credits;
-      return safe(`${prefixText}📡 СИГНАЛ БЕДСТВИЯ\n\n${event.text}\n💳 +${event.reward.credits} кредитов за спасательный рейс.`);
+      // 15% шанс, что сигнал бедствия — это Тракт-плакальщица под прикрытием
+      // (см. engine/bestiary.js: её лор буквально про эксплуатацию distress-сигналов).
+      if (rng() < 0.15) {
+        const mimic = buildBestiaryFighter(BESTIARY.trakt_plakalschitsa, player.level);
+        return {
+          reply: { text: `${prefixText}📡 СИГНАЛ БЕДСТВИЯ\n\nКрик о помощи звучит слишком... правильно. Слишком по учебнику.\n\n${mimic.name} сбрасывает маскировку.`, buttons: ['Атаковать', 'Отступить'], imageKey: imageForEnemy(mimic.name) },
+          nextState: { scene: 'pre_combat', player, enemy: mimic, zone, depth }
+        };
+      }
+      const mult = stormRewardMult();
+      player.credits = (player.credits || 0) + Math.round(event.reward.credits * mult);
+      return safe(`${prefixText}📡 СИГНАЛ БЕДСТВИЯ\n\n${event.text}\n💳 +${Math.round(event.reward.credits * mult)} кредитов за спасательный рейс.`);
     }
     case 'node': {
       addToInventory(player, event.resource, event.tier, 1);
@@ -433,13 +494,24 @@ function resolveExplorationEvent(player, event, zone, depth, deps, rng, prefixTe
       return safe(`${prefixText}⛏️ ЗАЛЕЖЬ\n\n${event.text}\nВ трюм добавлено: 1× ${event.resource} T${event.tier}.`);
     }
     case 'find': {
+      const mult = stormRewardMult();
       addToInventory(player, event.loot.resource, event.loot.tier, event.loot.qty);
-      player.credits = (player.credits || 0) + event.loot.credits;
+      player.credits = (player.credits || 0) + Math.round(event.loot.credits * mult);
       checkContractProgress(player, 'loot', { resource: event.loot.resource, amount: event.loot.qty });
-      return safe(`${prefixText}🔭 ${event.text}`);
+      const stormNote = mult > 1 ? ` (🌩️ ×${mult} за шторм)` : '';
+      return safe(`${prefixText}🔭 ${event.text}${stormNote}`);
     }
     case 'sector': {
       player.currentSectorId = event.sectorId;
+      // У сектора есть "хозяин" (см. worldgen/sector-map.js: resident) —
+      // не случайная засада, а осознанный выбор атаковать или пройти мимо.
+      if (event.residentId && event.residentAlive && BESTIARY[event.residentId]) {
+        const residentName = BESTIARY[event.residentId].name;
+        return {
+          reply: { text: `${prefixText}${event.text}`, buttons: [`Атаковать: ${residentName}`, ...journeyContinueButtons(zone, false)] },
+          nextState: { scene: 'journey_continue', player, zone, depth, sectorResident: { sectorId: event.sectorId, residentId: event.residentId } }
+        };
+      }
       return safe(`${prefixText}${event.text}`);
     }
     case 'story': {
@@ -690,26 +762,26 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
         return { reply: { text: 'Личный терминал профиля готов:', buttons: [{ label: 'Открыть профиль', url: link }, 'Исследовать', 'Статус', 'Сброс'] }, nextState: state };
       }
       if (input === 'Мостик') {
-        return { reply: { text: '🎛️ МОСТИК\n\nЗдесь решают судьбу станции. Смена позывного и станции приписки — скоро.', buttons: ['Мифология Тракта', 'Назад'], imageKey: imageForLocation('bridge') }, nextState: { scene: 'loc_bridge', player: state.player } };
+        return { reply: { text: '🎛️ МОСТИК\n\nЗдесь решают судьбу станции. Смена позывного и станции приписки — скоро.', buttons: ['Мифология Тракта', 'Назад'], imageKey: imageForLocation('bridge', state.player.faction) }, nextState: { scene: 'loc_bridge', player: state.player } };
       }
       if (input === 'Отсек') {
         const p = state.player;
         const items = (p.inventory || []).map((i) => `${i.resource} T${i.tier} ×${i.qty}`).join(', ');
         return {
-          reply: { text: `🔧 РЕМОНТНЫЙ ОТСЕК\n\n${items ? `В трюме: ${items}` : 'Трюм пуст.'}`, buttons: items ? ['Продать всё', 'Назад'] : ['Назад'], imageKey: imageForLocation('repair') },
+          reply: { text: `🔧 РЕМОНТНЫЙ ОТСЕК\n\n${items ? `В трюме: ${items}` : 'Трюм пуст.'}`, buttons: items ? ['Продать всё', 'Назад'] : ['Назад'], imageKey: imageForLocation('repair', p.faction) },
           nextState: { scene: 'loc_repair', player: state.player }
         };
       }
       if (input === 'Декон-камера') {
         const p = state.player;
         return {
-          reply: { text: `☢️ ДЕКОН-КАМЕРА\n\nТекущее облучение: ${p.radiation || 0}%`, buttons: p.radiation ? ['Снять облучение', 'Назад'] : ['Назад'], imageKey: imageForLocation('decon') },
+          reply: { text: `☢️ ДЕКОН-КАМЕРА\n\nТекущее облучение: ${p.radiation || 0}%`, buttons: p.radiation ? ['Снять облучение', 'Назад'] : ['Назад'], imageKey: imageForLocation('decon', p.faction) },
           nextState: { scene: 'loc_decon', player: state.player }
         };
       }
       if (input === 'Кантина') {
         const board = cantinaBoard(state.player);
-        board.reply.imageKey = imageForLocation('cantina');
+        board.reply.imageKey = imageForLocation('cantina', state.player.faction);
         return board;
       }
       if (input === 'Контракты') {
@@ -744,24 +816,24 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
         };
       }
       if (input === 'Врата Тракта') {
-        return { reply: { text: '🌀 ВРАТА ТРАКТА\n\nВыбери, куда прыгнуть:', buttons: ZONE_BUTTONS, imageKey: imageForLocation('gates') }, nextState: { scene: 'loc_gates', player: state.player } };
+        return { reply: { text: '🌀 ВРАТА ТРАКТА\n\nВыбери, куда прыгнуть:', buttons: ZONE_BUTTONS, imageKey: imageForLocation('gates', state.player.faction) }, nextState: { scene: 'loc_gates', player: state.player } };
       }
       if (input === 'Исследовать') {
         return startJourney(state.player, 'explore', { zone: state.player.zone || 'blue', depth: 0 }, rng);
       }
-      return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station') }, nextState: state };
+      return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: state };
     }
 
     case 'loc_bridge': {
       if (input === 'Мифология Тракта') {
         return mythosScreen(state.player);
       }
-      return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station') }, nextState: { scene: 'station', player: state.player } };
+      return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
     }
 
     case 'lore_mythos': {
       if (input === 'Назад') {
-        return { reply: { text: '🎛️ МОСТИК\n\nЗдесь решают судьбу станции. Смена позывного и станции приписки — скоро.', buttons: ['Мифология Тракта', 'Назад'], imageKey: imageForLocation('bridge') }, nextState: { scene: 'loc_bridge', player: state.player } };
+        return { reply: { text: '🎛️ МОСТИК\n\nЗдесь решают судьбу станции. Смена позывного и станции приписки — скоро.', buttons: ['Мифология Тракта', 'Назад'], imageKey: imageForLocation('bridge', state.player.faction) }, nextState: { scene: 'loc_bridge', player: state.player } };
       }
       if (input === 'Гипотезы') {
         return stepShyopotQuest(state.player, null);
@@ -799,7 +871,7 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
         const gained = sellInventory(player);
         return { reply: { text: gained ? `Завхоз отсчитывает ${gained} кредитов за находки.` : 'Продавать нечего.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player } };
       }
-      return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station') }, nextState: { scene: 'station', player: state.player } };
+      return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
     }
 
     case 'loc_decon': {
@@ -807,12 +879,12 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
         const player = { ...state.player, radiation: 0 };
         return { reply: { text: 'Мягкое гудение очистителей — облучение снято подчистую.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player } };
       }
-      return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station') }, nextState: { scene: 'station', player: state.player } };
+      return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
     }
 
     case 'loc_cantina': {
       if (input === 'Назад') {
-        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station') }, nextState: { scene: 'station', player: state.player } };
+        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
       }
       const talkMatch = /^Поговорить: (.+)$/.exec(input);
       if (talkMatch) {
@@ -848,12 +920,22 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
       if (quest.reward.credits) { player.credits = (player.credits || 0) + quest.reward.credits; rewardText += `\n💳 +${quest.reward.credits} кредитов`; }
       if (quest.reward.statPoints) { player.statPoints = (player.statPoints || 0) + quest.reward.statPoints; rewardText += `\n🔧 +${quest.reward.statPoints} очков параметров`; }
 
+      // Связка "Пятый Голос" (глобальная интрига quests-data.js) с
+      // Мифологией Тракта — тематически об одном и том же, теперь ещё и
+      // механически: завершение quest'а подтверждает гипотезу BETRAYAL.
+      if (quest.id === 'global_3') {
+        discoverHypothesis(player, 'BETRAYAL');
+        player.flags = player.flags || {};
+        player.flags.fifth_voice_confirmed = true;
+        rewardText += `\n\n🌌 Гипотеза «Предательство» подтверждена — слух о Пятом Голосе оказался не просто слухом.`;
+      }
+
       return { reply: { text: rewardText, buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player } };
     }
 
     case 'contracts': {
       if (input === 'Назад') {
-        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station') }, nextState: { scene: 'station', player: state.player } };
+        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
       }
       if (input === 'Забрать награды') {
         const player = { ...state.player };
@@ -875,7 +957,7 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
 
     case 'loc_gates': {
       if (input === 'Назад') {
-        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station') }, nextState: { scene: 'station', player: state.player } };
+        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
       }
       if (input === 'К другим станциям') {
         const others = FACTIONS.filter((f) => f !== state.player.faction);
@@ -909,7 +991,7 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
 
     case 'workshop': {
       if (input === 'Назад') {
-        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station') }, nextState: { scene: 'station', player: state.player } };
+        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
       }
       const recipe = RECIPES.find((r) => r.name === input);
       if (!recipe) {
@@ -930,7 +1012,7 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
 
     case 'stealth_explore': {
       if (input === 'Назад') {
-        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station') }, nextState: { scene: 'station', player: state.player } };
+        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
       }
       if (input === 'Уйти в тень') {
         return explore({ ...state.player }, state.player.zone || 'blue', rng, deps, true);
@@ -960,7 +1042,14 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
     }
 
     case 'journey_continue': {
-      const { player, zone, depth, isBossContext } = state;
+      const { player, zone, depth, isBossContext, sectorResident } = state;
+      if (sectorResident && input === `Атаковать: ${BESTIARY[sectorResident.residentId]?.name}`) {
+        const enemy = buildBestiaryFighter(BESTIARY[sectorResident.residentId], player.level);
+        return {
+          reply: { text: `⚔️ ${enemy.name} наконец обращает на тебя внимание.`, buttons: ['Атаковать', 'Отступить'], imageKey: imageForEnemy(enemy.name) },
+          nextState: { scene: 'pre_combat', player, enemy, zone, depth, sectorResident }
+        };
+      }
       if (input === 'Углубиться дальше') {
         return startJourney(player, 'explore', { zone, depth: (depth || 0) + 1 }, rng);
       }
@@ -980,7 +1069,10 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
       if (input === 'Вернуться на станцию') {
         return { reply: { text: 'Ты не торопясь идёшь назад пешком — вылазка окончена, всё добытое уже в трюме.', buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
       }
-      return { reply: { text: 'Выбери действие кнопкой ниже.', buttons: journeyContinueButtons(zone, isBossContext) }, nextState: state };
+      const fallbackButtons = sectorResident
+        ? [`Атаковать: ${BESTIARY[sectorResident.residentId]?.name}`, ...journeyContinueButtons(zone, isBossContext)]
+        : journeyContinueButtons(zone, isBossContext);
+      return { reply: { text: 'Выбери действие кнопкой ниже.', buttons: fallbackButtons }, nextState: state };
     }
 
     case 'exploration_event_choice': {
@@ -1041,6 +1133,19 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
       return { reply: { text: 'Выбери: доложить куратору или утаить находку.', buttons: ['Доложить куратору', 'Утаить находку'] }, nextState: state };
     }
 
+    case 'neutral_encounter': {
+      if (input === 'Обойти стороной') {
+        return safeReturnChoice(`Ты обходишь ${state.enemy.name} по широкой дуге — оно провожает тебя взглядом, но не двигается.`, state.player, state.zone, state.depth);
+      }
+      if (input === 'Атаковать') {
+        return {
+          reply: { text: `⚔️ Ты решаешь спровоцировать ${state.enemy.name}.`, buttons: ['Атаковать', 'Отступить'], imageKey: imageForEnemy(state.enemy.name) },
+          nextState: { scene: 'pre_combat', player: state.player, enemy: state.enemy, zone: state.zone, depth: state.depth }
+        };
+      }
+      return { reply: { text: 'Выбери действие кнопкой ниже.', buttons: ['Обойти стороной', 'Атаковать'] }, nextState: state };
+    }
+
     case 'pre_combat': {
       if (input === 'Отступить') {
         return { reply: { text: 'Ты отступаешь на безопасное расстояние.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
@@ -1048,7 +1153,7 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
       const buttons = ['Обычная атака', ...skillButtons(state.player), 'Стим'];
       return {
         reply: { text: `${state.enemy.name}: ❤️ ${state.enemy.hp}/${state.enemy.hpMax}\n\nВыбери действие:`, buttons },
-        nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: false, curatorQuest: state.curatorQuest }
+        nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: false, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident }
       };
     }
 
@@ -1058,7 +1163,7 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
       if (input === 'Назад') {
         return {
           reply: { text: `${state.enemy.name}: ❤️ ${state.enemy.hp}/${state.enemy.hpMax}\n\nВыбери действие:`, buttons: backButtons },
-          nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest }
+          nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident }
         };
       }
       const stimId = stimIdByName(input);
@@ -1077,7 +1182,7 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
         }
         return {
           reply: { text: 'Выбери стим:', buttons: [...stimButtons(), 'Назад'] },
-          nextState: { scene: 'combat_stim_select', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest }
+          nextState: { scene: 'combat_stim_select', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident }
         };
       }
       const skillId = input === 'Обычная атака' ? null : skillIdByName(input);
@@ -1094,7 +1199,7 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
 
     case 'market_hub': {
       if (input === 'Назад') {
-        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station') }, nextState: { scene: 'station', player: state.player } };
+        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
       }
       if (input === 'Выставить из трюма') {
         const inv = state.player.inventory || [];
@@ -1142,7 +1247,7 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
 
     case 'pvp_menu': {
       if (input === 'Назад') {
-        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station') }, nextState: { scene: 'station', player: state.player } };
+        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
       }
       if (input === 'Искать соперника') {
         try {
@@ -1159,7 +1264,7 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
 
     case 'pvp_duel': {
       if (input === 'Назад') {
-        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station') }, nextState: { scene: 'station', player: state.player } };
+        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
       }
       if (input === 'Обновить') {
         return pvpDuelScreen(deps, state.player, playerId, state.duelId);
@@ -1193,7 +1298,7 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
 
     case 'housing_hub': {
       if (input === 'Назад') {
-        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station') }, nextState: { scene: 'station', player: state.player } };
+        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
       }
       const buyMatch = /^Купить дом: (.+)$/.exec(input);
       if (buyMatch) {
@@ -1248,6 +1353,13 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
 }
 
 function resolveCombatTurn(deps, state, result, rng) {
+  // Контракт "применить стим 2 раза" — засчитываем именно в момент, когда
+  // стим реально применился в этот ход (false -> true), а не при каждом
+  // ходе после этого.
+  if (!state.stimUsedThisFight && result.stimUsedThisFight) {
+    checkContractProgress(result.attacker, 'stim_used', {});
+  }
+
   if (result.finished) {
     if (result.winner === 'attacker') {
       if (state.trainingFight) {
@@ -1280,7 +1392,18 @@ function resolveCombatTurn(deps, state, result, rng) {
         if (res.success) fragmentNote = `\n✨ Фрагмент собран за победу над стражем.`;
       }
 
-      let victoryText = `💥 ${result.log.join(' ')}\n\n🏆 ${state.enemy.name} уничтожен.\n💳 +${loot.credits} кредитов, +${loot.qty}× ${loot.resource} T${loot.tier}\n✨ +${xpGain} XP${fragmentNote}`;
+      let trophyNote = '';
+      const kill = recordKill(player, state.enemy.bestiaryId);
+      if (kill.isNew) trophyNote = `\n🏆 Новый трофей: ${kill.trophyName}!`;
+
+      let calmedNote = '';
+      if (state.sectorResident) {
+        player.flags = player.flags || {};
+        player.flags[`sector_${state.sectorResident.sectorId}_calmed`] = true;
+        calmedNote = `\n🌌 ${state.enemy.name} наконец умолкла. Отголоски в этом секторе поутихнут.`;
+      }
+
+      let victoryText = `💥 ${result.log.join(' ')}\n\n🏆 ${state.enemy.name} уничтожен.\n💳 +${loot.credits} кредитов, +${loot.qty}× ${loot.resource} T${loot.tier}\n✨ +${xpGain} XP${fragmentNote}${trophyNote}${calmedNote}`;
       if (bestiaryDrops.length) victoryText += `\n🎖️ Особая добыча: ${bestiaryDrops.map((d) => d.name).join(', ')}`;
       if (leveledUp) victoryText += `\n🆙 Новый уровень: ${level}! (+2 очка, +20 HP, полное исцеление)`;
 
@@ -1315,7 +1438,7 @@ function resolveCombatTurn(deps, state, result, rng) {
   if (!result.stimUsedThisFight) buttons.push('Стим');
   return {
     reply: { text: `💥 ${log}\n\n${state.enemy.name}: ❤️ ${enemyTurn.attacker.hp}/${enemyTurn.attacker.hpMax}`, buttons },
-    nextState: { scene: 'combat', player: enemyTurn.defender, enemy: enemyTurn.attacker, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: result.stimUsedThisFight, curatorQuest: state.curatorQuest }
+    nextState: { scene: 'combat', player: enemyTurn.defender, enemy: enemyTurn.attacker, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: result.stimUsedThisFight, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident }
   };
 }
 
