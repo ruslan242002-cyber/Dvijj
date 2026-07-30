@@ -14,6 +14,7 @@ const { getCurrentAct } = require('../../../lore/trakt-acts.js');
 const { createQuestState, advanceQuest, completeQuest, renderQuestText } = require('../../../quests/quest-engine.js');
 const { SHYOPOT_HYPOTHESES_QUEST } = require('../../../quests/narrative/shyopot-hypotheses.js');
 const { imageForLocation } = require('../../location-images.js');
+const { imageForCurator } = require('../../curator-images.js');
 const { hubMessage, stationButtons } = require('../common.js');
 const { SCENES } = require('../ids.js');
 
@@ -48,7 +49,7 @@ function stepShyopotQuest(playerIn, input) {
     if (!player.completedQuests.includes('shyopot_hypotheses')) player.completedQuests.push('shyopot_hypotheses');
   }
   const buttons = rendered.isTerminal ? ['Назад'] : rendered.choices.map((c) => c.label);
-  return { reply: { text: rendered.text, buttons }, nextState: { scene: 'quest_shyopot', player } };
+  return { reply: { text: rendered.text, buttons, imageKey: imageForCurator('Терминус') }, nextState: { scene: 'quest_shyopot', player } };
 }
 
 function mythosScreen(player, prefixText = '') {
