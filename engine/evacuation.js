@@ -1,7 +1,3 @@
-'use strict';
-
-
-module.exports = { evacChance, attemptEvacuation };
 const BASE_EVAC_CHANCE = 0.9;
 const EVAC_CHANCE_PER_DEPTH = 0.02;
 const MIN_EVAC_CHANCE = 0.35;
@@ -27,4 +23,3 @@ function attemptEvacuation(player, zone, depth, rng = Math.random, evacBonus = 0
     blockingEvent,
   };
 }
-
