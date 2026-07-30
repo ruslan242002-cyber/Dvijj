@@ -19,7 +19,7 @@
 const { step } = require('../game/router.js');
 
 async function handleVkEvent(body, deps) {
-  const { store, vk, rng = Math.random, confirmationCode, secret, getProfileLink, resolveEnemyImage } = deps;
+  const { store, vk, rng = Math.random, confirmationCode, secret, getProfileLink, resolveEnemyImage, marketStore, pvpStore } = deps;
 
   // confirmation проверяем ДО секрета: VK не всегда присылает secret в этом
   // событии, и не должен — это просто "рукопожатие", секрет защищает
@@ -39,8 +39,17 @@ async function handleVkEvent(body, deps) {
     const text = message.text || '';
 
     const prevState = await store.get(peerId);
-    const routerDeps = getProfileLink ? { getProfileLink: () => getProfileLink(peerId) } : {};
-    const { reply, nextState } = step(prevState, text, rng, routerDeps);
+    const routerDeps = {
+      ...(getProfileLink ? { getProfileLink: () => getProfileLink(peerId) } : {}),
+      marketStore,
+      pvpStore,
+    };
+
+    // ВАЖНО: step() — async (биржа и PvP делают запросы в Redis), поэтому
+    // await здесь обязателен. Без него step(...) возвращает Promise, а не
+    // {reply, nextState} — reply/nextState становятся undefined, и
+    // store.set(peerId, undefined) роняет Upstash с ошибкой 400.
+    const { reply, nextState } = await step(prevState, text, rng, routerDeps, peerId);
     await store.set(peerId, nextState);
 
     let attachment;
