@@ -33,7 +33,13 @@ function upstashStore({ url, token } = {}) {
 
   async function execute(commandArray) {
     const res = await fetch(baseUrl, { method: 'POST', headers, body: JSON.stringify(commandArray) });
-    if (!res.ok) throw new Error(`Upstash request failed: ${res.status}`);
+    if (!res.ok) {
+      // ВАЖНО: печатаем текст ответа Upstash, а не только код статуса —
+      // голое "400" ничего не говорит о причине, а текст обычно прямо
+      // называет, что не так (неверная команда, лимит размера и т.д.).
+      const errText = await res.text().catch(() => '');
+      throw new Error(`Upstash request failed: ${res.status} ${errText}`);
+    }
     const data = await res.json();
     if (data.error) throw new Error(`Upstash error: ${data.error}`);
     return data.result;
@@ -47,6 +53,14 @@ function upstashStore({ url, token } = {}) {
       catch { return null; }
     },
     async set(userId, state) {
+      // Защита от записи "пустого" состояния: если state пришёл как
+      // undefined/null (например, из-за забытого await где-то выше по
+      // цепочке), JSON.stringify(undefined) даёт не строку, а буквально
+      // undefined -> Upstash получает мусор и отвечает 400. Лучше упасть
+      // здесь с понятной причиной, чем тихо записать null в Redis.
+      if (state === undefined || state === null) {
+        throw new Error(`upstashStore.set: state is ${state} for userId ${userId} — отказываюсь писать пустое состояние`);
+      }
       await execute(['SET', key(userId), JSON.stringify(state)]);
     }
   };
