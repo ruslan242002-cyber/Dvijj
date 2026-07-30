@@ -604,7 +604,7 @@ const CURATOR_ARCS = {
       }
     ]
   }
-
+};
 
 function getArcForFaction(faction) {
   return CURATOR_ARCS[faction] || null;
