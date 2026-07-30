@@ -11,9 +11,66 @@
 'use strict';
 
 const ENEMY_IMAGES = {
-  // 'Дрон-манекен': 'dron-maneken.jpg',
+  // === Патрулируемый (blue) ===
   // 'Дрейф-обломок': 'dreif-oblomok.jpg',
+  // 'Слабый резонанс': 'slabiy-rezonans.jpg',
+  // 'Отбившийся зонд': 'otbivshiysya-zond.jpg',
+  // 'Ржавый автомат': 'rzhaviy-avtomat.jpg',
+  // 'Эхо-помеха': 'eho-pomeha.jpg',
+  'Скиталец-щелкун': 'skitalets-schelkun.jpg',
+  'Пылевой Падальщик': 'pylevoy-padalschik.jpg',
+  'Игольник': 'igolnik.jpg',
+  // 'Эхоид': 'ehoid.jpg',
+  // 'Кристаллоид': 'kristalloid.jpg',
+  'Скрап-жук': 'skrap-zhuk.jpg',
+
+  // === Спорный (yellow) ===
   // 'Отголосок-падальщик': 'otgolosok-padalschik.jpg',
+  'Резонансный хищник': 'graviarh.jpg', // судя по описанию, "Гравиарх" — это и есть ваш "Резонансный хищник"; если нет, уберите эту строку
+  // 'Сбойный дрон': 'sboyniy-dron.jpg',
+  // 'Тракт-паразит': 'trakt-parazit.jpg',
+  // 'Радиационный рой': 'radiatsionniy-roy.jpg',
+  'Гравиарх': 'graviarh.jpg',
+  'Разломник': 'razlomnik.jpg',
+  // 'Тенекрыл': 'tenekril.jpg',
+  // 'Сквернолап': 'skvernolap.jpg',
+  // 'Шлакожор': 'shlakozhor.jpg',
+  'Сигнальный клещ': 'signalniy-kleshch.jpg',
+  'Тракт-плакальщица': 'trakt-plakalschitsa.jpg',
+  'Хроножнец': 'hronozhnets.jpg',
+  'Хитин-ткач': 'hitin-tkach.jpg',
+  // 'Импульсный странник': 'impulsniy-strannik.jpg',
+
+  // === Открытый космос (red) ===
+  // 'Глубинный Отголосок': 'glubinniy-otgolosok.jpg',
+  'Тракт-порождение': 'pustotniy-pozhiratel.jpg', // если это разные монстры у вас — уберите/поправьте
+  // 'Искажённый страж': 'iskazhenniy-strazh.jpg',
+  // 'Голос из разлома': 'golos-iz-razloma.jpg',
+  'Пожиратель сигналов': 'pustotniy-pozhiratel.jpg', // см. комментарий выше
+  'Пульсарид': 'pulsarid.jpg',
+  'Пустотный пожиратель': 'pustotniy-pozhiratel.jpg',
+  'Нулевой жнец': 'nulevoy-zhnets.jpg',
+  // 'Пустотный Кусач': 'pustotniy-kusach.jpg',
+  // 'Экзо-парсер': 'ekzo-parser.jpg',
+  'Кураторский страж': 'kuratorskiy-strazh.jpg',
+  'Тракт-эхо-матка': 'trakt-eho-matka.jpg',
+  // 'Осколок Тракта': 'oskolok-trakta.jpg',
+
+  // === Особые (тренировка/кураторы/стражи фрагментов) ===
+  // 'Дрон-манекен': 'dron-maneken.jpg',
+  // 'Одичавший складской дрон': 'odichavshiy-skladskoy-dron.jpg',
+  // 'Взбунтовавшийся охранный протокол': 'vzbuntovavshiysya-ohranniy-protokol.jpg',
+  // 'Отголосок-часовой': 'otgolosok-chasovoy.jpg',
+  // 'Страж Разлома': 'strazh-razloma.jpg',
+  // 'Силовик зачистки': 'silovik-zachistki.jpg',
+  // 'Разведчик-перебежчик': 'razvedchik-perebezhchik.jpg',
+  // 'Древний Зонд-Хранитель': 'drevniy-zond-hranitel.jpg',
+  // 'Резонансный Коллектив': 'rezonansniy-kollektiv.jpg',
+  // 'Порождение Разлома': 'porozhdenie-razloma.jpg',
+  // 'Искажённый Куратор': 'iskazhenniy-kurator.jpg',
+  // 'Тень Себя': 'ten-sebya.jpg',
+  // 'Аварийный ИИ Тракта': 'avariyniy-ii-trakta.jpg',
+  // 'Сердце Тракта': 'serdtse-trakta.jpg',
 };
 
 function imageForEnemy(name) {
