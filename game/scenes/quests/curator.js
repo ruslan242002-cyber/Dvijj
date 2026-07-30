@@ -9,6 +9,7 @@
 
 const { getArcForFaction } = require('../../../storylines/curator-arcs.js');
 const { imageForEnemy } = require('../../enemy-images.js');
+const { imageForCurator } = require('../../curator-images.js');
 const { hubMessage, stationButtons } = require('../common.js');
 const { SCENES } = require('../ids.js');
 
@@ -45,11 +46,11 @@ function curatorQuestScreen(deps, player, questId, stageId) {
     nextPlayer.completedQuests = [...(nextPlayer.completedQuests || [])];
     if (!nextPlayer.completedQuests.includes(questId)) nextPlayer.completedQuests.push(questId);
     const fullText = rewardLines.length ? `${text}\n\n${rewardLines.join('\n')}` : text;
-    return { reply: { text: fullText, buttons: ['Назад'] }, nextState: { scene: 'station', player: nextPlayer } };
+    return { reply: { text: fullText, buttons: ['Назад'], imageKey: imageForCurator(player.faction) }, nextState: { scene: 'station', player: nextPlayer } };
   }
 
   return {
-    reply: { text, buttons: (stage.choices || []).map((c) => c.label) },
+    reply: { text, buttons: (stage.choices || []).map((c) => c.label), imageKey: imageForCurator(player.faction) },
     nextState: { scene: 'curator_quest', player, questId, stageId }
   };
 }
@@ -61,7 +62,7 @@ function handleCuratorQuest(state, input, rng, deps) {
   }
   const choice = (found.stage.choices || []).find((c) => c.label === input);
   if (!choice) {
-    return { reply: { text: found.stage.text, buttons: found.stage.choices.map((c) => c.label) }, nextState: state };
+    return { reply: { text: found.stage.text, buttons: found.stage.choices.map((c) => c.label), imageKey: imageForCurator(state.player.faction) }, nextState: state };
   }
   const nextPlayer = { ...state.player };
   if (choice.flags) {
