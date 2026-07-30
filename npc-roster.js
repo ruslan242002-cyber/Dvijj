@@ -105,7 +105,7 @@ const NPC_ROSTER = {
     traits: ['суровый', 'справедливый', 'помнит каждое имя на стене']
   },
   'serzhant_ilva': {
-    id: 'serzhant_ilva', name: 'Сержант Илва', shortName: 'Илва', station: 'Вуаль', role: 'начальник патрулей',
+    id: 'serzhant_ilva', name: 'Сержант Илва', shortName: 'Илва', station: 'Терминус', role: 'начальник патрулей',
     schedule: {
       morning: 'строит смену перед выходом',
       day: 'лично обходит посты',
@@ -120,7 +120,7 @@ const NPC_ROSTER = {
     traits: ['прямолинейная', 'требовательная', 'справедливая до занудства']
   },
   'mehanik_brok': {
-    id: 'mehanik_brok', name: 'Механик Брок', shortName: 'Брок', station: 'Вуаль', role: 'ремонт брони и техники',
+    id: 'mehanik_brok', name: 'Механик Брок', shortName: 'Брок', station: 'Терминус', role: 'ремонт брони и техники',
     schedule: {
       morning: 'осматривает броню после ночных вылазок',
       day: 'варит и клепает — станции всегда есть что латать',
@@ -135,7 +135,7 @@ const NPC_ROSTER = {
     traits: ['работящий', 'малословный', 'знает толк в обшивке']
   },
   'novobranets': {
-    id: 'novobranets', name: 'Новобранец Тайлер', shortName: 'Тайлер', station: 'Вуаль', role: 'недавно принятый рекрут',
+    id: 'novobranets', name: 'Новобранец Тайлер', shortName: 'Тайлер', station: 'Терминус', role: 'недавно принятый рекрут',
     schedule: {
       morning: 'бежит на построение, опаздывая',
       day: 'старается не облажаться на посту',
@@ -229,7 +229,7 @@ const NPC_ROSTER = {
     traits: ['загадочный', 'немногословный', 'слышит больше, чем говорит']
   },
   'osvedomitel_kes': {
-    id: 'osvedomitel_kes', name: 'Осведомитель Кес', shortName: 'Кес', station: 'Терминус', role: 'сбор слухов',
+    id: 'osvedomitel_kes', name: 'Осведомитель Кес', shortName: 'Кес', station: 'Вуаль', role: 'сбор слухов',
     schedule: {
       morning: 'слушает утренние сплетни с других станций',
       day: 'сортирует слухи на важные и пустые',
@@ -244,7 +244,7 @@ const NPC_ROSTER = {
     traits: ['вкрадчивый', 'любопытный', 'знает больше, чем говорит']
   },
   'analitik_ryu': {
-    id: 'analitik_ryu', name: 'Аналитик Рю', shortName: 'Рю', station: 'Терминус', role: 'расшифровка сигналов',
+    id: 'analitik_ryu', name: 'Аналитик Рю', shortName: 'Рю', station: 'Вуаль', role: 'расшифровка сигналов',
     schedule: {
       morning: 'разбирает ночной улов сигналов',
       day: 'часами не отрывается от осциллографа',
@@ -259,7 +259,7 @@ const NPC_ROSTER = {
     traits: ['одержимый деталями', 'рассеянный', 'блестящий, когда фокусируется']
   },
   'slushatel': {
-    id: 'slushatel', name: 'Слушатель Орен', shortName: 'Орен', station: 'Терминус', role: 'медитирует над Трактом',
+    id: 'slushatel', name: 'Слушатель Орен', shortName: 'Орен', station: 'Вуаль', role: 'медитирует над Трактом',
     schedule: {
       morning: 'молчит',
       day: 'молчит, но иначе',
