@@ -1,7 +1,13 @@
 'use strict';
 const { applyDerivedStats } = require('./derived-stats.js');
 
-function xpToNext(level) { return 50 + (level - 1) * 25; }
+// Раньше: 50 + (level-1)*25 — линейно, до 100 уровня набегало бы всего
+// ~124 000 опыта суммарно, пара недель активной игры. Теперь — растущая
+// квадратично кривая: 30 уровень ≈ 40K опыта, 60 ≈ 260K, 100 ≈ 1.1М.
+// Это и есть та самая растяжка ради увеличения времени в игре — набор
+// одного уровня в начале почти не изменился (83 против 75), разница
+// нарастает с прогрессом, а не бьёт по новичкам сразу.
+function xpToNext(level) { return Math.round(60 + level * 20 + level * level * 3); }
 function xpForTier(tier) { return 15 + tier * 10; }
 function grantXp(player, amount) {
   player.level = player.level || 1;
