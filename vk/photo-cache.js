@@ -9,8 +9,17 @@
  *
  * Сама картинка берётся не с диска (файлы в public не гарантированно
  * доступны serverless-функции на чтение), а обычным fetch по адресу
- * https://ваш-домен/enemies/файл.jpg — то есть с уже задеплоенного
+ * https://ваш-домен/<путь>/файл.jpg — то есть с уже задеплоенного
  * статического хостинга Vercel, что надёжнее.
+ *
+ * ИСПРАВЛЕНО: раньше путь на Vercel был жёстко зашит как "/enemies/..."
+ * независимо от того, что реально лежит в imageKey. Для врагов imageKey —
+ * голое имя файла ('graviarh.jpg'), и это совпадало с /enemies/ случайно.
+ * Но imageForLocation()/imageForCurator() возвращают imageKey уже СО своей
+ * папкой ('locations/priyut-shtab.jpg', 'curators/curator-iris-veyl.jpg') —
+ * и старый код всё равно лепил их под /enemies/, получая несуществующий
+ * путь. Теперь: если в imageKey уже есть "/", используем его как путь
+ * как есть; если нет (голое имя — случай врагов) — добавляем "enemies/".
  */
 'use strict';
 
@@ -18,7 +27,8 @@ const VK_API_VERSION = '5.199';
 const CACHE_PREFIX = 'vk:photo:';
 
 /**
- * @param {string} imageKey — имя файла из game/enemy-images.js (например "dron.jpg")
+ * @param {string} imageKey — либо голое имя файла врага ("dron.jpg"),
+ *   либо путь с папкой ("locations/priyut-shtab.jpg", "curators/curator-shyopot.jpg")
  * @param {object} deps — { vkToken, store, baseUrl, apiUrl? }
  * @returns {Promise<string|null>} attachment-строка "photo{owner}_{id}" либо null, если что-то пошло не так
  */
@@ -45,7 +55,15 @@ async function resolveEnemyImage(imageKey, { vkToken, store, baseUrl, apiUrl = '
   }
 }
 
+/** Путь на статическом хостинге для конкретного imageKey — см. заметку
+ * "ИСПРАВЛЕНО" в шапке файла. */
+function staticPathFor(imageKey) {
+  return imageKey.includes('/') ? imageKey : `enemies/${imageKey}`;
+}
+
 async function uploadPhoto(imageKey, { vkToken, baseUrl, apiUrl }) {
+  const path = staticPathFor(imageKey);
+
   // 1. Получаем адрес для загрузки
   const serverParams = new URLSearchParams({ access_token: vkToken, v: VK_API_VERSION, peer_id: '0' });
   const serverRes = await fetch(`${apiUrl}/photos.getMessagesUploadServer?${serverParams}`);
@@ -54,8 +72,8 @@ async function uploadPhoto(imageKey, { vkToken, baseUrl, apiUrl }) {
   const uploadUrl = serverData.response.upload_url;
 
   // 2. Скачиваем саму картинку с нашего же статического хостинга
-  const imgRes = await fetch(`${baseUrl}/enemies/${imageKey}`);
-  if (!imgRes.ok) throw new Error(`Картинка ${imageKey} не найдена по адресу ${baseUrl}/enemies/${imageKey}`);
+  const imgRes = await fetch(`${baseUrl}/${path}`);
+  if (!imgRes.ok) throw new Error(`Картинка ${imageKey} не найдена по адресу ${baseUrl}/${path}`);
   const imgBlob = await imgRes.blob();
 
   // 3. Заливаем на сервер загрузки ВК
