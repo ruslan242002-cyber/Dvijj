@@ -3,27 +3,27 @@
 const { MARKET_LIMITS, MARKET_ERRORS } = require('./market-data');
 
 /*
- * Архитектурная заметка (важно при подключении к router.js):
+ * Архитектурная заметĸа (важно при подĸлючении ĸ router.js):
  *
  * Вся остальная игра — per-player state: сцена собирает nextState из
- * player и только его сохраняет. Биржа — первая сущность, которая не
- * принадлежит одному игроку: лот виден всем, а покупка меняет состояние
- * ДВУХ игроков сразу, причём продавец в этот момент, скорее всего,
- * не в сети и не в текущей сцене.
+ * player и только его сохраняет. Биржа — первая сущность, ĸоторая не
+ * принадлежит одному игроĸу: лот виден всем, а поĸупĸа меняет состояние
+ * ДВУХ игроĸов сразу, причём продавец в этот момент, сĸорее всего,
+ * не в сети и не в теĸущей сцене.
  *
  * Поэтому:
  *  - Инвентарь и кредиты ПОКУПАТЕЛЯ меняются обычным способом — через
- *    player-объект текущей сцены, как и везде в игре.
- *  - Кредиты ПРОДАВЦА меняются НЕ через его player-объект (его нет в
+ *    player-объеĸт теĸущей сцены, ĸаĸ и везде в игре.
+ *  - Кредиты ПРОДАВЦА меняются НЕ через его player-объеĸт (его нет в
  *    памяти), а атомарной операцией напрямую в сторе (store.purchaseListingAtomic).
- *    Это должно быть реализовано как Redis Lua-скрипт (EVAL) на стороне
- *    upstash-стора — см. market-store-upstash.js, там есть готовый скрипт.
- *  - Если у вас кредиты сейчас хранятся только внутри JSON-блоба игрока
- *    (player:{id} -> весь объект целиком), их придётся ВЫНЕСТИ в отдельный
- *    ключ (например credits:{playerId}), потому что атомарно поменять одно
- *    поле внутри чужого JSON-блоба без Lua/WATCH — источник гонки и потери
- *    кредитов при одновременных покупках одного лота. Это одна из немногих
- *    правок, которая заденет существующий формат хранения игрока.
+ *    Это должно быть реализовано ĸаĸ Redis Lua-сĸрипт (EVAL) на стороне
+ *    upstash-стора — см. market-store-upstash.js, там есть готовый сĸрипт.
+ *  - Если у вас кредиты сейчас хранятся тольĸо внутри JSON-блоба игроĸа
+ *    (player:{id} -> весь объеĸт целиĸом), их придётся ВЫНЕСТИ в отдельный
+ *    ĸлюч (например credits:{playerId}), потому что атомарно поменять одно
+ *    поле внутри чужого JSON-блоба без Lua/WATCH — источник гонĸи и потери
+ *    ĸредитов при одновременных поĸупĸах одного лота. Это одна из немногих
+ *    правоĸ, ĸоторая заденет существующий формат хранения игроĸа.
  */
 
 class MarketError extends Error {
@@ -36,6 +36,9 @@ class MarketError extends Error {
 
 function generateListingId() {
   return `lst_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+function generateBuyOrderId() {
+  return `buy_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function findInventoryItem(player, itemId) {
@@ -135,8 +138,13 @@ async function cancelListing(deps, player, listingId) {
  * способом (это его player-объект в текущей сцене). Уменьшение остатка
  * лота и зачисление продавцу — одной атомарной операцией в сторе, чтобы
  * два одновременных покупателя не могли купить один и тот же последний юнит.
+ *
+ * feeDiscount (в процентных пунктах, по умолчанию 0) — скидка от жилья
+ * Приюта (lib/housing.js: getMarketFeeDiscount), передаётся явно, а не
+ * читается отсюда, чтобы движок биржи не знал о жилье напрямую. Комиссия
+ * не уходит ниже 0.
  */
-async function purchaseListing(deps, buyer, listingId, qty) {
+async function purchaseListing(deps, buyer, listingId, qty, feeDiscount = 0) {
   const { store } = deps;
 
   const listing = await store.getListing(listingId);
@@ -164,9 +172,11 @@ async function purchaseListing(deps, buyer, listingId, qty) {
       buyerId: buyer.id,
       qty,
       expectedPrice: listing.price,
-      feePercent: MARKET_LIMITS.LISTING_FEE_PERCENT,
+      feePercent: Math.max(MARKET_LIMITS.LISTING_FEE_PERCENT - feeDiscount, 0),
     });
   } catch (err) {
+    // Атомарная операция провалилась (лот изменился/раскупили/цена другая) —
+    // откатываем списание у покупателя, оно ещё не сохранено в стор.
     buyer.credits += totalCost;
     throw err;
   }
@@ -191,25 +201,158 @@ async function listActiveListings(deps, { limit = MARKET_LIMITS.DEFAULT_PAGE_SIZ
   return listings.filter(Boolean);
 }
 
+/**
+ * ЗАЯВКИ НА ПОКУПКУ (bid-сторона книги заявок, как в EVE Online) —
+ * зеркало лотов на продажу, но эскроу — не предмет, а КРЕДИТЫ покупателя.
+ * Продавец, у которого есть товар прямо сейчас, может продать НАПРЯМУЮ в
+ * такую заявку (fillBuyOrder) — мгновенная ликвидность, без ожидания, пока
+ * кто-то купит его собственный лот. Ask-сторона (createListing/
+ * purchaseListing выше) и bid-сторона (ниже) — независимые книги заявок
+ * одного и того же рынка, ровно как "Продавцы"/"Покупатели" в EVE.
+ */
+
+/**
+ * Разместить заявку на покупку. Кредиты списываются СРАЗУ (эскроу) —
+ * иначе можно было бы обещать деньги, которых нет, и заявка "прожгла" бы
+ * несуществующие кредиты в момент исполнения.
+ */
+async function createBuyOrder(deps, player, { itemId, itemName, qty, price }) {
+  const { store } = deps;
+
+  assertValidPrice(price);
+  if (!Number.isInteger(qty) || qty <= 0) {
+    throw new MarketError(MARKET_ERRORS.INSUFFICIENT_QTY);
+  }
+
+  const totalCost = qty * price;
+  if ((player.credits || 0) < totalCost) {
+    throw new MarketError(MARKET_ERRORS.INSUFFICIENT_CREDITS);
+  }
+
+  const existingOrderIds = await store.getPlayerBuyOrderIds(player.id);
+  if (existingOrderIds.length >= MARKET_LIMITS.MAX_ACTIVE_LISTINGS_PER_PLAYER) {
+    throw new MarketError(MARKET_ERRORS.LISTING_LIMIT_REACHED);
+  }
+
+  player.credits -= totalCost;
+
+  const order = {
+    id: generateBuyOrderId(),
+    buyerId: player.id,
+    itemId,
+    itemName,
+    qty,
+    price,
+    createdAt: Date.now(),
+  };
+
+  await store.saveBuyOrder(order);
+  await store.indexAddBuyOrder(order.id, order.createdAt);
+  await store.addPlayerBuyOrder(player.id, order.id);
+
+  return { player, order };
+}
+
+/**
+ * Снять свою заявку на покупку — замороженные кредиты возвращаются.
+ */
+async function cancelBuyOrder(deps, player, orderId) {
+  const { store } = deps;
+
+  const order = await store.getBuyOrder(orderId);
+  if (!order) {
+    throw new MarketError(MARKET_ERRORS.LISTING_NOT_FOUND);
+  }
+  if (order.buyerId !== player.id) {
+    throw new MarketError(MARKET_ERRORS.NOT_LISTING_OWNER);
+  }
+
+  player.credits = (player.credits || 0) + order.qty * order.price;
+
+  await store.deleteBuyOrder(orderId);
+  await store.indexRemoveBuyOrder(orderId);
+  await store.removePlayerBuyOrder(player.id, orderId);
+
+  return { player };
+}
+
+/**
+ * Продать напрямую в существующую заявку на покупку (весь объём заявки
+ * или часть). Инвентарь продавца меняется обычным способом (это его
+ * player-объект в текущей сцене); списание оставшегося объёма заявки и
+ * зачисление продавцу — атомарной операцией в сторе, чтобы два продавца
+ * не могли одновременно продать в одну и ту же последнюю единицу заявки.
+ *
+ * feeDiscount — та же скидка от жилья Приюта, что и purchaseListing.
+ */
+async function fillBuyOrder(deps, seller, orderId, qty, feeDiscount = 0) {
+  const { store } = deps;
+
+  const order = await store.getBuyOrder(orderId);
+  if (!order) {
+    throw new MarketError(MARKET_ERRORS.LISTING_NOT_FOUND);
+  }
+  if (order.buyerId === seller.id) {
+    throw new MarketError(MARKET_ERRORS.CANNOT_BUY_OWN_LISTING);
+  }
+  if (qty > order.qty) {
+    throw new MarketError(MARKET_ERRORS.INSUFFICIENT_QTY);
+  }
+
+  removeFromInventory(seller, order.itemId, qty);
+
+  const totalRevenue = order.price * qty;
+  const feePercent = Math.max(MARKET_LIMITS.LISTING_FEE_PERCENT - feeDiscount, 0);
+  const fee = Math.round((totalRevenue * feePercent) / 100);
+
+  let result;
+  try {
+    result = await store.fillBuyOrderAtomic({
+      orderId,
+      sellerId: seller.id,
+      qty,
+      expectedPrice: order.price,
+    });
+  } catch (err) {
+    // Атомарная операция провалилась (заявку уже исполнили/сняли/цена не
+    // совпала) — откатываем изъятие из инвентаря продавца, оно ещё не
+    // сохранено в стор.
+    addToInventory(seller, order.itemId, order.itemName, qty);
+    throw err;
+  }
+
+  seller.credits = (seller.credits || 0) + totalRevenue - fee;
+
+  if (result.remainingQty <= 0) {
+    await store.indexRemoveBuyOrder(orderId);
+    await store.removePlayerBuyOrder(order.buyerId, orderId);
+  }
+
+  return { seller, sale: result };
+}
+
+/**
+ * Постраничный список активных заявок на покупку — bid-сторона витрины.
+ */
+async function listActiveBuyOrders(deps, { limit = MARKET_LIMITS.DEFAULT_PAGE_SIZE, cursor } = {}) {
+  const { store } = deps;
+  const ids = await store.getBuyOrderIds({ limit, cursor });
+  const orders = await Promise.all(ids.map((id) => store.getBuyOrder(id)));
+  return orders.filter(Boolean);
+}
+
 module.exports = {
   MarketError,
   createListing,
   cancelListing,
   purchaseListing,
   listActiveListings,
+  createBuyOrder,
+  cancelBuyOrder,
+  fillBuyOrder,
+  listActiveBuyOrders,
+  // экспортируется для переиспользования в тестах и в других движках
   findInventoryItem,
   removeFromInventory,
   addToInventory,
 };
-async function purchaseListing(deps, buyer, listingId, qty, feeDiscount = 0) {
-  // ...
-  result = await store.purchaseListingAtomic({
-    listingId,
-    buyerId: buyer.id,
-    qty,
-    expectedPrice: listing.price,
-    feePercent: Math.max(MARKET_LIMITS.LISTING_FEE_PERCENT - feeDiscount, 0),
-  });
-  // ...
-}
-
