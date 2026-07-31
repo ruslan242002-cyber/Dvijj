@@ -41,6 +41,9 @@ function snapshotForQueue(player) {
   };
 }
 
+/** Ищет в очереди ближайшего по силе кандидата в пределах допуска.
+ * Чистая функция над массивом — используется и в реальном сторе (внутри
+ * атомарного обновления очереди), и в тестах напрямую. */
 function pickOpponent(queue, myEntry) {
   let bestIdx = -1;
   let bestDiff = Infinity;
@@ -58,6 +61,11 @@ function pickOpponent(queue, myEntry) {
   return { matchedEntry, queue: restQueue };
 }
 
+/**
+ * Найти случайного соперника близкой силы. Если подходящий уже ждёт в
+ * очереди — дуэль создаётся сразу (matched: true). Если нет — игрок сам
+ * встаёт в очередь (matched: false, queued: true).
+ */
 async function findRandomOpponent(deps, player) {
   const { store } = deps;
 
@@ -72,10 +80,17 @@ async function findRandomOpponent(deps, player) {
     return { matched: false, queued: true };
   }
 
-  const duel = await createDuel(deps, myEntry, matchedEntry);
+  // matchedEntry дольше ждал в очереди — ему первый ход. Раньше первым
+  // ходил тот, кто СЕЙЧАС нажал "искать соперника" (myEntry) — это
+  // позволяло фармить бесплатный первый удар спамом поиска по тем, кто
+  // уже терпеливо ждал в очереди и не в курсе, что матч только что
+  // случился. Теперь наоборот: тот, кто ждал — получает первый ход,
+  // а свежий инициатор поиска ждёт ответа.
+  const duel = await createDuel(deps, matchedEntry, myEntry);
   return { matched: true, duel };
 }
 
+/** Выйти из очереди, если соперник так и не нашёлся и игрок передумал. */
 async function leaveQueue(deps, playerId) {
   return deps.store.removeFromQueue(playerId);
 }
