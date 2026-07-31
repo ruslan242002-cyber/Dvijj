@@ -43,4 +43,47 @@ function refuelFull(ship) {
   return ship;
 }
 
-module.exports = { freshShip, shipLevelUp, refuel, refuelFull };
+/**
+ * Превращает корабль в объект формы "Fighter" (то, что реально понимает
+ * engine/combat-engine.js: name/hp/hpMax/stats{power,mind,reaction,
+ * endurance,firepower,shielding}/luck/accuracy/dodge/focus/periodic) — без
+ * этого пришлось бы писать ВТОРОЙ боевой движок только для кораблей.
+ * armor корабля становится shielding бойца, firepower — firepower;
+ * power/mind/reaction/endurance у корабля нет как отдельных понятий, так
+ * что все четыре берутся как та же огневая мощь/броня — этого достаточно,
+ * потому что модули корабля (engine/ship-skills.js) сами не используют
+ * все 4 стата так разнообразно, как личные умения персонажа.
+ */
+function shipToFighter(ship, name, bestiaryId = null) {
+  return {
+    name,
+    hp: ship.hp,
+    hpMax: ship.hpMax,
+    stats: {
+      power: ship.firepower,
+      mind: ship.firepower,
+      reaction: ship.armor,
+      endurance: ship.armor,
+      firepower: ship.firepower,
+      shielding: ship.armor,
+    },
+    luck: 5,
+    accuracy: 0.75,
+    dodge: 0.08,
+    focus: 0.7,
+    periodic: [],
+    bestiaryId,
+    equippedShipSkills: ship.equippedSkills || [],
+  };
+}
+
+/** Обратное преобразование — после боя переносит итоговые hp обратно в
+ * сам объект корабля (combat-engine.js не мутирует переданные объекты
+ * напрямую, а возвращает НОВЫЕ через spread — см. заметку про это же в
+ * game/scenes/combat.js при подключении дельты HP). */
+function applyFighterResultToShip(ship, fighterAfterCombat) {
+  ship.hp = Math.max(0, Math.round(fighterAfterCombat.hp));
+  return ship;
+}
+
+module.exports = { freshShip, shipLevelUp, refuel, refuelFull, shipToFighter, applyFighterResultToShip };
