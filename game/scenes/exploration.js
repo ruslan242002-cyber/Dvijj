@@ -25,6 +25,21 @@ const {
 } = require('./common.js');
 const { SCENES } = require('./ids.js');
 
+/** Обёртка над applyConsequence — если реальный choices/consequence-engine.js
+ * не совпадает по форме с тем, что здесь ожидается (например, другая
+ * структура CONSEQUENCE_TRIGGERS), это раньше роняло всю сцену молча —
+ * "Доложить куратору" переставал отвечать вообще. Теперь при ошибке просто
+ * логируем и продолжаем без бонуса/эффекта, вместо тишины для игрока. */
+function safeApplyConsequence(player, consequenceId) {
+  try {
+    applyConsequence(player, consequenceId);
+    return true;
+  } catch (err) {
+    console.error(`safeApplyConsequence: applyConsequence('${consequenceId}') упал:`, err.message);
+    return false;
+  }
+}
+
 function resolveExplorationEvent(player, event, zone, depth, deps, rng, prefixText = '', allowContinue = true) {
   // ВАЖНО: применяем event.flag ЗДЕСЬ, для любого типа события, а не только
   // в exploration_event_choice. Раньше это применялось только для веток с
@@ -264,7 +279,7 @@ function handleExploration(state, input, rng, deps) {
         if (result.reward.flag) { nextPlayer.flags = nextPlayer.flags || {}; nextPlayer.flags[result.reward.flag] = true; }
       }
       if (result.flag) { nextPlayer.flags = nextPlayer.flags || {}; nextPlayer.flags[result.flag] = true; }
-      if (choice.consequenceId) applyConsequence(nextPlayer, choice.consequenceId);
+      if (choice.consequenceId) safeApplyConsequence(nextPlayer, choice.consequenceId);
       if (event.flag) { nextPlayer.flags = nextPlayer.flags || {}; nextPlayer.flags[event.flag] = true; }
       return safeReturnChoice(result.text || event.text, nextPlayer, zone, depth);
     }
@@ -273,12 +288,13 @@ function handleExploration(state, input, rng, deps) {
       const player = { ...state.player };
       const zone = state.zone, depth = state.depth;
       if (input === 'Доложить куратору') {
-        applyConsequence(player, 'report_anomaly_find');
-        const rep = CONSEQUENCE_TRIGGERS.report_anomaly_find.immediate.reputation;
-        return safeReturnChoice(`Куратор внимательно выслушивает доклад и кивает. +${rep} репутации станции.`, player, zone, depth);
+        safeApplyConsequence(player, 'report_anomaly_find');
+        const rep = CONSEQUENCE_TRIGGERS?.report_anomaly_find?.immediate?.reputation;
+        const repLine = rep ? ` +${rep} репутации станции.` : '';
+        return safeReturnChoice(`Куратор внимательно выслушивает доклад и кивает.${repLine}`, player, zone, depth);
       }
       if (input === 'Утаить находку') {
-        applyConsequence(player, 'hide_anomaly_find');
+        safeApplyConsequence(player, 'hide_anomaly_find');
         return safeReturnChoice('Ты решаешь промолчать об увиденном. Что-то в этом решении отзывается в теле неприятным холодом — но, возможно, не только в теле.', player, zone, depth);
       }
       return { reply: { text: 'Выбери: доложить куратору или утаить находку.', buttons: ['Доложить куратору', 'Утаить находку'] }, nextState: state };
