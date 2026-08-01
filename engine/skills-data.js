@@ -91,6 +91,25 @@ const SKILLS = {
     cd: 4, usesFocus: true, damaging: true, shieldPierce: 0.5, shieldShred: 10,
     formula: (a) => a.stats.power * 1.0 + a.stats.reaction * 1.0,
   },
+
+  // ── Кузница: разрушение среды/поля боя (не прямой урон-фокус, а тлеющий
+  // индустриальный ад — обжигает броню изнутри, добивает долго и грязно) ──
+  molten_discharge: {
+    id: 'molten_discharge', name: 'Плавильный выброс', station: 'Кузница', unlockLevel: 1,
+    cd: 3, usesFocus: true, damaging: true, shieldShred: 8,
+    formula: (a) => a.stats.power * 0.8 + a.stats.endurance * 0.5,
+  },
+  conveyor_collapse: {
+    id: 'conveyor_collapse', name: 'Обвал конвейера', station: 'Кузница', unlockLevel: 15,
+    cd: 4, usesFocus: true, damaging: true,
+    formula: (a) => a.stats.power * 1.5 + a.stats.endurance * 0.7,
+  },
+  melting_point: {
+    id: 'melting_point', name: 'Точка плавления', station: 'Кузница', unlockLevel: 30,
+    cd: 4, usesFocus: true, damaging: true, pure: true,
+    formula: (a) => a.stats.power * 0.9 + a.stats.endurance * 0.6,
+    applyDot: { type: 'dot', amount: 18, turnsLeft: 4 },
+  },
 };
 
 const STIMS = {
