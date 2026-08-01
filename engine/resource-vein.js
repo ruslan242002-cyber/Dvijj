@@ -114,13 +114,29 @@ function bossHpFor(veinTier, participantsPerThisBoss) {
   return Math.round(1400 * veinTier * Math.max(1, participantsPerThisBoss / PLAYERS_PER_BOSS));
 }
 
+/** Боевые статы босса — масштабируются тиром жилы, намеренно тяжёлые
+ * (одиночке не одолеть, вдвоём — на пределе, см. bossHpFor). Полноценная
+ * форма Fighter (не только hp/hpMax) — иначе combat-engine.js падает при
+ * первой же попытке атаковать. */
+function bossStatsFor(veinTier) {
+  const base = 30 + veinTier * 12;
+  return { power: base, mind: base, reaction: base * 0.8, endurance: base, firepower: base * 1.1, shielding: Math.round(base * 0.5) };
+}
+
 function spawnBosses(vein, participantCount) {
   const count = bossCountForParticipants(participantCount);
   const perBoss = Math.ceil(participantCount / count);
   vein.bossesSpawned = true;
   vein.bosses = Array.from({ length: count }, (_, i) => {
     const hp = bossHpFor(vein.tier, perBoss);
-    return { id: `${vein.id}_boss_${i + 1}`, hp, hpMax: hp, alive: true };
+    return {
+      id: `${vein.id}_boss_${i + 1}`,
+      name: `Страж жилы ${i + 1}`,
+      hp, hpMax: hp,
+      stats: bossStatsFor(vein.tier),
+      luck: 10, accuracy: 0.8, dodge: 0.06, focus: 0.75, periodic: [],
+      alive: true,
+    };
   });
   return vein.bosses;
 }
@@ -147,12 +163,25 @@ function nextBossToJoin(vein) {
 
 // ── Награда ──
 
-/** Раздаётся ТОЛЬКО когда все боссы жилы мертвы. */
+/** Раздаётся ТОЛЬКО когда все боссы жилы мертвы. Пропорционально ВКЛАДУ
+ * (damageDealt) каждого участника — не поровну. Это важно: если PvP на
+ * жиле ворует часть чужого вклада (см. engine/vein-pvp.js), кража должна
+ * реально что-то менять в итоговой доле, а не быть косметикой. */
 function distributeVeinRewards(vein, participantIds) {
   if (!allBossesDead(vein) || !participantIds.length) return {};
   const totalReward = vein.durabilityMax * 2;
-  const share = Math.floor(totalReward / participantIds.length);
-  return participantIds.reduce((acc, id) => { acc[id] = share; return acc; }, {});
+  const totalContribution = participantIds.reduce((sum, id) => sum + (vein.participants[id]?.damageDealt || 0), 0);
+  if (totalContribution <= 0) {
+    // Никто формально не копал (все участвовали только в боях с боссом) —
+    // страхуемся от деления на 0, делим поровну как раньше.
+    const share = Math.floor(totalReward / participantIds.length);
+    return participantIds.reduce((acc, id) => { acc[id] = share; return acc; }, {});
+  }
+  return participantIds.reduce((acc, id) => {
+    const contribution = vein.participants[id]?.damageDealt || 0;
+    acc[id] = Math.floor(totalReward * (contribution / totalContribution));
+    return acc;
+  }, {});
 }
 
 module.exports = {
