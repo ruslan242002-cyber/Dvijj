@@ -123,6 +123,31 @@ function aggregatePassiveEffects(unlockedIds = []) {
  * отдельное, пока не принято; здесь только сама механика лимита и
  * экипировки, готовая к любому будущему способу их выдавать.
  */
+/**
+ * ЗНАНИЕ vs ЭКИПИРОВКА ПАССИВОК — в духе того, что вы описали из
+ * Атраксиса (пассивки качаются через находимые/покупаемые книги), но не
+ * копия буквально: вместо "прокачки книгами до бесконечности" у нас
+ * готовые ступени I/II/III, и предмет ("Модуль обучения" — см.
+ * engine/training-modules.js) СРАЗУ открывает конкретную ступень целиком,
+ * а не постепенно левелит. player.knownPassives — какие пассивки вообще
+ * изучены (может быть больше, чем слотов); player.equippedPassives —
+ * какие из известных активны прямо сейчас (ограничено passiveSlotsFor).
+ */
+function knowsPassive(player, passiveId) {
+  return (player.knownPassives || []).includes(passiveId);
+}
+
+/** Изучить пассивку — вызывается при использовании модуля обучения
+ * (engine/training-modules.js). НЕ экипирует автоматически — изучение и
+ * активация разделены, чтобы игрок сам решал, что держать в ограниченных
+ * слотах. */
+function learnPassive(player, passiveId) {
+  if (!PASSIVE_SKILLS[passiveId]) return { ok: false, reason: 'UNKNOWN_PASSIVE' };
+  if (knowsPassive(player, passiveId)) return { ok: false, reason: 'ALREADY_KNOWN' };
+  player.knownPassives = [...(player.knownPassives || []), passiveId];
+  return { ok: true };
+}
+
 const DEFAULT_PASSIVE_SLOTS = 3;
 const MAX_PASSIVE_SLOTS = 10;
 
@@ -134,6 +159,7 @@ function passiveSlotsFor(player) {
  * стоит такая же ступень/категория и т.п. Не мутирует player. */
 function canEquipPassive(player, passiveId) {
   if (!PASSIVE_SKILLS[passiveId]) return { ok: false, reason: 'UNKNOWN_PASSIVE' };
+  if (!knowsPassive(player, passiveId)) return { ok: false, reason: 'NOT_LEARNED' };
   const equipped = player.equippedPassives || [];
   if (equipped.includes(passiveId)) return { ok: false, reason: 'ALREADY_EQUIPPED' };
   if (equipped.length >= passiveSlotsFor(player)) return { ok: false, reason: 'NO_FREE_SLOT' };
@@ -156,6 +182,6 @@ function unequipPassive(player, passiveId) {
 }
 
 module.exports = {
-  PASSIVE_SKILLS, aggregatePassiveEffects,
+  PASSIVE_SKILLS, aggregatePassiveEffects, knowsPassive, learnPassive,
   DEFAULT_PASSIVE_SLOTS, MAX_PASSIVE_SLOTS, passiveSlotsFor, canEquipPassive, equipPassive, unequipPassive,
 };
