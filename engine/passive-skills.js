@@ -151,8 +151,18 @@ function learnPassive(player, passiveId) {
 const DEFAULT_PASSIVE_SLOTS = 3;
 const MAX_PASSIVE_SLOTS = 10;
 
+const SLOTS_PER_LEVEL_MILESTONE = 10; // +1 слот за каждые 10 уровней персонажа
+
+/** Слоты растут с уровнем персонажа — тот же принцип "чем дальше играешь,
+ * тем больше открыто", что и у умений (1/15/30). Level 1-9: 3 слота
+ * (стартовые), дальше +1 за каждые 10 уровней, потолок — MAX_PASSIVE_SLOTS.
+ * player.bonusPassiveSlots — задел на будущее (награда за квест/ивент),
+ * складывается поверх уровневой формулы, не заменяет её. */
 function passiveSlotsFor(player) {
-  return Math.min(MAX_PASSIVE_SLOTS, player.passiveSlots || DEFAULT_PASSIVE_SLOTS);
+  const level = player.level || 1;
+  const levelBonus = Math.floor(level / SLOTS_PER_LEVEL_MILESTONE);
+  const bonusSlots = player.bonusPassiveSlots || 0;
+  return Math.min(MAX_PASSIVE_SLOTS, DEFAULT_PASSIVE_SLOTS + levelBonus + bonusSlots);
 }
 
 /** Можно ли добавить эту пассивку прямо сейчас — не хватает слота, уже
@@ -183,5 +193,5 @@ function unequipPassive(player, passiveId) {
 
 module.exports = {
   PASSIVE_SKILLS, aggregatePassiveEffects, knowsPassive, learnPassive,
-  DEFAULT_PASSIVE_SLOTS, MAX_PASSIVE_SLOTS, passiveSlotsFor, canEquipPassive, equipPassive, unequipPassive,
+  DEFAULT_PASSIVE_SLOTS, MAX_PASSIVE_SLOTS, SLOTS_PER_LEVEL_MILESTONE, passiveSlotsFor, canEquipPassive, equipPassive, unequipPassive,
 };
