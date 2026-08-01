@@ -18,6 +18,7 @@ const { cantinaBoard, contractsBoard } = require('./locations/cantina.js');
 const {
   hubMessage, statusText, stationButtons, startJourney, districtGroupsFor, ZONE_BUTTONS, stationArrivalCard,
 } = require('./common.js');
+const { travelScreen } = require('./travel.js');
 const { SCENES } = require('./ids.js');
 
 function resolveStationAction(input, state, deps, rng, playerId) {
@@ -49,7 +50,7 @@ function resolveStationAction(input, state, deps, rng, playerId) {
       nextState: { scene: 'loc_decon', player: state.player }
     };
   }
-  if (input === 'Кантина') {
+  if (input === 'Бар') {
     return cantinaBoard(state.player);
   }
   if (input === 'Контракты') {
@@ -89,6 +90,9 @@ function resolveStationAction(input, state, deps, rng, playerId) {
   if (input === 'Исследовать') {
     return startJourney(state.player, 'explore', { zone: state.player.zone || 'blue', depth: 0 }, rng);
   }
+  if (input === 'Полёт') {
+    return travelScreen(state.player, 0, '🚀 Врата открываются — курс в открытый космос.\n\n');
+  }
   return null;
 }
 
@@ -106,10 +110,10 @@ function stationDefaultView(deps, player, rng) {
   };
 }
 
-function handleHub(state, input, rng, deps, playerId) {
+async function handleHub(state, input, rng, deps, playerId) {
   switch (state.scene) {
     case SCENES.STATION: {
-      const direct = resolveStationAction(input, state, deps, rng, playerId);
+      const direct = await resolveStationAction(input, state, deps, rng, playerId);
       if (direct) return direct;
 
       const groups = districtGroupsFor(state.player);
@@ -123,6 +127,18 @@ function handleHub(state, input, rng, deps, playerId) {
           if (stationEvent.reward.credits) player.credits = (player.credits || 0) + stationEvent.reward.credits;
           if (stationEvent.reward.reputation) player.reputation = (player.reputation || 0) + stationEvent.reward.reputation;
         }
+
+        // Группа из одной кнопки (Медблок, В глубь, Дуэль, Координатор,
+        // Покинуть) — не тратим отдельный экран "выбери, что внутри",
+        // сразу выполняем единственное действие.
+        if (group.buttons.length === 1) {
+          const direct = await resolveStationAction(group.buttons[0], { ...state, player }, deps, rng, playerId);
+          if (direct && prefix) {
+            return { ...direct, reply: { ...direct.reply, text: `${prefix}${direct.reply.text}` } };
+          }
+          return direct;
+        }
+
         return {
           reply: { text: `${prefix}📍 ${group.label}`, buttons: [...group.buttons, 'Назад'] },
           nextState: { scene: 'district_hub', player, groupLabel: group.label }
@@ -135,7 +151,7 @@ function handleHub(state, input, rng, deps, playerId) {
       if (input === 'Назад') {
         return stationDefaultView(deps, state.player, rng);
       }
-      const direct = resolveStationAction(input, state, deps, rng, playerId);
+      const direct = await resolveStationAction(input, state, deps, rng, playerId);
       if (direct) return direct;
 
       const groups = districtGroupsFor(state.player);
