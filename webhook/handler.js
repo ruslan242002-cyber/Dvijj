@@ -3,7 +3,7 @@
 const { step } = require('../game/router.js');
 
 async function handleVkEvent(body, deps) {
-  const { store, vk, rng = Math.random, confirmationCode, secret, getProfileLink, resolveEnemyImage, marketStore, pvpStore } = deps;
+  const { store, vk, rng = Math.random, confirmationCode, secret, getProfileLink, resolveEnemyImage, marketStore, pvpStore, ambushStore } = deps;
 
   if (body.type === 'confirmation') {
     return confirmationCode || '';
@@ -23,6 +23,8 @@ async function handleVkEvent(body, deps) {
       ...(getProfileLink ? { getProfileLink: () => getProfileLink(peerId) } : {}),
       marketStore,
       pvpStore,
+      ambushStore,
+      store,
     };
 
     let reply, nextState;
