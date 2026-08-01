@@ -46,17 +46,20 @@ function stationArrivalCard(player, rng = Math.random) {
 
 const FACTIONS = ['Приют', 'Терминус', 'Арсенал', 'Вуаль'];
 
+const { unlockedSkillsForPlayer } = require('../../engine/skills-data.js');
+const { freshShip } = require('../../engine/ship.js');
+
 const FACTION_KIT = {
-  'Приют':    { skills: ['heal_field'], statBias: { mind: 6, endurance: 4 } },
-  'Терминус': { skills: ['living_heat'], statBias: { endurance: 8, power: 2 } },
-  'Арсенал':  { skills: ['plasma_bolt', 'overload'], statBias: { power: 6, firepowerBonus: 4 } },
-  'Вуаль':    { skills: ['anima_drain', 'corrosion'], statBias: { mind: 6, reaction: 4 } }
+  'Приют':    { statBias: { mind: 6, endurance: 4 } },
+  'Терминус': { statBias: { endurance: 8, power: 2 } },
+  'Арсенал':  { statBias: { power: 6, firepowerBonus: 4 } },
+  'Вуаль':    { statBias: { mind: 6, reaction: 4 } }
 };
 
 const MAX_EQUIPPED_SKILLS = 3;
 const RESET_COMMAND = 'Сброс';
 
-const HUB_BUTTONS = ['Исследовать', 'Мостик', 'Отсек', 'Декон-камера', 'Кантина', 'Контракты', 'Биржа', 'Дуэль', 'Жильё', 'Врата Тракта', 'Статус', 'Профиль', 'Сброс'];
+const HUB_BUTTONS = ['Исследовать', 'Мостик', 'Отсек', 'Декон-камера', 'Бар', 'Контракты', 'Биржа', 'Дуэль', 'Жильё', 'Врата Тракта', 'Статус', 'Профиль', 'Сброс'];
 const ZONE_BUTTONS = ['Патрулируемый', 'Спорный', 'Открытый космос', 'К другим станциям', 'Назад'];
 const ZONE_BY_LABEL = { 'Патрулируемый': 'blue', 'Спорный': 'yellow', 'Открытый космос': 'red' };
 const ZONE_LABEL = { blue: 'Патрулируемый сектор', yellow: 'Спорный сектор', red: 'Открытый космос' };
@@ -99,7 +102,7 @@ function trainerDrone() {
 
 function freshPlayer(name, faction) {
   const bias = (FACTION_KIT[faction] || {}).statBias || {};
-  const starterSkills = (FACTION_KIT[faction] || {}).skills || [];
+  const starterSkills = unlockedSkillsForPlayer(faction, 1).map((s) => s.id);
   return {
     name, faction,
     hp: 220, hpMax: 220,
@@ -116,6 +119,8 @@ function freshPlayer(name, faction) {
     statPoints: 5,
     equippedSkills: starterSkills.slice(0, MAX_EQUIPPED_SKILLS),
     inventory: [],
+    tripCargo: [],
+    ship: freshShip(),
     credits: 0,
     radiation: 0,
     zone: 'blue',
@@ -131,10 +136,19 @@ function freshPlayer(name, faction) {
 
 function equippedSkillIds(player) {
   if (player.equippedSkills && player.equippedSkills.length) return player.equippedSkills;
-  return (FACTION_KIT[player.faction] || {}).skills || [];
+  return unlockedSkillsForPlayer(player.faction, player.level || 1).map((s) => s.id);
 }
-function skillButtons(player) {
-  return equippedSkillIds(player).map((id) => SKILLS[id]?.name).filter(Boolean);
+function skillButtons(player, cooldowns = {}) {
+  return equippedSkillIds(player)
+    .filter((id) => !(cooldowns[id] > 0))
+    .map((id) => SKILLS[id]?.name)
+    .filter(Boolean);
+}
+function skillCooldownNote(player, cooldowns = {}) {
+  const onCd = equippedSkillIds(player)
+    .filter((id) => cooldowns[id] > 0)
+    .map((id) => `⏳ ${SKILLS[id]?.name}: ещё ${cooldowns[id]} х.`);
+  return onCd.length ? onCd.join('\n') : '';
 }
 function skillIdByName(name) {
   return Object.values(SKILLS).find((s) => s.name === name)?.id || null;
@@ -157,7 +171,11 @@ function sellInventory(player) {
 
 function stationButtons(deps, player) {
   const link = typeof deps.getProfileLink === 'function' ? deps.getProfileLink() : null;
-  const groups = (DISTRICT_GROUPS[player?.faction] || DISTRICT_GROUPS['Приют']).map((g) => g.label);
+  const groups = (DISTRICT_GROUPS[player?.faction] || DISTRICT_GROUPS['Приют']).map((g) => {
+    if (g.label === 'Контракты') return { label: 'Контракты', color: 'positive' };
+    if (g.label === 'Врата Тракта') return { label: 'Врата Тракта', color: 'negative' };
+    return g.label;
+  });
   const flatTail = ['Сброс'];
   return link
     ? [{ label: 'Открыть профиль', url: link }, ...groups, ...flatTail]
@@ -234,32 +252,48 @@ function stormRewardMult() {
 
 const DISTRICT_GROUPS = {
   'Приют': [
-    { label: 'Кабинет куратора', buttons: ['Мостик', 'Статус'] },
-    { label: 'Медотсек', buttons: ['Отсек', 'Декон-камера'] },
-    { label: 'Жилые палубы', buttons: ['Кантина', 'Биржа', 'Жильё'] },
-    { label: 'Причал', buttons: ['Врата Тракта', 'Исследовать'] },
-    { label: 'Двор станции', buttons: ['Дуэль', 'Контракты'] },
+    { label: 'Штаб', buttons: ['Мостик', 'Статус'] },
+    { label: 'Отсек', buttons: ['Отсек'] },
+    { label: 'Декон-камера', buttons: ['Декон-камера'] },
+    { label: 'Палубы', buttons: ['Бар', 'Биржа', 'Жильё'] },
+    { label: 'Исследовать', buttons: ['Исследовать'] },
+    { label: 'Дуэль', buttons: ['Дуэль'] },
+    { label: 'Контракты', buttons: ['Контракты'] },
+    { label: 'Врата Тракта', buttons: ['Врата Тракта'] },
+    { label: 'Полёт', buttons: ['Полёт'] },
   ],
   'Терминус': [
-    { label: 'Штаб гарнизона', buttons: ['Мостик', 'Статус'] },
-    { label: 'Ремонтный блок', buttons: ['Отсек', 'Декон-камера'] },
-    { label: 'Казармы', buttons: ['Кантина', 'Биржа', 'Жильё'] },
-    { label: 'Рубеж', buttons: ['Врата Тракта', 'Исследовать'] },
-    { label: 'Плац', buttons: ['Дуэль', 'Контракты', 'Архив теней'] },
+    { label: 'Гарнизон', buttons: ['Мостик', 'Статус'] },
+    { label: 'Отсек', buttons: ['Отсек'] },
+    { label: 'Декон-камера', buttons: ['Декон-камера'] },
+    { label: 'Казармы', buttons: ['Бар', 'Биржа', 'Жильё'] },
+    { label: 'Рубеж', buttons: ['Исследовать', 'Архив теней'] },
+    { label: 'Дуэль', buttons: ['Дуэль'] },
+    { label: 'Контракты', buttons: ['Контракты'] },
+    { label: 'Врата Тракта', buttons: ['Врата Тракта'] },
+    { label: 'Полёт', buttons: ['Полёт'] },
   ],
   'Арсенал': [
-    { label: 'Командный пункт', buttons: ['Мостик', 'Статус'] },
-    { label: 'Мастерские', buttons: ['Отсек', 'Декон-камера'] },
-    { label: 'Склад деталей', buttons: ['Кантина', 'Биржа', 'Жильё'] },
-    { label: 'Стапели', buttons: ['Врата Тракта', 'Исследовать'] },
-    { label: 'Стрельбище', buttons: ['Дуэль', 'Контракты'] },
+    { label: 'Штаб', buttons: ['Мостик', 'Статус'] },
+    { label: 'Отсек', buttons: ['Отсек'] },
+    { label: 'Декон-камера', buttons: ['Декон-камера'] },
+    { label: 'Склад', buttons: ['Бар', 'Биржа', 'Жильё'] },
+    { label: 'Исследовать', buttons: ['Исследовать'] },
+    { label: 'Дуэль', buttons: ['Дуэль'] },
+    { label: 'Контракты', buttons: ['Контракты'] },
+    { label: 'Врата Тракта', buttons: ['Врата Тракта'] },
+    { label: 'Полёт', buttons: ['Полёт'] },
   ],
   'Вуаль': [
-    { label: 'Диспетчерская', buttons: ['Мостик', 'Статус'] },
-    { label: 'Сборочный цех', buttons: ['Отсек', 'Декон-камера', 'Мастерская'] },
-    { label: 'Жилой модуль', buttons: ['Кантина', 'Биржа', 'Жильё'] },
-    { label: 'Причал верфи', buttons: ['Врата Тракта', 'Исследовать'] },
-    { label: 'Испытательный полигон', buttons: ['Дуэль', 'Контракты'] },
+    { label: 'Штаб', buttons: ['Мостик', 'Статус'] },
+    { label: 'Цех', buttons: ['Отсек', 'Мастерская'] },
+    { label: 'Декон-камера', buttons: ['Декон-камера'] },
+    { label: 'Модуль', buttons: ['Бар', 'Биржа', 'Жильё'] },
+    { label: 'Исследовать', buttons: ['Исследовать'] },
+    { label: 'Дуэль', buttons: ['Дуэль'] },
+    { label: 'Контракты', buttons: ['Контракты'] },
+    { label: 'Врата Тракта', buttons: ['Врата Тракта'] },
+    { label: 'Полёт', buttons: ['Полёт'] },
   ],
 };
 
@@ -277,7 +311,7 @@ module.exports = {
   FACTIONS, FACTION_KIT, MAX_EQUIPPED_SKILLS, RESET_COMMAND,
   ZONE_BUTTONS, ZONE_BY_LABEL, ZONE_LABEL, MIN_LEVEL_FOR_ZONE, CURATORS,
   ZONE_TRAVEL_PHRASES, STATION_TRAVEL_PHRASES, DISTRICT_GROUPS,
-  trainerDrone, freshPlayer, equippedSkillIds, skillButtons, skillIdByName,
+  trainerDrone, freshPlayer, equippedSkillIds, skillButtons, skillIdByName, skillCooldownNote,
   addToInventory, sellInventory, stationButtons, hubMessage, statusText,
   startJourney, buildGuardianEnemy, journeyContinueButtons, safeReturnChoice,
   stormRewardMult, districtGroupsFor, stationArrivalCard,
