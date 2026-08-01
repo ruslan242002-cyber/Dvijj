@@ -23,7 +23,7 @@ function sectorsForZone(zone) {
 // Как часто вместо обычной "находки" встречается ИМЕННОЙ сектор (с историей
 // и секретами), если игрок туда ещё не заходил. Не 100%, чтобы не превращать
 // каждый шаг в лор-дамп — обычные встречи остаются основой темпа игры.
-const SECTOR_VISIT_CHANCE = 0.35;
+const SECTOR_VISIT_CHANCE = 0.15;
 
 function maybeVisitSector(player, zone, rng = Math.random) {
   const candidates = sectorsForZone(zone).filter((id) => {
@@ -75,12 +75,24 @@ function maybeVisitSector(player, zone, rng = Math.random) {
  * настоящему player, без сдвига, чтобы глубина вылазки не открывала
  * сюжетный контент раньше времени.
  */
+// Раньше: если хоть один шаблон динамического события подходил игроку,
+// он ВСЕГДА перехватывал ролл — 100% случаев, без исключений. Из-за этого,
+// пока не исчерпаны одноразовые сюжетные флаги (curator_message,
+// stranded_signal и т.д.), обычные боевые встречи не могли выпасть вообще
+// — именно поэтому казалось, что монстров "очень мало", особенно в
+// голубой зоне на старте. Теперь у динамических событий тот же
+// вероятностный гейт, что и у именных секторов — конкурируют за место,
+// а не гарантированно перехватывают его.
+const DYNAMIC_EVENT_CHANCE = 0.15;
+
 function rollEventWithContext(player, zone, rng = Math.random, depth = 0) {
   const sectorVisit = maybeVisitSector(player, zone, rng);
   if (sectorVisit) return sectorVisit;
 
-  const dynamicEvent = generateEvent(player, zone, rng);
-  if (dynamicEvent) return { ...dynamicEvent, source: 'dynamic' };
+  if (rng() < DYNAMIC_EVENT_CHANCE) {
+    const dynamicEvent = generateEvent(player, zone, rng);
+    if (dynamicEvent) return { ...dynamicEvent, source: 'dynamic' };
+  }
 
   const effectiveLevel = depth > 0 ? (player.level ?? 1) + Math.floor(depth / 2) : player.level ?? null;
   return { ...rollEvent(zone, rng, effectiveLevel), source: 'procedural' };
