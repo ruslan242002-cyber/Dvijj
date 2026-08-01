@@ -1,55 +1,54 @@
-/**
- * Обработчик событий VK Callback API. Логика отделена от транспорта:
- * handleVkEvent(body, deps) — чистая асинхронная функция, deps можно
- * подменить в тестах (fake store, fake vk-клиент), поэтому весь сценарий
- * "пришло сообщение -> обновили состояние -> отправили ответ" проверяется
- * без единого реального запроса в интернет.
- *
- * Настройка на стороне ВК (один раз, 5 минут):
- *   1. Управление сообществом → Работа с API → Callback API → Включить
- *   2. URL сервера — https://ваш-проект.vercel.app/api/vk
- *   3. Строка/секретный ключ — придумайте и впишите такое же значение
- *      в переменные окружения VK_CONFIRMATION_CODE / VK_CALLBACK_SECRET
- *   4. Типы событий — включите "Новое сообщение"
- *   5. Нажмите "Подтвердить" рядом с URL — если всё настроено, ВК напишет
- *      "Сервер подтверждён"
- */
 'use strict';
 
 const { step } = require('../game/router.js');
+const { broadcastToAllPlayers } = require('../lib/broadcast.js');
 
 async function handleVkEvent(body, deps) {
-  const { store, vk, rng = Math.random, confirmationCode, secret, getProfileLink, resolveEnemyImage, marketStore, pvpStore } = deps;
+  const { store, vk, rng = Math.random, confirmationCode, secret, getProfileLink, resolveEnemyImage, marketStore, pvpStore, ambushStore, knownPlayersStore, veinStore } = deps;
 
-  // confirmation проверяем ДО секрета: VK не всегда присылает secret в этом
-  // событии, и не должен — это просто "рукопожатие", секрет защищает
-  // только настоящие события (message_new и т.п.), см. официальные примеры VK
   if (body.type === 'confirmation') {
     return confirmationCode || '';
   }
 
   if (secret && body.secret !== secret) {
-    // Не совпал секрет — отвечаем "ok", чтобы ВК не долбил ретраями, но ничего не делаем
     return 'ok';
   }
 
   if (body.type === 'message_new') {
-    const message = body.object?.message || body.object; // разные версии API кладут по-разному
+    const message = body.object?.message || body.object;
     const peerId = message.peer_id ?? message.from_id;
     const text = message.text || '';
 
     const prevState = await store.get(peerId);
+    if (knownPlayersStore) {
+      // Не блокируем основной ответ игроку, если трекинг вдруг подведёт —
+      // рассылка это второстепенная функция, а не критичный путь.
+      knownPlayersStore.trackPlayer(peerId).catch((err) => console.error('trackPlayer упал:', err.message));
+    }
     const routerDeps = {
       ...(getProfileLink ? { getProfileLink: () => getProfileLink(peerId) } : {}),
       marketStore,
       pvpStore,
+      ambushStore,
+      veinStore,
+      store,
     };
 
-    // ВАЖНО: step() — async (биржа и PvP делают запросы в Redis), поэтому
-    // await здесь обязателен. Без него step(...) возвращает Promise, а не
-    // {reply, nextState} — reply/nextState становятся undefined, и
-    // store.set(peerId, undefined) роняет Upstash с ошибкой 400.
-    const { reply, nextState } = await step(prevState, text, rng, routerDeps, peerId);
+    let reply, nextState, veinJustSpawned;
+    try {
+      ({ reply, nextState, veinJustSpawned } = await step(prevState, text, rng, routerDeps, peerId));
+    } catch (err) {
+      console.error('vk webhook: step() упал, возвращаю игрока на станцию:', err);
+      const player = prevState?.player;
+      if (player) {
+        nextState = { scene: 'station', player };
+        reply = { text: '⚠️ Что-то пошло не так на этом экране. Возвращаю тебя на станцию — прогресс не потерян.', buttons: [] };
+      } else {
+        nextState = { scene: 'start' };
+        reply = { text: '⚠️ Что-то пошло не так. Начнём заново — напиши что угодно.', buttons: [] };
+      }
+    }
+
     await store.set(peerId, nextState);
 
     let attachment;
@@ -57,10 +56,28 @@ async function handleVkEvent(body, deps) {
       attachment = await resolveEnemyImage(reply.imageKey).catch(() => null);
     }
     await vk.sendMessage(peerId, reply.text, reply.buttons, attachment);
+
+    // Жила появилась именно на этом шаге — рассылаем всем известным
+    // игрокам, не блокируя ответ текущему (он уже получил свой, выше).
+    // Тот, кто "нашёл" жилу этим визитом на станцию, тоже получит
+    // уведомление в общей рассылке — не выделяем его отдельно, чтобы не
+    // усложнять текст.
+    if (veinJustSpawned && knownPlayersStore) {
+      (async () => {
+        try {
+          const allPlayers = await knownPlayersStore.getAllKnownPlayers();
+          const text = `⚡ ОБНАРУЖЕНА ЖИЛА РЕСУРСА\n\nТ${veinJustSpawned.tier} · ${veinJustSpawned.resource}\n\nКорабли уже слетаются — набери «⛏️ Жила» на хабе станции, чтобы присоединиться.`;
+          const result = await broadcastToAllPlayers(vk, allPlayers, text, []);
+          console.log(`рассылка о жиле: отправлено ${result.sent}, не удалось ${result.failed}`);
+        } catch (err) {
+          console.error('рассылка о появлении жилы упала:', err.message);
+        }
+      })();
+    }
+
     return 'ok';
   }
 
-  // Любой другой тип события — подтверждаем получение и игнорируем
   return 'ok';
 }
 
