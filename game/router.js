@@ -31,6 +31,7 @@ const { handleCuratorQuest } = require('./scenes/quests/curator.js');
 const { handleMarket } = require('./scenes/market.js');
 const { handlePvp } = require('./scenes/pvp.js');
 const { handleHousing } = require('./scenes/housing.js');
+const { handleTravel } = require('./scenes/travel.js');
 
 // scene -> обработчик. Несколько сцен могут указывать на один и тот же
 // модуль (например STATION и DISTRICT_HUB оба идут в handleHub) — каждый
@@ -76,12 +77,21 @@ const SCENE_HANDLERS = {
 
   [SCENES.MARKET_HUB]: handleMarket,
   [SCENES.MARKET_SELL_PICK]: handleMarket,
+  [SCENES.MARKET_SELL_PRICE]: handleMarket,
+  [SCENES.MARKET_MY_LISTINGS]: handleMarket,
+  [SCENES.MARKET_ITEM_BOOK]: handleMarket,
+  [SCENES.MARKET_BUY_QTY]: handleMarket,
 
   [SCENES.PVP_MENU]: handlePvp,
   [SCENES.PVP_DUEL]: handlePvp,
 
   [SCENES.HOUSING_HUB]: handleHousing,
   [SCENES.HOUSING_ITEM_PICK]: handleHousing,
+
+  [SCENES.SHIP_TRAVEL]: handleTravel,
+  [SCENES.SHIP_PRE_COMBAT]: handleTravel,
+  [SCENES.SHIP_COMBAT]: handleTravel,
+  [SCENES.SHIP_TRADER]: handleTravel,
 };
 
 const RESET_REPLY = {
