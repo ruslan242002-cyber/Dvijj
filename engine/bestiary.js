@@ -196,6 +196,7 @@ const BESTIARY = {
     loot: [
       { id: 'energoyadro', name: 'Энергоядро', chance: 0.05 },
       { id: 'splav_nihron', name: 'Сплав «Нихрон»', chance: 0.03 },
+      { id: 'oskolok_bezdny', name: 'Осколок Бездны', chance: 0.02 },
     ],
   },
   trakt_eho_matka: {
@@ -208,6 +209,7 @@ const BESTIARY = {
       { id: 'matochnoe_yadro', name: 'Маточное ядро', chance: 0.04 },
       { id: 'eho_ikra', name: 'Эхо-икра', chance: 0.05 },
       { id: 'redkaya_matrica_rosta', name: 'Редкая матрица роста', chance: 0.01 },
+      { id: 'oskolok_bezdny', name: 'Осколок Бездны', chance: 0.02 },
     ],
   },
 };
