@@ -46,10 +46,19 @@ const SCENES = Object.freeze({
 
   MARKET_HUB: 'market_hub',
   MARKET_SELL_PICK: 'market_sell_pick',
+  MARKET_SELL_PRICE: 'market_sell_price',
+  MARKET_MY_LISTINGS: 'market_my_listings',
+  MARKET_ITEM_BOOK: 'market_item_book',
+  MARKET_BUY_QTY: 'market_buy_qty',
   PVP_MENU: 'pvp_menu',
   PVP_DUEL: 'pvp_duel',
   HOUSING_HUB: 'housing_hub',
   HOUSING_ITEM_PICK: 'housing_item_pick',
+
+  SHIP_TRAVEL: 'ship_travel',
+  SHIP_PRE_COMBAT: 'ship_pre_combat',
+  SHIP_COMBAT: 'ship_combat',
+  SHIP_TRADER: 'ship_trader',
 });
 
 module.exports = { SCENES };
