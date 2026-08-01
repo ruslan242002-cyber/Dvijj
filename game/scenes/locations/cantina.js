@@ -48,7 +48,7 @@ function cantinaBoard(player) {
 
   if (quests.length === 0 && !arcQuest) {
     return {
-      reply: { text: `🍸 КАНТИНА\n\n${greeting ? `${greeting}\n\n` : ''}Куратору сейчас нечего тебе предложить.`, buttons: ['Назад'], imageKey: imageForCurator(player.faction) },
+      reply: { text: `🍸 БАР\n\n${greeting ? `${greeting}\n\n` : ''}Куратору сейчас нечего тебе предложить.`, buttons: ['Назад'], imageKey: imageForCurator(player.faction) },
       nextState: { scene: 'loc_cantina', player }
     };
   }
@@ -56,7 +56,7 @@ function cantinaBoard(player) {
   if (arcQuest) lines.push(`✨ Куратор ${CURATORS[player.faction] || ''} хочет поговорить лично: «${arcQuest.name}»`);
   const buttons = [...quests.map((q) => q.title), ...(arcQuest ? [`Поговорить: ${arcQuest.name}`] : []), 'Назад'];
   return {
-    reply: { text: `🍸 КАНТИНА\n\n${greeting ? `${greeting}\n\n` : ''}Доступные задания куратора:\n${lines.join('\n')}`, buttons, imageKey: imageForCurator(player.faction) },
+    reply: { text: `🍸 БАР\n\n${greeting ? `${greeting}\n\n` : ''}Доступные задания куратора:\n${lines.join('\n')}`, buttons, imageKey: imageForCurator(player.faction) },
     nextState: { scene: 'loc_cantina', player }
   };
 }
