@@ -14,7 +14,7 @@ const { rollEventWithDepth } = require('../../engine/deep-exploration.js');
 const { attemptEvacuation } = require('../../engine/evacuation.js');
 const { getEvacChanceBonus, getRadiationDiscount } = require('../../lib/housing.js');
 const { discoverHypothesis } = require('../../lore/trakt-mythos.js');
-const { applyConsequence, CONSEQUENCE_TRIGGERS } = require('../../choices/consequence-engine.js');
+const { applyConsequence } = require('../../choices/consequence-engine.js');
 const { checkContractProgress } = require('../../contracts/contracts-engine.js');
 const { imageForEnemy } = require('../enemy-images.js');
 const { imageForLocation } = require('../location-images.js');
@@ -25,19 +25,35 @@ const {
 } = require('./common.js');
 const { SCENES } = require('./ids.js');
 
-/** Обёртка над applyConsequence — если реальный choices/consequence-engine.js
- * не совпадает по форме с тем, что здесь ожидается (например, другая
- * структура CONSEQUENCE_TRIGGERS), это раньше роняло всю сцену молча —
- * "Доложить куратору" переставал отвечать вообще. Теперь при ошибке просто
- * логируем и продолжаем без бонуса/эффекта, вместо тишины для игрока. */
-function safeApplyConsequence(player, consequenceId) {
+/**
+ * Переходник к реальному choices/consequence-engine.js: applyConsequence
+ * там ожидает НЕ player напрямую, а "state" с вложенным state.player
+ * (там читается state.player.reputation, а не player.reputation) — плюс
+ * state.flags/state.quests/state.worldState/state.factionStanding отдельно
+ * от player. Подсовываем прокси-обёртку, а после — переносим изменения
+ * обратно на настоящий player. try/catch — на случай, если реальный файл
+ * в будущем снова разъедется по форме с тем, что здесь ожидается.
+ */
+function applyConsequenceToPlayer(player, consequenceId) {
+  const proxyState = {
+    player,
+    flags: player.flags || {},
+    quests: { locked: player.questLocks || [], unlockedEndings: player.unlockedEndings || [] },
+    worldState: player.worldState || {},
+    factionStanding: player.factionStanding || {},
+  };
   try {
-    applyConsequence(player, consequenceId);
-    return true;
+    applyConsequence(proxyState, consequenceId);
   } catch (err) {
-    console.error(`safeApplyConsequence: applyConsequence('${consequenceId}') упал:`, err.message);
+    console.error(`applyConsequenceToPlayer('${consequenceId}') упал:`, err.message);
     return false;
   }
+  player.flags = proxyState.flags;
+  player.questLocks = proxyState.quests.locked;
+  player.unlockedEndings = proxyState.quests.unlockedEndings;
+  player.worldState = proxyState.worldState;
+  player.factionStanding = proxyState.factionStanding;
+  return true;
 }
 
 function resolveExplorationEvent(player, event, zone, depth, deps, rng, prefixText = '', allowContinue = true) {
@@ -279,7 +295,7 @@ function handleExploration(state, input, rng, deps) {
         if (result.reward.flag) { nextPlayer.flags = nextPlayer.flags || {}; nextPlayer.flags[result.reward.flag] = true; }
       }
       if (result.flag) { nextPlayer.flags = nextPlayer.flags || {}; nextPlayer.flags[result.flag] = true; }
-      if (choice.consequenceId) safeApplyConsequence(nextPlayer, choice.consequenceId);
+      if (choice.consequenceId) applyConsequenceToPlayer(nextPlayer, choice.consequenceId);
       if (event.flag) { nextPlayer.flags = nextPlayer.flags || {}; nextPlayer.flags[event.flag] = true; }
       return safeReturnChoice(result.text || event.text, nextPlayer, zone, depth);
     }
@@ -288,13 +304,14 @@ function handleExploration(state, input, rng, deps) {
       const player = { ...state.player };
       const zone = state.zone, depth = state.depth;
       if (input === 'Доложить куратору') {
-        safeApplyConsequence(player, 'report_anomaly_find');
-        const rep = CONSEQUENCE_TRIGGERS?.report_anomaly_find?.immediate?.reputation;
-        const repLine = rep ? ` +${rep} репутации станции.` : '';
-        return safeReturnChoice(`Куратор внимательно выслушивает доклад и кивает.${repLine}`, player, zone, depth);
+        // Рутинная находка на вылазке — не сюжетный перелом, поэтому не
+        // трогает choices/consequence-engine.js (та система — для реальных
+        // сюжетных развилок вроде priyut_1_missing/echo_allied). Просто
+        // небольшая честная репутация за доклад.
+        player.reputation = (player.reputation || 0) + 5;
+        return safeReturnChoice('Куратор внимательно выслушивает доклад и кивает. +5 репутации станции.', player, zone, depth);
       }
       if (input === 'Утаить находку') {
-        safeApplyConsequence(player, 'hide_anomaly_find');
         return safeReturnChoice('Ты решаешь промолчать об увиденном. Что-то в этом решении отзывается в теле неприятным холодом — но, возможно, не только в теле.', player, zone, depth);
       }
       return { reply: { text: 'Выбери: доложить куратору или утаить находку.', buttons: ['Доложить куратору', 'Утаить находку'] }, nextState: state };
