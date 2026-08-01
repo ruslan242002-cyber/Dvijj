@@ -3,7 +3,7 @@
 const { step } = require('../game/router.js');
 
 async function handleVkEvent(body, deps) {
-  const { store, vk, rng = Math.random, confirmationCode, secret, getProfileLink, resolveEnemyImage, marketStore, pvpStore, ambushStore } = deps;
+  const { store, vk, rng = Math.random, confirmationCode, secret, getProfileLink, resolveEnemyImage, marketStore, pvpStore, ambushStore, knownPlayersStore } = deps;
 
   if (body.type === 'confirmation') {
     return confirmationCode || '';
@@ -19,6 +19,11 @@ async function handleVkEvent(body, deps) {
     const text = message.text || '';
 
     const prevState = await store.get(peerId);
+    if (knownPlayersStore) {
+      // Не блокируем основной ответ игроку, если трекинг вдруг подведёт —
+      // рассылка это второстепенная функция, а не критичный путь.
+      knownPlayersStore.trackPlayer(peerId).catch((err) => console.error('trackPlayer упал:', err.message));
+    }
     const routerDeps = {
       ...(getProfileLink ? { getProfileLink: () => getProfileLink(peerId) } : {}),
       marketStore,
