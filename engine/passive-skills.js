@@ -116,4 +116,46 @@ function aggregatePassiveEffects(unlockedIds = []) {
   return effects;
 }
 
-module.exports = { PASSIVE_SKILLS, aggregatePassiveEffects };
+/**
+ * СЛОТЫ ПОД ПАССИВКИ — сколько пассивок можно держать активными
+ * одновременно. Начинаем с 3, потолок — 10. Как именно слоты открываются
+ * сверх стартовых трёх (за уровень? за очки? за репутацию?) — решение
+ * отдельное, пока не принято; здесь только сама механика лимита и
+ * экипировки, готовая к любому будущему способу их выдавать.
+ */
+const DEFAULT_PASSIVE_SLOTS = 3;
+const MAX_PASSIVE_SLOTS = 10;
+
+function passiveSlotsFor(player) {
+  return Math.min(MAX_PASSIVE_SLOTS, player.passiveSlots || DEFAULT_PASSIVE_SLOTS);
+}
+
+/** Можно ли добавить эту пассивку прямо сейчас — не хватает слота, уже
+ * стоит такая же ступень/категория и т.п. Не мутирует player. */
+function canEquipPassive(player, passiveId) {
+  if (!PASSIVE_SKILLS[passiveId]) return { ok: false, reason: 'UNKNOWN_PASSIVE' };
+  const equipped = player.equippedPassives || [];
+  if (equipped.includes(passiveId)) return { ok: false, reason: 'ALREADY_EQUIPPED' };
+  if (equipped.length >= passiveSlotsFor(player)) return { ok: false, reason: 'NO_FREE_SLOT' };
+  return { ok: true };
+}
+
+/** Мутирует player.equippedPassives — вызывающий код сам решает, откуда
+ * вообще берётся passiveId (владение пассивкой — отдельный вопрос от
+ * слотов экипировки). */
+function equipPassive(player, passiveId) {
+  const check = canEquipPassive(player, passiveId);
+  if (!check.ok) return check;
+  player.equippedPassives = [...(player.equippedPassives || []), passiveId];
+  return { ok: true };
+}
+
+function unequipPassive(player, passiveId) {
+  player.equippedPassives = (player.equippedPassives || []).filter((id) => id !== passiveId);
+  return { ok: true };
+}
+
+module.exports = {
+  PASSIVE_SKILLS, aggregatePassiveEffects,
+  DEFAULT_PASSIVE_SLOTS, MAX_PASSIVE_SLOTS, passiveSlotsFor, canEquipPassive, equipPassive, unequipPassive,
+};
