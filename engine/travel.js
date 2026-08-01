@@ -17,7 +17,10 @@
  * и риска".
  */
 
-const FUEL_PER_STEP = 8;               // топливо за один шаг вглубь (к планете)
+const FUEL_PER_STEP_MIN = 2;           // топливо за один шаг вглубь — раньше фиксированные 8, теперь случайно 2-5
+const FUEL_PER_STEP_MAX = 5;
+const FUEL_PRICE_PER_UNIT = 2;         // цена дозаправки — 2 кредита за единицу топлива
+const TANK_UPGRADE_FUEL_BONUS = 20;    // на сколько расширяет бак один апгрейд (см. game/scenes/locations/repair.js)
 
 const REWARD_PER_STEP = 0.15;          // +15% к добыче рейса за шаг дальности
 const MAX_REWARD_MULTIPLIER = 4;
@@ -32,16 +35,33 @@ function safeDistance(distance) {
   return Math.max(0, distance);
 }
 
-/** Сколько топлива стоит УГЛУБИТЬСЯ ещё на один шаг (независимо от того,
- * сколько шагов уже пройдено — цена шага постоянна, дорожает не шаг,
- * а общая дистанция, которую потом придётся преодолевать обратно). */
-function fuelCostForStep() {
-  return FUEL_PER_STEP;
+/** Сколько топлива стоит УГЛУБИТЬСЯ ещё на один шаг. С rng — настоящая
+ * случайная цена этого конкретного шага (2-5, включительно). Без rng —
+ * консервативная оценка (всегда берём худший случай, 5), используется
+ * только в проверках "хватит ли" ДО того, как шаг реально сделан — так
+ * предупреждение никогда не соврёт в сторону "должно хватить", когда на
+ * самом деле может не хватить. */
+function fuelCostForStep(rng = null) {
+  if (rng) return FUEL_PER_STEP_MIN + Math.floor(rng() * (FUEL_PER_STEP_MAX - FUEL_PER_STEP_MIN + 1));
+  return FUEL_PER_STEP_MAX;
 }
 
-/** Сколько топлива нужно, чтобы вернуться на станцию С ТЕКУЩЕЙ дистанции. */
+/** Сколько топлива нужно, чтобы вернуться на станцию С ТЕКУЩЕЙ дистанции.
+ * Тоже консервативная оценка (худший случай на каждый шаг) — реальный
+ * расход при самом возврате может оказаться меньше, но никогда больше. */
 function fuelNeededToReturn(distance) {
-  return distance * FUEL_PER_STEP;
+  return distance * FUEL_PER_STEP_MAX;
+}
+
+/** Настоящий (не оценочный) расход топлива на обратный путь — честно
+ * прокатывает per-tick стоимость для каждого шага дистанции, той же
+ * случайностью 2-5, что и полёт туда. Вызывать ИМЕННО в момент возврата
+ * (с rng), а не для предварительных прикидок — для тех используется
+ * fuelNeededToReturn (консервативная оценка без rng). */
+function actualReturnFuelCost(distance, rng) {
+  let total = 0;
+  for (let i = 0; i < distance; i++) total += fuelCostForStep(rng);
+  return total;
 }
 
 /** Хватит ли топлива дойти ещё на шаг ДАЛЬШЕ и при этом всё ещё суметь
@@ -87,14 +107,61 @@ function returnTripPvpChance(distance) {
   return Math.min(d * RETURN_PVP_CHANCE_PER_STEP, MAX_RETURN_PVP_CHANCE);
 }
 
+/**
+ * ЗОНЫ ПО ДИСТАНЦИИ — раньше зона (патрулируемая/спорная/открытый космос)
+ * выбиралась отдельной кнопкой «Врата Тракта» независимо от того, летал
+ * ли игрок вообще. Теперь зона — это то, ГДЕ ты оказался, пролетев
+ * достаточно далеко на достаточно сильном корабле: без нужного уровня
+ * корабля дальше определённой дистанции просто не пускают.
+ */
+const ZONE_DISTANCE_BANDS = [
+  { minDistance: 0, zone: 'blue', minShipLevel: 1 },
+  { minDistance: 5, zone: 'yellow', minShipLevel: 4 },
+  { minDistance: 10, zone: 'red', minShipLevel: 8 },
+];
+
+/** Какая зона соответствует текущей дистанции полёта — используется при
+ * высадке на планету, чтобы решить, какого уровня враги там ждут. */
+function zoneForDistance(distance) {
+  let band = ZONE_DISTANCE_BANDS[0];
+  for (const b of ZONE_DISTANCE_BANDS) {
+    if (distance >= b.minDistance) band = b;
+  }
+  return band.zone;
+}
+
+/** Минимальный уровень корабля, чтобы долететь до этой дистанции вообще
+ * (не просто высадиться там — само пространство здесь опаснее). */
+function shipLevelRequiredForDistance(distance) {
+  let required = ZONE_DISTANCE_BANDS[0].minShipLevel;
+  for (const b of ZONE_DISTANCE_BANDS) {
+    if (distance >= b.minDistance) required = b.minShipLevel;
+  }
+  return required;
+}
+
+/** Хватает ли уровня корабля, чтобы сделать ещё один шаг вглубь (к
+ * СЛЕДУЮЩЕЙ дистанции, не текущей — проверяем НАПЕРЁД). */
+function canFlyToDistance(ship, distance) {
+  return (ship.level || 1) >= shipLevelRequiredForDistance(distance);
+}
+
 module.exports = {
-  FUEL_PER_STEP,
+  FUEL_PER_STEP_MIN,
+  FUEL_PER_STEP_MAX,
+  FUEL_PRICE_PER_UNIT,
+  TANK_UPGRADE_FUEL_BONUS,
   fuelCostForStep,
   fuelNeededToReturn,
+  actualReturnFuelCost,
   canSafelyGoDeeper,
   canAffordStep,
   canAffordReturn,
   distanceRewardMultiplier,
   distanceTierBonus,
   returnTripPvpChance,
+  ZONE_DISTANCE_BANDS,
+  zoneForDistance,
+  shipLevelRequiredForDistance,
+  canFlyToDistance,
 };
