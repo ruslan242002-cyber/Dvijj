@@ -60,8 +60,10 @@ function tickPeriodic(fighter) {
     if (p.type === 'dot') totalDot += p.amount; else totalHot += p.amount;
     return { ...p, amount: p.amount * 0.7, turnsLeft: p.turnsLeft - 1 };
   }).filter((p) => p.turnsLeft > 0 && p.amount >= 1);
-  fighter.hp = clamp(fighter.hp - totalDot + totalHot, 0, fighter.hpMax);
-  return { totalDot: Math.round(totalDot), totalHot: Math.round(totalHot) };
+  const roundedDot = Math.round(totalDot);
+  const roundedHot = Math.round(totalHot);
+  fighter.hp = clamp(Math.round(fighter.hp - roundedDot + roundedHot), 0, fighter.hpMax);
+  return { totalDot: roundedDot, totalHot: roundedHot };
 }
 function resolveTurn({ attacker, defender, stim, skill, rng = Math.random }) {
   const log = [];
