@@ -21,12 +21,14 @@ const { combatFullCard } = require('../../lib/combat-card.js');
 const { explorationStatusCard } = require('../../lib/status-card.js');
 const { imageForEnemy } = require('../enemy-images.js');
 const { curatorQuestScreen } = require('./quests/curator.js');
+const { pickEnemyAction } = require('../../engine/monster-abilities.js');
+const { startCooldown, tickCooldowns } = require('../../engine/cooldowns.js');
 const {
-  stationButtons, skillButtons, skillIdByName, addToInventory, journeyContinueButtons,
+  stationButtons, skillButtons, skillIdByName, skillCooldownNote, addToInventory, journeyContinueButtons,
 } = require('./common.js');
 const { SCENES } = require('./ids.js');
 
-function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prevEnemyHp = null } = {}) {
+function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prevEnemyHp = null, usedSkillId = null } = {}) {
   // Контракт "применить стим 2 раза" — засчитываем именно в момент, когда
   // стим реально применился в этот ход (false -> true), а не при каждом
   // ходе после этого.
@@ -95,8 +97,10 @@ function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prev
     };
   }
 
-  const enemyTurn = resolveTurn({ attacker: result.defender, defender: result.attacker, rng });
-  const log = result.log.concat(enemyTurn.log).join(' ');
+  const { skill: enemySkill, telegraphText } = pickEnemyAction(result.defender);
+  const enemyTurn = resolveTurn({ attacker: result.defender, defender: result.attacker, skill: enemySkill, rng });
+  const telegraphLine = telegraphText ? `${telegraphText}\n` : '';
+  const log = `${telegraphLine}${result.log.concat(enemyTurn.log).join(' ')}`;
 
   if (enemyTurn.finished && enemyTurn.winner === 'attacker') {
     if (state.curatorQuest) {
@@ -108,12 +112,20 @@ function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prev
     };
   }
 
-  const buttons = ['Обычная атака', ...skillButtons(enemyTurn.defender)];
+  let cooldowns = state.skillCooldowns || {};
+  if (usedSkillId) {
+    cooldowns = startCooldown(cooldowns, usedSkillId, SKILLS[usedSkillId], state.player.cooldownReductionPct || 0);
+  }
+  cooldowns = tickCooldowns(cooldowns);
+
+  const buttons = ['Обычная атака', ...skillButtons(enemyTurn.defender, cooldowns)];
   if (!result.stimUsedThisFight) buttons.push('Стим');
   const card = combatFullCard(enemyTurn.defender, enemyTurn.attacker, { prevPlayerHp, prevEnemyHp });
+  const cdNote = skillCooldownNote(enemyTurn.defender, cooldowns);
+  const cdLine = cdNote ? `\n\n${cdNote}` : '';
   return {
-    reply: { text: `💥 ${log}\n\n${card}`, buttons, imageKey: imageForEnemy(enemyTurn.attacker.name) },
-    nextState: { scene: 'combat', player: enemyTurn.defender, enemy: enemyTurn.attacker, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: result.stimUsedThisFight, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident }
+    reply: { text: `💥 ${log}\n\n${card}${cdLine}`, buttons, imageKey: imageForEnemy(enemyTurn.attacker.name) },
+    nextState: { scene: 'combat', player: enemyTurn.defender, enemy: enemyTurn.attacker, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: result.stimUsedThisFight, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident, skillCooldowns: cooldowns }
   };
 }
 
@@ -123,19 +135,19 @@ function handleCombat(state, input, rng, deps) {
       if (input === 'Отступить') {
         return { reply: { text: 'Ты отступаешь на безопасное расстояние.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
       }
-      const buttons = ['Обычная атака', ...skillButtons(state.player), 'Стим'];
+      const buttons = ['Обычная атака', ...skillButtons(state.player, {}), 'Стим'];
       return {
         reply: { text: `${combatFullCard(state.player, state.enemy)}\n\nВыбери действие:`, buttons, imageKey: imageForEnemy(state.enemy.name) },
-        nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: false, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident }
+        nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: false, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident, skillCooldowns: {} }
       };
     }
     case SCENES.COMBAT_STIM_SELECT: {
-      const backButtons = ['Обычная атака', ...skillButtons(state.player)];
+      const backButtons = ['Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
       if (!state.stimUsedThisFight) backButtons.push('Стим');
       if (input === 'Назад') {
         return {
           reply: { text: `${combatFullCard(state.player, state.enemy)}\n\nВыбери действие:`, buttons: backButtons, imageKey: imageForEnemy(state.enemy.name) },
-          nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident }
+          nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident, skillCooldowns: state.skillCooldowns }
         };
       }
       const prevPlayerHp = state.player.hp;
@@ -150,26 +162,31 @@ function handleCombat(state, input, rng, deps) {
     case SCENES.COMBAT: {
       if (input === 'Стим') {
         if (state.stimUsedThisFight) {
-          const buttons = ['Обычная атака', ...skillButtons(state.player)];
+          const buttons = ['Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
           return { reply: { text: 'Стим уже использован в этом бою.', buttons }, nextState: state };
         }
         return {
           reply: { text: 'Выбери стим:', buttons: [...stimButtons(), 'Назад'] },
-          nextState: { scene: 'combat_stim_select', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident }
+          nextState: { scene: 'combat_stim_select', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident, skillCooldowns: state.skillCooldowns }
         };
       }
       const skillId = input === 'Обычная атака' ? null : skillIdByName(input);
       const skill = skillId ? SKILLS[skillId] : null;
       if (input !== 'Обычная атака' && !skill) {
-        const buttons = ['Обычная атака', ...skillButtons(state.player)];
+        const buttons = ['Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
         if (!state.stimUsedThisFight) buttons.push('Стим');
         return { reply: { text: 'Выбери действие кнопкой ниже.', buttons }, nextState: state };
+      }
+      if (skillId && state.skillCooldowns?.[skillId] > 0) {
+        const buttons = ['Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
+        if (!state.stimUsedThisFight) buttons.push('Стим');
+        return { reply: { text: `${skill.name} ещё перезаряжается (${state.skillCooldowns[skillId]} х.) — выбери другое действие.`, buttons }, nextState: state };
       }
 
       const prevPlayerHp = state.player.hp;
       const prevEnemyHp = state.enemy.hp;
       const result = resolvePlayerTurn({ player: state.player, enemy: state.enemy, skill, stimId: null, stimUsedThisFight: state.stimUsedThisFight, rng });
-      return resolveCombatTurn(deps, state, result, rng, { prevPlayerHp, prevEnemyHp });
+      return resolveCombatTurn(deps, state, result, rng, { prevPlayerHp, prevEnemyHp, usedSkillId: skillId });
     }
     default:
       return null;
