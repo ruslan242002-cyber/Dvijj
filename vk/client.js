@@ -1,33 +1,13 @@
-/**
- * Минимальный клиент VK Bots API — только то, что нужно текстовой игре:
- * отправка сообщения с кнопками. Использует обычный fetch, без vk-io и
- * прочих SDK — меньше кода, меньше того, что может сломаться при апдейте
- * библиотеки.
- *
- * Токен группы берётся в ВК: Управление сообществом → Работа с API →
- * Ключи доступа → Создать ключ (права — "Сообщения сообщества").
- */
 'use strict';
 
 const VK_API_VERSION = '5.199';
 
-/** Собирает клавиатуру ВК из списка кнопок (один или несколько рядов).
- * Каждый элемент — либо строка (обычная текстовая кнопка, по нажатию
- * отправляет свою подпись как сообщение), либо объект { label, url }
- * (кнопка-ссылка типа open_link — открывает браузер сразу по нажатию,
- * без отправки сообщения). ВК не позволяет мешать open_link с другими
- * типами в одном ряду, поэтому каждая ссылка автоматически уходит в
- * свой отдельный ряд, а текстовые кнопки группируются в соседние ряды.
- *
- * inline: false (по умолчанию) — обычная, постоянная клавиатура снизу экрана.
- * inline: true — кнопки, приклеенные к конкретному сообщению.
- */
 function buildKeyboard(buttons, { inline = false, oneTime = false } = {}) {
   if (!buttons || buttons.length === 0) return undefined;
 
   const rows = [];
   let textRow = [];
-  const MAX_PER_ROW = 3;
+  const MAX_PER_ROW = 2; // раньше 3 — длинные названия умений ("Полевой ремонт" и т.п.) обрезались в узкой кнопке
   const flushTextRow = () => { if (textRow.length) { rows.push(textRow); textRow = []; } };
 
   buttons.forEach((b) => {
@@ -37,6 +17,14 @@ function buildKeyboard(buttons, { inline = false, oneTime = false } = {}) {
     } else if (b && b.url) {
       flushTextRow();
       rows.push([{ action: { type: 'open_link', link: b.url, label: String(b.label || 'Открыть').slice(0, 40) } }]);
+    } else if (b && b.label) {
+      // Текстовая кнопка с явным цветом — { label, color }, color один из
+      // 'primary' (синий, по умолчанию), 'default' (белый/серый),
+      // 'positive' (зелёный), 'negative' (красный). Используется точечно
+      // (например "Контракты" зелёным, "Врата Тракта" красным на хабе
+      // станции) — обычные кнопки как были строками, так и остаются.
+      textRow.push({ action: { type: 'text', label: String(b.label).slice(0, 40) }, color: b.color || 'primary' });
+      if (textRow.length >= MAX_PER_ROW) flushTextRow();
     }
   });
   flushTextRow();
@@ -51,8 +39,6 @@ function vkClient({ token, apiUrl = 'https://api.vk.com/method' } = {}) {
   }
 
   return {
-    /** Отправляет текстовое сообщение с (опционально) кнопками и/или прикреплённым
-     * фото. attachment — строка вида "photo123_456", которую даёт vk/photo-cache.js. */
     async sendMessage(peerId, text, buttons, attachment) {
       const params = new URLSearchParams({
         access_token: accessToken,
