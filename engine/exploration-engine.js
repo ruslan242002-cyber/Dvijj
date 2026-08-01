@@ -7,9 +7,9 @@ const ENEMY_NAMES = {
   red: ['Глубинный Отголосок', 'Тракт-порождение', 'Искажённый страж', 'Голос из разлома', 'Пожиратель сигналов']
 };
 const ZONE_WEIGHTS = {
-  blue:   { find: 45, ambush: 5,  anomaly: 10, distress: 15, node: 25 },
-  yellow: { find: 30, ambush: 30, anomaly: 15, distress: 10, node: 15 },
-  red:    { find: 20, ambush: 45, anomaly: 20, distress: 5,  node: 10 }
+  blue:   { find: 18, ambush: 42, anomaly: 10, distress: 10, node: 20 },
+  yellow: { find: 12, ambush: 52, anomaly: 13, distress: 8,  node: 15 },
+  red:    { find: 8,  ambush: 62, anomaly: 15, distress: 5,  node: 10 }
 };
 function weightedPick(weights, rng) {
   const entries = Object.entries(weights);
