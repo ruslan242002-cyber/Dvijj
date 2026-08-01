@@ -65,11 +65,18 @@ function mythosScreen(player, prefixText = '') {
     const icon = f.collected ? '✅' : f.unlocked ? '🔓' : '🔒';
     let extra = '';
     if (!f.collected) extra = f.unlocked ? ' — готов к сбору!' : ` — ${describe(f.unlockCondition)} (${progress(player, f.unlockCondition)})`;
-    return `${icon} ${f.shortName}${extra}`;
+    const label = f.shortName || f.name || f.id || 'фрагмент';
+    return `${icon} ${label}${extra}`;
   });
   const collectible = statuses.filter((f) => f.unlocked && !f.collected);
-  const buttons = [...collectible.map((f) => `Собрать: ${f.shortName}`), 'Гипотезы', 'Назад'];
-  const hypLine = hyp ? `Твоя гипотеза: ${HYPOTHESIS_INFO[hyp].name}` : 'Гипотеза ещё не выбрана.';
+  const buttons = [...collectible.map((f) => `Собрать: ${f.shortName || f.name || f.id}`), 'Гипотезы', 'Назад'];
+  // Защита: если HYPOTHESIS_INFO не содержит ключ hyp (другое название поля
+  // или другой набор гипотез в реальном trakt-mythos.js) — раньше это было
+  // необработанное исключение (undefined.name), которое молча ронялo весь
+  // экран мифологии сразу после выбора гипотезы, и следующее нажатие любой
+  // кнопки выглядело как "зависание". Теперь — нейтральный текст вместо краша.
+  const hypInfo = hyp && HYPOTHESIS_INFO ? HYPOTHESIS_INFO[hyp] : null;
+  const hypLine = hyp ? `Твоя гипотеза: ${hypInfo?.name || hyp}` : 'Гипотеза ещё не выбрана.';
   return {
     reply: { text: `${prefixText}📜 МИФОЛОГИЯ ТРАКТА\n\n${act.name}\n\n${hypLine}\n\n${lines.join('\n')}`, buttons },
     nextState: { scene: 'lore_mythos', player }
