@@ -51,15 +51,23 @@ const VEIN_RESOURCES_BY_TIER = {
  * прочность ТАКЖЕ немного растёт от того, сколько игроков сейчас в сети
  * (см. заметку в задаче: "нужно находиться онлайн") — реализовано как
  * онлайн-множитель, передаваемый снаружи (сам движок онлайн не считает).
+ *
+ * distance — та же дистанция полёта, что и во всей остальной системе
+ * (engine/travel.js) — жила это НАСТОЯЩЕЕ место в космосе, куда нужно
+ * долететь, а не кнопка-телепорт. Чем выше тир жилы, тем дальше она
+ * обычно рождается (выше тир руды — глубже в опасных секторах она и
+ * должна быть по духу игры).
  */
-function createVein(tier, onlinePlayersCount = 1, rng = Math.random) {
+function createVein(tier, onlinePlayersCount = 1, rng = Math.random, distance = null) {
   const base = 500 + tier * 300;
   const onlineMult = 1 + Math.min(onlinePlayersCount, 40) * 0.02; // мягкий рост, не взрывной
   const durabilityMax = Math.round(base * onlineMult);
+  const veinDistance = distance ?? Math.round(6 + tier * 1.5 + rng() * 4);
   return {
     id: generateVeinId(),
     tier,
     resource: VEIN_RESOURCES_BY_TIER[tier] || 'Сплавы',
+    distance: veinDistance,
     durabilityMax,
     durability: durabilityMax,
     participants: {},   // playerId -> { level, damageDealt, inCombat }
