@@ -32,6 +32,9 @@ const { handleMarket } = require('./scenes/market.js');
 const { handlePvp } = require('./scenes/pvp.js');
 const { handleHousing } = require('./scenes/housing.js');
 const { handleTravel } = require('./scenes/travel.js');
+const { handleVein } = require('./scenes/vein.js');
+const { shouldCheckSpawn, rollSpawn, randomVeinTier } = require('../engine/vein-spawn-timer.js');
+const { createVein } = require('../engine/resource-vein.js');
 
 // scene -> обработчик. Несколько сцен могут указывать на один и тот же
 // модуль (например STATION и DISTRICT_HUB оба идут в handleHub) — каждый
@@ -56,11 +59,13 @@ const SCENE_HANDLERS = {
   [SCENES.JOURNEY_CONTINUE]: handleExploration,
   [SCENES.EXPLORATION_EVENT_CHOICE]: handleExploration,
   [SCENES.ANOMALY_CHOICE]: handleExploration,
+  [SCENES.ANOMALY_PUZZLE]: handleExploration,
   [SCENES.NEUTRAL_ENCOUNTER]: handleExploration,
   [SCENES.STEALTH_EXPLORE]: handleExploration,
 
   [SCENES.LOC_BRIDGE]: handleBridge,
   [SCENES.LORE_MYTHOS]: handleBridge,
+  [SCENES.PASSIVE_MANAGEMENT]: handleBridge,
   [SCENES.QUEST_SHYOPOT]: handleBridge,
 
   [SCENES.LOC_REPAIR]: handleRepair,
@@ -92,6 +97,12 @@ const SCENE_HANDLERS = {
   [SCENES.SHIP_PRE_COMBAT]: handleTravel,
   [SCENES.SHIP_COMBAT]: handleTravel,
   [SCENES.SHIP_TRADER]: handleTravel,
+
+  [SCENES.VEIN_HUB]: handleVein,
+  [SCENES.VEIN_ATTACK_LIST]: handleVein,
+  [SCENES.VEIN_PVP_COMBAT]: handleVein,
+  [SCENES.VEIN_MONSTER_COMBAT]: handleVein,
+  [SCENES.VEIN_BOSS_COMBAT]: handleVein,
 };
 
 const RESET_REPLY = {
@@ -123,6 +134,58 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
   // мягкий фолбэк, чем необъяснимый краш у игрока).
   if (!result) {
     return { reply: { text: 'Что-то пошло не так, начнём заново.', buttons: [] }, nextState: { scene: SCENES.START } };
+  }
+
+  // HP персонажа лечится бесплатно и автоматически при ЛЮБОМ возврате на
+  // станцию — независимо от того, откуда пришли (поражение в бою, конец
+  // вылазки, возврат с полёта и т.д.). Централизовано здесь, а не в
+  // каждом отдельном месте, которое строит nextState.scene='station' —
+  // мест таких много, и раскидывать логику лечения по всем ним рискованно
+  // забыть где-то одно. Ремонт КОРАБЛЯ, в отличие от HP персонажа,
+  // остаётся платным — см. game/scenes/locations/repair.js.
+  if (result.reply && result.nextState?.player?.pendingVoiceMessage) {
+    result.reply = { ...result.reply, text: `${result.reply.text}\n\n${result.nextState.player.pendingVoiceMessage}` };
+    result.nextState = { ...result.nextState, player: { ...result.nextState.player, pendingVoiceMessage: undefined } };
+  }
+
+  if (result.nextState?.scene === SCENES.STATION && result.nextState.player) {
+    const player = result.nextState.player;
+    if (player.hp < player.hpMax) {
+      // Тот же сигнал "реально вернулся откуда-то" (не просто листает меню
+      // станции, где HP и так уже полное) используем и для фонового
+      // облучения Кузницы — иначе оно бы копилось на каждый клик по хабу.
+      const ambientRadiation = player.faction === 'Кузница' ? 3 : 0;
+      result.nextState = {
+        ...result.nextState,
+        player: { ...player, hp: player.hpMax, radiation: Math.min(100, (player.radiation || 0) + ambientRadiation) }
+      };
+    }
+
+    // Ленивая проверка появления новой жилы — раз в ~30 минут, с любого
+    // визита на станцию любого игрока (нет фонового процесса, см. заметку
+    // в engine/vein-spawn-timer.js). Если жила действительно появилась —
+    // вешаем её на result.veinJustSpawned, чтобы транспортный слой
+    // (vk/webhook-handler.js) разослал уведомление всем известным игрокам —
+    // сам router.js намеренно не делает сетевых вызовов.
+    if (deps.veinStore) {
+      try {
+        const activeVein = await deps.veinStore.getActiveVein();
+        if (!activeVein) {
+          const lastCheck = await deps.veinStore.getLastSpawnCheckAt();
+          if (shouldCheckSpawn(lastCheck)) {
+            await deps.veinStore.markSpawnChecked();
+            if (rollSpawn(rng)) {
+              const tier = randomVeinTier(rng);
+              const vein = createVein(tier, 1, rng);
+              await deps.veinStore.createVein(vein);
+              result.veinJustSpawned = vein;
+            }
+          }
+        }
+      } catch (err) {
+        console.error('проверка появления жилы упала:', err.message);
+      }
+    }
   }
 
   return result;
