@@ -52,7 +52,10 @@ function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prev
       const loot = rollLoot(zone, rng);
       const player = { ...result.attacker };
       addToInventory(player, loot.resource, loot.tier, loot.qty);
-      player.credits = (player.credits || 0) + loot.credits;
+      // Фракционный перк Терминуса — +25% к кредитам с трофеев убийств
+      // (тут и в PvP, см. game/scenes/pvp.js).
+      const creditMult = player.faction === 'Терминус' ? 1.25 : 1;
+      player.credits = (player.credits || 0) + Math.round(loot.credits * creditMult);
       player.killCount = (player.killCount || 0) + 1;
       if ((state.enemy.tier || 0) >= 5) player.highTierKills = (player.highTierKills || 0) + 1;
       checkContractProgress(player, 'combat_win', { zone });
@@ -60,7 +63,10 @@ function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prev
       const xpGain = xpForTier(state.enemy.tier || 1);
       const { leveledUp, level } = grantXp(player, xpGain);
       const bestiaryDrops = rollLootByEnemyName(state.enemy.name, rng);
-      if (bestiaryDrops.length) player.bestiaryItems = [...(player.bestiaryItems || []), ...bestiaryDrops.map((d) => d.id)];
+      const chipDrops = bestiaryDrops.filter((d) => d.id.startsWith('chip_'));
+      const trophyDrops = bestiaryDrops.filter((d) => !d.id.startsWith('chip_'));
+      if (trophyDrops.length) player.bestiaryItems = [...(player.bestiaryItems || []), ...trophyDrops.map((d) => d.id)];
+      if (chipDrops.length) player.passiveChips = [...(player.passiveChips || []), ...chipDrops.map((d) => d.id.replace(/^chip_/, ''))];
 
       let fragmentNote = '';
       if (state.fragmentId) {
@@ -118,7 +124,7 @@ function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prev
   }
   cooldowns = tickCooldowns(cooldowns);
 
-  const buttons = ['Обычная атака', ...skillButtons(enemyTurn.defender, cooldowns)];
+  const buttons = ['🗡️ Обычная атака', ...skillButtons(enemyTurn.defender, cooldowns)];
   if (!result.stimUsedThisFight) buttons.push('Стим');
   const card = combatFullCard(enemyTurn.defender, enemyTurn.attacker, { prevPlayerHp, prevEnemyHp });
   const cdNote = skillCooldownNote(enemyTurn.defender, cooldowns);
@@ -135,16 +141,16 @@ function handleCombat(state, input, rng, deps) {
       if (input === 'Отступить') {
         return { reply: { text: 'Ты отступаешь на безопасное расстояние.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
       }
-      const buttons = ['Обычная атака', ...skillButtons(state.player, {}), 'Стим'];
+      const buttons = ['🗡️ Обычная атака', ...skillButtons(state.player, {}), 'Стим'];
       return {
         reply: { text: `${combatFullCard(state.player, state.enemy)}\n\nВыбери действие:`, buttons, imageKey: imageForEnemy(state.enemy.name) },
         nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: false, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident, skillCooldowns: {} }
       };
     }
     case SCENES.COMBAT_STIM_SELECT: {
-      const backButtons = ['Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
+      const backButtons = ['🗡️ Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
       if (!state.stimUsedThisFight) backButtons.push('Стим');
-      if (input === 'Назад') {
+      if (input === '⬅️ Назад') {
         return {
           reply: { text: `${combatFullCard(state.player, state.enemy)}\n\nВыбери действие:`, buttons: backButtons, imageKey: imageForEnemy(state.enemy.name) },
           nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident, skillCooldowns: state.skillCooldowns }
@@ -154,7 +160,7 @@ function handleCombat(state, input, rng, deps) {
       const prevEnemyHp = state.enemy.hp;
       const stimId = stimIdByName(input);
       if (!stimId) {
-        return { reply: { text: 'Выбери стим кнопкой ниже.', buttons: [...stimButtons(), 'Назад'] }, nextState: state };
+        return { reply: { text: 'Выбери стим кнопкой ниже.', buttons: [...stimButtons(), '⬅️ Назад'] }, nextState: state };
       }
       const result = resolvePlayerTurn({ player: state.player, enemy: state.enemy, skill: null, stimId, stimUsedThisFight: state.stimUsedThisFight, rng });
       return resolveCombatTurn(deps, state, result, rng, { prevPlayerHp, prevEnemyHp });
@@ -162,23 +168,23 @@ function handleCombat(state, input, rng, deps) {
     case SCENES.COMBAT: {
       if (input === 'Стим') {
         if (state.stimUsedThisFight) {
-          const buttons = ['Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
+          const buttons = ['🗡️ Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
           return { reply: { text: 'Стим уже использован в этом бою.', buttons }, nextState: state };
         }
         return {
-          reply: { text: 'Выбери стим:', buttons: [...stimButtons(), 'Назад'] },
+          reply: { text: 'Выбери стим:', buttons: [...stimButtons(), '⬅️ Назад'] },
           nextState: { scene: 'combat_stim_select', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident, skillCooldowns: state.skillCooldowns }
         };
       }
-      const skillId = input === 'Обычная атака' ? null : skillIdByName(input);
+      const skillId = input === '🗡️ Обычная атака' ? null : skillIdByName(input);
       const skill = skillId ? SKILLS[skillId] : null;
-      if (input !== 'Обычная атака' && !skill) {
-        const buttons = ['Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
+      if (input !== '🗡️ Обычная атака' && !skill) {
+        const buttons = ['🗡️ Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
         if (!state.stimUsedThisFight) buttons.push('Стим');
         return { reply: { text: 'Выбери действие кнопкой ниже.', buttons }, nextState: state };
       }
       if (skillId && state.skillCooldowns?.[skillId] > 0) {
-        const buttons = ['Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
+        const buttons = ['🗡️ Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
         if (!state.stimUsedThisFight) buttons.push('Стим');
         return { reply: { text: `${skill.name} ещё перезаряжается (${state.skillCooldowns[skillId]} х.) — выбери другое действие.`, buttons }, nextState: state };
       }
