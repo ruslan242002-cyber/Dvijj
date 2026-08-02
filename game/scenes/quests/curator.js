@@ -30,7 +30,7 @@ function curatorQuestScreen(deps, player, questId, stageId) {
 
   if (stage.isCombat) {
     return {
-      reply: { text, buttons: ['Атаковать', 'Отступить'], imageKey: imageForEnemy(stage.enemy.name) },
+      reply: { text, buttons: ['⚔️ Атаковать', 'Отступить'], imageKey: imageForEnemy(stage.enemy.name) },
       nextState: { scene: 'pre_combat', player, enemy: { ...stage.enemy, periodic: [] }, curatorQuest: { questId, winNext: stage.winNext, loseNext: stage.loseNext } }
     };
   }
@@ -46,7 +46,7 @@ function curatorQuestScreen(deps, player, questId, stageId) {
     nextPlayer.completedQuests = [...(nextPlayer.completedQuests || [])];
     if (!nextPlayer.completedQuests.includes(questId)) nextPlayer.completedQuests.push(questId);
     const fullText = rewardLines.length ? `${text}\n\n${rewardLines.join('\n')}` : text;
-    return { reply: { text: fullText, buttons: ['Назад'], imageKey: imageForCurator(player.faction) }, nextState: { scene: 'station', player: nextPlayer } };
+    return { reply: { text: fullText, buttons: ['⬅️ Назад'], imageKey: imageForCurator(player.faction) }, nextState: { scene: 'station', player: nextPlayer } };
   }
 
   return {
