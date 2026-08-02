@@ -9,10 +9,14 @@
  */
 
 const { rollEvent, rollLoot, ZONE_WEIGHTS, generateEnemy } = require('../../engine/exploration-engine.js');
+
+const TICK_RADIATION_GAIN = 2; // % облучения за каждый тик вылазки, независимо от типа события
 const { rollNamedEncounter, buildBestiaryFighter, BESTIARY } = require('../../engine/bestiary.js');
 const { rollEventWithDepth } = require('../../engine/deep-exploration.js');
+const { rollMicroDiscovery, GROUND_DISCOVERIES } = require('../../lib/micro-discovery.js');
 const { attemptEvacuation } = require('../../engine/evacuation.js');
 const { getEvacChanceBonus, getRadiationDiscount } = require('../../lib/housing.js');
+const { pickAnomalyPuzzle, resolvePuzzleAttempt } = require('../../lib/anomaly-puzzles.js');
 const { discoverHypothesis } = require('../../lore/trakt-mythos.js');
 const { applyConsequence } = require('../../choices/consequence-engine.js');
 const { checkContractProgress } = require('../../contracts/contracts-engine.js');
@@ -57,6 +61,15 @@ function applyConsequenceToPlayer(player, consequenceId) {
 }
 
 function resolveExplorationEvent(player, event, zone, depth, deps, rng, prefixText = '', allowContinue = true) {
+  // Радиация теперь чисто временнáя — копится с каждым тиком вылазки
+  // (2% за тик), а не от конкретных событий-аномалий. Раньше это было
+  // источником "странного" облучения — почему у героя облучение растёт
+  // только на аномалиях, а на остальных 90% тиков нет вообще? Теперь
+  // логика простая и предсказуемая: сам факт нахождения в поле облучает.
+  const radiationDiscount = getRadiationDiscount(player);
+  const tickRadiation = Math.max(0, Math.round(TICK_RADIATION_GAIN * (1 - radiationDiscount)));
+  player.radiation = Math.min(100, (player.radiation || 0) + tickRadiation);
+
   // ВАЖНО: применяем event.flag ЗДЕСЬ, для любого типа события, а не только
   // в exploration_event_choice. Раньше это применялось только для веток с
   // выбором — 'story' (curator_message) никогда не ставил свой флаг
@@ -96,24 +109,22 @@ function resolveExplorationEvent(player, event, zone, depth, deps, rng, prefixTe
       // например Кураторский страж) не нападают сами — игроку решать.
       if (enemy.neutral) {
         return {
-          reply: { text: `${prefixText}👁️ ${enemy.name}\n\n${enemy.name} пока не проявляет враждебности — патрулирует, не приближаясь.`, buttons: ['Обойти стороной', 'Атаковать'], imageKey: imageForEnemy(enemy.name) },
+          reply: { text: `${prefixText}👁️ ${enemy.name}\n\n${enemy.name} пока не проявляет враждебности — патрулирует, не приближаясь.`, buttons: ['Обойти стороной', '⚔️ Атаковать'], imageKey: imageForEnemy(enemy.name) },
           nextState: { scene: 'neutral_encounter', player, enemy, zone, depth }
         };
       }
 
       const nameLine = namedEnemy ? `⚠️ ${enemy.name}\n\n${BESTIARY[enemy.bestiaryId]?.lore || ''}` : `⚠️ ОТГОЛОСОК\n\n${event.text}`;
       return {
-        reply: { text: `${prefixText}${nameLine}${bonusNote}`, buttons: ['Атаковать', 'Отступить'], imageKey: imageForEnemy(enemy.name) },
+        reply: { text: `${prefixText}${nameLine}${bonusNote}`, buttons: ['⚔️ Атаковать', 'Отступить'], imageKey: imageForEnemy(enemy.name) },
         nextState: { scene: 'pre_combat', player, enemy, zone, depth }
       };
     }
     case 'anomaly': {
-      const discount = getRadiationDiscount(player);
-      const gain = Math.max(0, Math.round(event.radiationGain * (1 - discount)));
-      player.radiation = Math.min(100, (player.radiation || 0) + gain);
+      const puzzle = pickAnomalyPuzzle(rng);
       return {
-        reply: { text: `${prefixText}🌀 АНОМАЛИЯ\n\n${event.text}\n☢️ Облучение: ${player.radiation}%\n\nЧто делать с находкой?`, buttons: ['Доложить куратору', 'Утаить находку'] },
-        nextState: { scene: 'anomaly_choice', player, zone, depth }
+        reply: { text: `${prefixText}🌀 АНОМАЛИЯ: ${puzzle.name}\n\n${puzzle.intro}`, buttons: ['Преодолеть'] },
+        nextState: { scene: 'anomaly_puzzle', player, zone, depth, puzzle, baseEvent: event }
       };
     }
     case 'distress': {
@@ -122,7 +133,7 @@ function resolveExplorationEvent(player, event, zone, depth, deps, rng, prefixTe
       if (rng() < 0.15) {
         const mimic = buildBestiaryFighter(BESTIARY.trakt_plakalschitsa, player.level);
         return {
-          reply: { text: `${prefixText}📡 СИГНАЛ БЕДСТВИЯ\n\nКрик о помощи звучит слишком... правильно. Слишком по учебнику.\n\n${mimic.name} сбрасывает маскировку.`, buttons: ['Атаковать', 'Отступить'], imageKey: imageForEnemy(mimic.name) },
+          reply: { text: `${prefixText}📡 СИГНАЛ БЕДСТВИЯ\n\nКрик о помощи звучит слишком... правильно. Слишком по учебнику.\n\n${mimic.name} сбрасывает маскировку.`, buttons: ['⚔️ Атаковать', 'Отступить'], imageKey: imageForEnemy(mimic.name) },
           nextState: { scene: 'pre_combat', player, enemy: mimic, zone, depth }
         };
       }
@@ -150,7 +161,7 @@ function resolveExplorationEvent(player, event, zone, depth, deps, rng, prefixTe
       if (event.residentId && event.residentAlive && BESTIARY[event.residentId]) {
         const residentName = BESTIARY[event.residentId].name;
         return {
-          reply: { text: `${prefixText}${event.text}`, buttons: [`Атаковать: ${residentName}`, ...journeyContinueButtons(zone, false)] },
+          reply: { text: `${prefixText}${event.text}`, buttons: [`⚔️ Атаковать: ${residentName}`, ...journeyContinueButtons(zone, false)] },
           nextState: { scene: 'journey_continue', player, zone, depth, sectorResident: { sectorId: event.sectorId, residentId: event.residentId } }
         };
       }
@@ -177,13 +188,27 @@ function resolveExplorationEvent(player, event, zone, depth, deps, rng, prefixTe
     case 'boss': {
       const enemy = buildGuardianEnemy(event.combat?.guardianName, event.combat?.tier || 5, rng);
       return {
-        reply: { text: `${prefixText}👁️ ${event.text}`, buttons: ['Атаковать', 'Отступить'], imageKey: imageForEnemy(enemy.name) },
+        reply: { text: `${prefixText}👁️ ${event.text}`, buttons: ['⚔️ Атаковать', 'Отступить'], imageKey: imageForEnemy(enemy.name) },
         nextState: { scene: 'pre_combat', player, enemy, zone, depth, fragmentId: event.fragmentId }
       };
     }
     default:
       return safe(`${prefixText}${event.text || 'Ничего не произошло.'}`);
   }
+}
+
+/** Прикрепляет всплывающую находку к итогу тика — только если игроку
+ * реально есть куда "продолжить" (сцена journey_continue: не бой, не
+ * диалог, не конец вылазки). Роллит заново на каждый вызов — то есть на
+ * каждый отдельный тик, а не переносит старую находку дальше. */
+function withMicroDiscovery(result, rng) {
+  if (!result || result.nextState?.scene !== 'journey_continue') return result;
+  const discovery = rollMicroDiscovery(GROUND_DISCOVERIES, rng);
+  if (!discovery) return result;
+  return {
+    reply: { ...result.reply, text: `${result.reply.text}\n\n🔍 ${discovery.text}`, buttons: [`Изучить: ${discovery.name}`, ...result.reply.buttons] },
+    nextState: { ...result.nextState, microDiscovery: discovery }
+  };
 }
 
 function explore(player, zone, rng, deps, stealthMode = false, depth = 0) {
@@ -199,23 +224,23 @@ function explore(player, zone, rng, deps, stealthMode = false, depth = 0) {
     if (event.type !== 'ambush') {
       player.stealthLog = [...(player.stealthLog || []), `Уклонение в ${ZONE_LABEL[zone] || zone}`].slice(-5);
     }
-    return resolveExplorationEvent(player, event, zone, 0, deps, rng, '', false);
+    return withMicroDiscovery(resolveExplorationEvent(player, event, zone, 0, deps, rng, '', false), rng);
   }
 
   const event = rollEventWithDepth(player, zone, depth, rng);
-  return resolveExplorationEvent(player, event, zone, depth, deps, rng);
+  return withMicroDiscovery(resolveExplorationEvent(player, event, zone, depth, deps, rng), rng);
 }
 
 function handleExploration(state, input, rng, deps) {
   switch (state.scene) {
     case SCENES.STEALTH_EXPLORE: {
-      if (input === 'Назад') {
+      if (input === '⬅️ Назад') {
         return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
       }
       if (input === 'Уйти в тень') {
         return explore({ ...state.player }, state.player.zone || 'blue', rng, deps, true);
       }
-      return { reply: { text: 'Выбери действие кнопкой ниже.', buttons: ['Уйти в тень', 'Назад'] }, nextState: state };
+      return { reply: { text: 'Выбери действие кнопкой ниже.', buttons: ['Уйти в тень', '⬅️ Назад'] }, nextState: state };
     }
 
     case SCENES.JOURNEY: {
@@ -229,7 +254,7 @@ function handleExploration(state, input, rng, deps) {
         };
       }
       if (state.kind === 'explore') {
-        return explore(state.player, state.payload.zone, rng, deps, false, state.payload.depth || 0);
+        return explore(state.player, state.payload.zone, rng, deps, !!state.payload.stealthMode, state.payload.depth || 0);
       }
       const player = { ...state.player, faction: state.payload.targetFaction };
       const curator = CURATORS[player.faction] || '';
@@ -240,11 +265,29 @@ function handleExploration(state, input, rng, deps) {
     }
 
     case SCENES.JOURNEY_CONTINUE: {
-      const { player, zone, depth, isBossContext, sectorResident } = state;
-      if (sectorResident && input === `Атаковать: ${BESTIARY[sectorResident.residentId]?.name}`) {
+      const { player, zone, depth, isBossContext, sectorResident, microDiscovery } = state;
+      if (microDiscovery && input === `Изучить: ${microDiscovery.name}`) {
+        const rewardedPlayer = { ...player };
+        let rewardNote;
+        if (microDiscovery.reward.credits) {
+          rewardedPlayer.credits = (rewardedPlayer.credits || 0) + microDiscovery.reward.credits;
+          rewardNote = `💳 +${microDiscovery.reward.credits} кредитов.`;
+        } else {
+          addToInventory(rewardedPlayer, microDiscovery.reward.resource, microDiscovery.reward.tier, microDiscovery.reward.qty);
+          rewardNote = `📦 +${microDiscovery.reward.qty} ${microDiscovery.reward.resource} T${microDiscovery.reward.tier}.`;
+        }
+        const baseButtons = sectorResident
+          ? [`⚔️ Атаковать: ${BESTIARY[sectorResident.residentId]?.name}`, ...journeyContinueButtons(zone, isBossContext)]
+          : journeyContinueButtons(zone, isBossContext);
+        return {
+          reply: { text: `Забираешь находку. ${rewardNote}`, buttons: baseButtons },
+          nextState: { scene: 'journey_continue', player: rewardedPlayer, zone, depth, isBossContext, sectorResident }
+        };
+      }
+      if (sectorResident && input === `⚔️ Атаковать: ${BESTIARY[sectorResident.residentId]?.name}`) {
         const enemy = buildBestiaryFighter(BESTIARY[sectorResident.residentId], player.level);
         return {
-          reply: { text: `⚔️ ${enemy.name} наконец обращает на тебя внимание.`, buttons: ['Атаковать', 'Отступить'], imageKey: imageForEnemy(enemy.name) },
+          reply: { text: `⚔️ ${enemy.name} наконец обращает на тебя внимание.`, buttons: ['⚔️ Атаковать', 'Отступить'], imageKey: imageForEnemy(enemy.name) },
           nextState: { scene: 'pre_combat', player, enemy, zone, depth, sectorResident }
         };
       }
@@ -262,13 +305,13 @@ function handleExploration(state, input, rng, deps) {
         if (result.success) {
           return { reply: { text: `🛰️ ${result.text}`, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
         }
-        return resolveExplorationEvent(player, result.blockingEvent, zone, depth || 0, deps, rng, `⚠️ ${result.text}\n\n`);
+        return withMicroDiscovery(resolveExplorationEvent(player, result.blockingEvent, zone, depth || 0, deps, rng, `⚠️ ${result.text}\n\n`), rng);
       }
       if (input === 'Вернуться на станцию') {
         return { reply: { text: 'Ты не торопясь идёшь назад пешком — вылазка окончена, всё добытое уже в трюме.', buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
       }
       const fallbackButtons = sectorResident
-        ? [`Атаковать: ${BESTIARY[sectorResident.residentId]?.name}`, ...journeyContinueButtons(zone, isBossContext)]
+        ? [`⚔️ Атаковать: ${BESTIARY[sectorResident.residentId]?.name}`, ...journeyContinueButtons(zone, isBossContext)]
         : journeyContinueButtons(zone, isBossContext);
       return { reply: { text: 'Выбери действие кнопкой ниже.', buttons: fallbackButtons }, nextState: state };
     }
@@ -283,7 +326,7 @@ function handleExploration(state, input, rng, deps) {
         const combatZone = choice.combat.zoneOverride || zone;
         const enemy = generateEnemy(combatZone, rng, player.level || 1);
         return {
-          reply: { text: `⚔️ ${event.text}`, buttons: ['Атаковать', 'Отступить'], imageKey: imageForEnemy(enemy.name) },
+          reply: { text: `⚔️ ${event.text}`, buttons: ['⚔️ Атаковать', 'Отступить'], imageKey: imageForEnemy(enemy.name) },
           nextState: { scene: 'pre_combat', player, enemy, zone, depth }
         };
       }
@@ -298,6 +341,30 @@ function handleExploration(state, input, rng, deps) {
       if (choice.consequenceId) applyConsequenceToPlayer(nextPlayer, choice.consequenceId);
       if (event.flag) { nextPlayer.flags = nextPlayer.flags || {}; nextPlayer.flags[event.flag] = true; }
       return safeReturnChoice(result.text || event.text, nextPlayer, zone, depth);
+    }
+
+    case SCENES.ANOMALY_PUZZLE: {
+      if (input !== 'Преодолеть') {
+        return { reply: { text: 'Нажми «Преодолеть», чтобы попытаться пройти аномалию.', buttons: ['Преодолеть'] }, nextState: state };
+      }
+      const player = { ...state.player };
+      const { puzzle, baseEvent, zone, depth } = state;
+      const attempt = resolvePuzzleAttempt(puzzle, player);
+      player.hp = Math.max(0, player.hp - attempt.hpDamage);
+      const damageNote = attempt.hpDamage > 0 ? ` -${attempt.hpDamage} HP (${puzzle.failDamagePercent}% макс.).` : '';
+      const resultLine = attempt.passed ? '✅ Преодолено.' : '⚠️ Не преодолено.';
+
+      if (player.hp <= 0) {
+        return {
+          reply: { text: `${resultLine} ${attempt.text}${damageNote}\n\n☠️ Ловушка оказалась смертельной. Спасательная капсула вытаскивает тебя на станцию.`, buttons: stationButtons(deps, player) },
+          nextState: { scene: 'station', player: { ...player, hp: Math.round(player.hpMax * 0.3) } }
+        };
+      }
+
+      return {
+        reply: { text: `${resultLine} ${attempt.text}${damageNote}\n\n${baseEvent.text}\n❤️ HP: ${player.hp}/${player.hpMax}\n\nЧто делать с находкой?`, buttons: ['Доложить куратору', 'Утаить находку'] },
+        nextState: { scene: 'anomaly_choice', player, zone, depth }
+      };
     }
 
     case SCENES.ANOMALY_CHOICE: {
@@ -321,13 +388,13 @@ function handleExploration(state, input, rng, deps) {
       if (input === 'Обойти стороной') {
         return safeReturnChoice(`Ты обходишь ${state.enemy.name} по широкой дуге — оно провожает тебя взглядом, но не двигается.`, state.player, state.zone, state.depth);
       }
-      if (input === 'Атаковать') {
+      if (input === '⚔️ Атаковать') {
         return {
-          reply: { text: `⚔️ Ты решаешь спровоцировать ${state.enemy.name}.`, buttons: ['Атаковать', 'Отступить'], imageKey: imageForEnemy(state.enemy.name) },
+          reply: { text: `⚔️ Ты решаешь спровоцировать ${state.enemy.name}.`, buttons: ['⚔️ Атаковать', 'Отступить'], imageKey: imageForEnemy(state.enemy.name) },
           nextState: { scene: 'pre_combat', player: state.player, enemy: state.enemy, zone: state.zone, depth: state.depth }
         };
       }
-      return { reply: { text: 'Выбери действие кнопкой ниже.', buttons: ['Обойти стороной', 'Атаковать'] }, nextState: state };
+      return { reply: { text: 'Выбери действие кнопкой ниже.', buttons: ['Обойти стороной', '⚔️ Атаковать'] }, nextState: state };
     }
 
     default:
