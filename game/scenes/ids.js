@@ -23,6 +23,7 @@ const SCENES = Object.freeze({
 
   LOC_BRIDGE: 'loc_bridge',
   LORE_MYTHOS: 'lore_mythos',
+  PASSIVE_MANAGEMENT: 'passive_management',
   QUEST_SHYOPOT: 'quest_shyopot',
   LOC_REPAIR: 'loc_repair',
   LOC_DECON: 'loc_decon',
@@ -38,6 +39,7 @@ const SCENES = Object.freeze({
   JOURNEY_CONTINUE: 'journey_continue',
   EXPLORATION_EVENT_CHOICE: 'exploration_event_choice',
   ANOMALY_CHOICE: 'anomaly_choice',
+  ANOMALY_PUZZLE: 'anomaly_puzzle',
   NEUTRAL_ENCOUNTER: 'neutral_encounter',
 
   PRE_COMBAT: 'pre_combat',
@@ -59,6 +61,13 @@ const SCENES = Object.freeze({
   SHIP_PRE_COMBAT: 'ship_pre_combat',
   SHIP_COMBAT: 'ship_combat',
   SHIP_TRADER: 'ship_trader',
+
+  VEIN_HUB: 'vein_hub',
+  VEIN_ATTACK_LIST: 'vein_attack_list',
+  VEIN_PVP_COMBAT: 'vein_pvp_combat',
+  VEIN_MONSTER_COMBAT: 'vein_monster_combat',
+  VEIN_BOSS_WAIT: 'vein_boss_wait',
+  VEIN_BOSS_COMBAT: 'vein_boss_combat',
 });
 
 module.exports = { SCENES };
