@@ -68,31 +68,45 @@ function computeDerivedStats(stats) {
   };
 }
 
+const { aggregateModuleEffects } = require('../crafting/crafting-engine.js');
+
 /**
  * Применяет производные статы к игроку — пересчитывает accuracy/dodge/focus
  * и добавляет статовые бонусы поверх БАЗОВЫХ firepower/shielding/hpMax
- * (тех, что даёт фракция при создании персонажа + крафт). Нужно вызывать
- * после ЛЮБОГО изменения основных статов: левел-ап (см. engine/leveling.js),
- * ручное распределение очков (api/profile.js — allocateStat), крафт модулей.
+ * (тех, что даёт фракция при создании персонажа). Нужно вызывать после
+ * ЛЮБОГО изменения основных статов: левел-ап (см. engine/leveling.js),
+ * ручное распределение очков (api/profile.js — allocateStat), экипировка
+ * модулей (crafting/crafting-engine.js).
  *
  * ВАЖНО про идемпотентность: player.baseFirepower/baseShielding/baseHpMax
- * хранят стат-НЕЗАВИСИМУЮ часть (от фракции/крафта), а итоговые
- * stats.firepower/stats.shielding/hpMax = база + бонус от статов. Без этого
- * разделения повторный вызов applyDerivedStats задваивал бы бонус при
- * каждом пересчёте.
+ * хранят стат-НЕЗАВИСИМУЮ часть (от фракции), а итоговые
+ * stats.firepower/stats.shielding/hpMax = база + бонус от статов + бонус
+ * от экипированных модулей — пересчитывается заново при каждом вызове, не
+ * накапливается. Модули к power/mind/reaction/endurance тоже НЕ мутируют
+ * player.stats напрямую (это испортило бы настоящее распределение очков
+ * персонажа навсегда) — они складываются только во "временный" набор
+ * effectiveStats, который идёт на вход в computeDerivedStats.
  */
 function applyDerivedStats(player) {
   player.baseFirepower = player.baseFirepower ?? (player.stats.firepower || 0);
   player.baseShielding = player.baseShielding ?? (player.stats.shielding || 0);
   player.baseHpMax = player.baseHpMax ?? (player.hpMax || 0);
 
-  const derived = computeDerivedStats(player.stats);
+  const moduleBonus = aggregateModuleEffects(player);
+  const effectiveStats = {
+    power: (player.stats.power || 0) + (moduleBonus.power || 0),
+    mind: (player.stats.mind || 0) + (moduleBonus.mind || 0),
+    reaction: (player.stats.reaction || 0) + (moduleBonus.reaction || 0),
+    endurance: (player.stats.endurance || 0) + (moduleBonus.endurance || 0),
+  };
+
+  const derived = computeDerivedStats(effectiveStats);
 
   player.dodge = derived.dodge;
   player.accuracy = derived.accuracy;
   player.focus = derived.focus;
-  player.stats.firepower = player.baseFirepower + derived.firepowerBonus;
-  player.stats.shielding = player.baseShielding + derived.shieldingBonus;
+  player.stats.firepower = player.baseFirepower + derived.firepowerBonus + (moduleBonus.firepower || 0);
+  player.stats.shielding = player.baseShielding + derived.shieldingBonus + (moduleBonus.shielding || 0);
 
   const newHpMax = player.baseHpMax + derived.hpBonus;
   const hpDelta = newHpMax - player.hpMax;
