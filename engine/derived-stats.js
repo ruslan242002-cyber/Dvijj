@@ -69,6 +69,7 @@ function computeDerivedStats(stats) {
 }
 
 const { aggregateModuleEffects } = require('../crafting/crafting-engine.js');
+const { aggregateGearEffects } = require('./gear-engine.js');
 
 /**
  * Применяет производные статы к игроку — пересчитывает accuracy/dodge/focus
@@ -93,11 +94,20 @@ function applyDerivedStats(player) {
   player.baseHpMax = player.baseHpMax ?? (player.hpMax || 0);
 
   const moduleBonus = aggregateModuleEffects(player);
+  const gearBonus = aggregateGearEffects(player);
+  const combinedBonus = {
+    power: (moduleBonus.power || 0) + (gearBonus.power || 0),
+    mind: (moduleBonus.mind || 0) + (gearBonus.mind || 0),
+    reaction: (moduleBonus.reaction || 0) + (gearBonus.reaction || 0),
+    endurance: (moduleBonus.endurance || 0) + (gearBonus.endurance || 0),
+    firepower: (moduleBonus.firepower || 0) + (gearBonus.firepower || 0),
+    shielding: (moduleBonus.shielding || 0) + (gearBonus.shielding || 0),
+  };
   const effectiveStats = {
-    power: (player.stats.power || 0) + (moduleBonus.power || 0),
-    mind: (player.stats.mind || 0) + (moduleBonus.mind || 0),
-    reaction: (player.stats.reaction || 0) + (moduleBonus.reaction || 0),
-    endurance: (player.stats.endurance || 0) + (moduleBonus.endurance || 0),
+    power: (player.stats.power || 0) + combinedBonus.power,
+    mind: (player.stats.mind || 0) + combinedBonus.mind,
+    reaction: (player.stats.reaction || 0) + combinedBonus.reaction,
+    endurance: (player.stats.endurance || 0) + combinedBonus.endurance,
   };
 
   const derived = computeDerivedStats(effectiveStats);
@@ -105,8 +115,8 @@ function applyDerivedStats(player) {
   player.dodge = derived.dodge;
   player.accuracy = derived.accuracy;
   player.focus = derived.focus;
-  player.stats.firepower = player.baseFirepower + derived.firepowerBonus + (moduleBonus.firepower || 0);
-  player.stats.shielding = player.baseShielding + derived.shieldingBonus + (moduleBonus.shielding || 0);
+  player.stats.firepower = player.baseFirepower + derived.firepowerBonus + combinedBonus.firepower;
+  player.stats.shielding = player.baseShielding + derived.shieldingBonus + combinedBonus.shielding;
 
   const newHpMax = player.baseHpMax + derived.hpBonus;
   const hpDelta = newHpMax - player.hpMax;
