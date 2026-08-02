@@ -17,6 +17,9 @@ const { imageForLocation } = require('../../location-images.js');
 const { imageForCurator } = require('../../curator-images.js');
 const { hubMessage, stationButtons } = require('../common.js');
 const { SCENES } = require('../ids.js');
+const {
+  PASSIVE_SKILLS, passiveSlotsFor, canEquipPassive, equipPassive, unequipPassive, learnPassive, knowsPassive, SLOTS_PER_LEVEL_MILESTONE, MAX_PASSIVE_SLOTS,
+} = require('../../../engine/passive-skills.js');
 
 function stepShyopotQuest(playerIn, input) {
   const player = { ...playerIn };
@@ -48,8 +51,56 @@ function stepShyopotQuest(playerIn, input) {
     player.completedQuests = player.completedQuests || [];
     if (!player.completedQuests.includes('shyopot_hypotheses')) player.completedQuests.push('shyopot_hypotheses');
   }
-  const buttons = rendered.isTerminal ? ['Назад'] : rendered.choices.map((c) => c.label);
+  const buttons = rendered.isTerminal ? ['⬅️ Назад'] : rendered.choices.map((c) => c.label);
   return { reply: { text: rendered.text, buttons, imageKey: imageForCurator('Терминус') }, nextState: { scene: 'quest_shyopot', player } };
+}
+
+/** Экран пассивных умений — три категории: неизученные чипы (в трюме,
+ * ждут применения), изученные-но-не-экипированные (можно поставить в
+ * слот), экипированные (можно снять). Слоты — see engine/passive-skills.js
+ * (сейчас 3, растёт до 10, механизм расширения ещё не решён). */
+function passiveScreen(player, prefixText = '') {
+  const known = player.knownPassives || [];
+  const equipped = player.equippedPassives || [];
+  const chips = player.passiveChips || [];
+  const slots = passiveSlotsFor(player);
+
+  const lines = [];
+  const buttons = [];
+
+  if (chips.length) {
+    lines.push('🧬 Найденные чипы (не изучены):');
+    for (const id of chips) {
+      const skill = PASSIVE_SKILLS[id];
+      if (!skill) continue;
+      lines.push(`  ${skill.name} — ${skill.description}`);
+      buttons.push(`Изучить: ${skill.name}`);
+    }
+    lines.push('');
+  }
+
+  if (known.length) {
+    const nextMilestoneLevel = slots < MAX_PASSIVE_SLOTS ? (Math.floor((player.level || 1) / SLOTS_PER_LEVEL_MILESTONE) + 1) * SLOTS_PER_LEVEL_MILESTONE : null;
+    const slotGrowthNote = nextMilestoneLevel ? ` (следующий слот на ${nextMilestoneLevel} уровне)` : ' (максимум)';
+    lines.push(`⚙️ Изучено (слотов занято ${equipped.length}/${slots}${slotGrowthNote}):`);
+    for (const id of known) {
+      const skill = PASSIVE_SKILLS[id];
+      if (!skill) continue;
+      const isEquipped = equipped.includes(id);
+      lines.push(`  ${isEquipped ? '✅' : '◻️'} ${skill.name} — ${skill.description}`);
+      buttons.push(isEquipped ? `Снять: ${skill.name}` : `Экипировать: ${skill.name}`);
+    }
+  }
+
+  if (!chips.length && !known.length) {
+    lines.push('Пока ничего — пассивки находятся редкими нейрочипами на вылазках и в дальнем космосе.');
+  }
+
+  buttons.push('⬅️ Назад');
+  return {
+    reply: { text: `${prefixText}🧬 ПАССИВНЫЕ УМЕНИЯ\n\n${lines.join('\n')}`, buttons },
+    nextState: { scene: 'passive_management', player }
+  };
 }
 
 function mythosScreen(player, prefixText = '') {
@@ -69,7 +120,7 @@ function mythosScreen(player, prefixText = '') {
     return `${icon} ${label}${extra}`;
   });
   const collectible = statuses.filter((f) => f.unlocked && !f.collected);
-  const buttons = [...collectible.map((f) => `Собрать: ${f.shortName || f.name || f.id}`), 'Гипотезы', 'Назад'];
+  const buttons = [...collectible.map((f) => `Собрать: ${f.shortName || f.name || f.id}`), 'Гипотезы', '⬅️ Назад'];
   // Защита: если HYPOTHESIS_INFO не содержит ключ hyp (другое название поля
   // или другой набор гипотез в реальном trakt-mythos.js) — раньше это было
   // необработанное исключение (undefined.name), которое молча ронялo весь
@@ -89,12 +140,59 @@ function handleBridge(state, input, rng, deps) {
       if (input === 'Мифология Тракта') {
         return mythosScreen(state.player);
       }
+      if (input === 'Пассивки') {
+        return passiveScreen(state.player);
+      }
       return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
     }
 
+    case SCENES.PASSIVE_MANAGEMENT: {
+      if (input === '⬅️ Назад') {
+        return { reply: { text: '🎛️ МОСТИК\n\nЗдесь решают судьбу станции. Смена позывного и станции приписки — скоро.', buttons: ['Мифология Тракта', 'Пассивки', '⬅️ Назад'], imageKey: imageForLocation('bridge', state.player.faction) }, nextState: { scene: 'loc_bridge', player: state.player } };
+      }
+
+      const findByName = (name) => Object.values(PASSIVE_SKILLS).find((s) => s.name === name)?.id;
+
+      const learnMatch = /^Изучить: (.+)$/.exec(input);
+      if (learnMatch) {
+        const passiveId = findByName(learnMatch[1]);
+        const chipIdx = (state.player.passiveChips || []).indexOf(passiveId);
+        if (!passiveId || chipIdx === -1) return passiveScreen(state.player);
+        const player = { ...state.player, passiveChips: [...state.player.passiveChips] };
+        player.passiveChips.splice(chipIdx, 1);
+        const result = learnPassive(player, passiveId);
+        if (!result.ok) return passiveScreen(player, 'Чип не подошёл — уже изучено.\n\n');
+        return passiveScreen(player, `Изучено: ${PASSIVE_SKILLS[passiveId].name}.\n\n`);
+      }
+
+      const equipMatch = /^Экипировать: (.+)$/.exec(input);
+      if (equipMatch) {
+        const passiveId = findByName(equipMatch[1]);
+        if (!passiveId) return passiveScreen(state.player);
+        const player = { ...state.player };
+        const result = equipPassive(player, passiveId);
+        if (!result.ok) {
+          const reasonText = result.reason === 'NO_FREE_SLOT' ? 'нет свободных слотов — сначала сними что-то другое.' : 'не получилось.';
+          return passiveScreen(state.player, `Не удалось экипировать: ${reasonText}\n\n`);
+        }
+        return passiveScreen(player);
+      }
+
+      const unequipMatch = /^Снять: (.+)$/.exec(input);
+      if (unequipMatch) {
+        const passiveId = findByName(unequipMatch[1]);
+        if (!passiveId) return passiveScreen(state.player);
+        const player = { ...state.player };
+        unequipPassive(player, passiveId);
+        return passiveScreen(player);
+      }
+
+      return passiveScreen(state.player);
+    }
+
     case SCENES.LORE_MYTHOS: {
-      if (input === 'Назад') {
-        return { reply: { text: '🎛️ МОСТИК\n\nЗдесь решают судьбу станции. Смена позывного и станции приписки — скоро.', buttons: ['Мифология Тракта', 'Назад'], imageKey: imageForLocation('bridge', state.player.faction) }, nextState: { scene: 'loc_bridge', player: state.player } };
+      if (input === '⬅️ Назад') {
+        return { reply: { text: '🎛️ МОСТИК\n\nЗдесь решают судьбу станции. Смена позывного и станции приписки — скоро.', buttons: ['Мифология Тракта', 'Пассивки', '⬅️ Назад'], imageKey: imageForLocation('bridge', state.player.faction) }, nextState: { scene: 'loc_bridge', player: state.player } };
       }
       if (input === 'Гипотезы') {
         return stepShyopotQuest(state.player, null);
@@ -120,7 +218,7 @@ function handleBridge(state, input, rng, deps) {
     }
 
     case SCENES.QUEST_SHYOPOT: {
-      if (input === 'Назад') {
+      if (input === '⬅️ Назад') {
         return mythosScreen(state.player);
       }
       return stepShyopotQuest(state.player, input);
