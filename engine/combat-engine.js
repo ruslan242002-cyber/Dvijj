@@ -65,6 +65,8 @@ function tickPeriodic(fighter) {
   fighter.hp = clamp(Math.round(fighter.hp - roundedDot + roundedHot), 0, fighter.hpMax);
   return { totalDot: roundedDot, totalHot: roundedHot };
 }
+const CRIT_VULNERABLE_POINT_SHRED = 2; // крит бьёт в уязвимую точку — немного снижает броню цели навсегда
+
 function resolveTurn({ attacker, defender, stim, skill, rng = Math.random }) {
   const log = [];
   if (stim) { const s = applyStim(attacker, stim); if (s.length) log.push(`Стим: ${s.join(', ')}`); }
@@ -77,6 +79,14 @@ function resolveTurn({ attacker, defender, stim, skill, rng = Math.random }) {
     const finalDmg = Math.round(result.dmg * outMod * inMod);
     defender.hp = clamp(defender.hp - finalDmg, 0, defender.hpMax);
     if (finalDmg > 0) log.push(`${attacker.name || 'Атакующий'} наносит ${finalDmg} урона${result.crit ? ' (КРИТ)' : ''}.`);
+    if (result.crit && finalDmg > 0 && defender.stats?.shielding != null) {
+      // Крит — не просто больше урона, а попадание в уязвимую точку:
+      // немного портит броню цели на оставшийся бой (тот же приём, что и
+      // у shieldShred-умений, не отдельная новая система).
+      const before = defender.stats.shielding;
+      defender.stats.shielding = Math.max(0, defender.stats.shielding - CRIT_VULNERABLE_POINT_SHRED);
+      if (defender.stats.shielding < before) log.push('Удар пришёлся в уязвимую точку — броня повреждена.');
+    }
     if (result.heal > 0) { attacker.hp = clamp(attacker.hp + result.heal, 0, attacker.hpMax); log.push(`восстанавливает ${result.heal} HP.`); }
     if (result.dot) { defender.periodic = defender.periodic || []; defender.periodic.push({ ...result.dot }); log.push('Наложен периодический эффект.'); }
   }
