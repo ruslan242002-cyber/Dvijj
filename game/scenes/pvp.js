@@ -1,6 +1,8 @@
 'use strict';
 
-const { getDuel, submitTurn: submitPvpTurn, winnerReward, PvpError } = require('../../pvp/pvp-engine.js');
+const { peekDuel, submitTurn: submitPvpTurn, winnerReward, PvpError } = require('../../pvp/pvp-engine.js');
+
+const PVP_MIN_LEVEL = 30;
 const { findRandomOpponent } = require('../../pvp/matchmaking-engine.js');
 const { SKILLS, STIMS } = require('../../engine/skills-data.js');
 const { imageForLocation } = require('../location-images.js');
@@ -8,7 +10,7 @@ const { hubMessage, stationButtons, skillIdByName } = require('./common.js');
 const { SCENES } = require('./ids.js');
 
 async function pvpDuelScreen(deps, player, playerId, duelId, duelMaybe) {
-  const duel = duelMaybe || await getDuel({ store: deps.pvpStore }, duelId);
+  const duel = duelMaybe || await peekDuel({ store: deps.pvpStore }, duelId);
   if (!duel || duel.status === 'finished') {
     return { reply: { text: 'Дуэль не найдена или уже завершена.', buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
   }
@@ -19,11 +21,11 @@ async function pvpDuelScreen(deps, player, playerId, duelId, duelMaybe) {
 
   if (!myTurn) {
     return {
-      reply: { text: `⚔️ Дуэль с ${opp.name}\n\nТы: ❤️${me.hp}/${me.hpMax} — Соперник: ❤️${opp.hp}/${opp.hpMax}\n\nСейчас не твой ход — жди ответа соперника и загляни попозже.`, buttons: ['Обновить', 'Назад'] },
+      reply: { text: `⚔️ Дуэль с ${opp.name}\n\nТы: ❤️${me.hp}/${me.hpMax} — Соперник: ❤️${opp.hp}/${opp.hpMax}\n\nСейчас не твой ход — жди ответа соперника и загляни попозже.`, buttons: ['🔄 Обновить', '⬅️ Назад'] },
       nextState: { scene: 'pvp_duel', player, duelId }
     };
   }
-  const buttons = ['Обычная атака', ...(me.equippedSkills || []).map((id) => SKILLS[id]?.name).filter(Boolean), 'Назад'];
+  const buttons = ['Обычная атака', ...(me.equippedSkills || []).map((id) => SKILLS[id]?.name).filter(Boolean), '⬅️ Назад'];
   return {
     reply: { text: `⚔️ Дуэль с ${opp.name}\n\nТы: ❤️${me.hp}/${me.hpMax} — Соперник: ❤️${opp.hp}/${opp.hpMax}\n\nТвой ход:`, buttons },
     nextState: { scene: 'pvp_duel', player, duelId }
@@ -36,8 +38,14 @@ async function pvpHub(deps, player, playerId) {
   }
   const activeDuelId = await deps.pvpStore.getActiveDuelId(playerId);
   if (activeDuelId) return pvpDuelScreen(deps, player, playerId, activeDuelId);
+  if ((player.level || 1) < PVP_MIN_LEVEL) {
+    return {
+      reply: { text: `⚔️ Дуэльная арена открывается с ${PVP_MIN_LEVEL} уровня — сейчас у тебя ${player.level || 1}. Продолжай осваиваться, здесь тебя подождут.`, buttons: stationButtons(deps, player) },
+      nextState: { scene: 'station', player }
+    };
+  }
   return {
-    reply: { text: '⚔️ ДУЭЛЬНАЯ АРЕНА\n\nНайти случайного соперника близкой силы?', buttons: ['Искать соперника', 'Назад'] },
+    reply: { text: '⚔️ ДУЭЛЬНАЯ АРЕНА\n\nНайти случайного соперника близкой силы?', buttons: ['🔍 Соперник', '⬅️ Назад'] },
     nextState: { scene: 'pvp_menu', player }
   };
 }
@@ -45,16 +53,19 @@ async function pvpHub(deps, player, playerId) {
 async function handlePvp(state, input, rng, deps, playerId) {
   switch (state.scene) {
     case SCENES.PVP_MENU: {
-      if (input === 'Назад') {
+      if (input === '⬅️ Назад') {
         return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
       }
-      if (input === 'Искать соперника') {
+      if (input === '🔍 Соперник') {
+        if ((state.player.level || 1) < PVP_MIN_LEVEL) {
+          return { reply: { text: `⚔️ Дуэльная арена открывается с ${PVP_MIN_LEVEL} уровня.`, buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
+        }
         try {
           const result = await findRandomOpponent({ store: deps.pvpStore }, { ...state.player, id: playerId });
           if (result.matched) return pvpDuelScreen(deps, state.player, playerId, result.duel.id, result.duel);
-          return { reply: { text: 'Ты встал в очередь — при следующем заходе в «Дуэль» проверим, не нашёлся ли соперник.', buttons: ['Назад'] }, nextState: { scene: 'pvp_menu', player: state.player } };
+          return { reply: { text: 'Ты встал в очередь — при следующем заходе в «Дуэль» проверим, не нашёлся ли соперник.', buttons: ['⬅️ Назад'] }, nextState: { scene: 'pvp_menu', player: state.player } };
         } catch (e) {
-          if (e instanceof PvpError) return { reply: { text: `Не удалось: ${e.code}`, buttons: ['Назад'] }, nextState: state };
+          if (e instanceof PvpError) return { reply: { text: `Не удалось: ${e.code}`, buttons: ['⬅️ Назад'] }, nextState: state };
           throw e;
         }
       }
@@ -62,10 +73,10 @@ async function handlePvp(state, input, rng, deps, playerId) {
     }
 
     case SCENES.PVP_DUEL: {
-      if (input === 'Назад') {
+      if (input === '⬅️ Назад') {
         return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
       }
-      if (input === 'Обновить') {
+      if (input === '🔄 Обновить') {
         return pvpDuelScreen(deps, state.player, playerId, state.duelId);
       }
       const skillId = input === 'Обычная атака' ? null : skillIdByName(input);
@@ -79,18 +90,20 @@ async function handlePvp(state, input, rng, deps, playerId) {
           const won = duel.winner === mySide;
           const player = { ...state.player };
           const reward = winnerReward();
+          const creditMult = player.faction === 'Терминус' ? 1.25 : 1;
+          const creditsGained = Math.round(reward.credits * creditMult);
           if (won) {
-            player.credits = (player.credits || 0) + reward.credits;
+            player.credits = (player.credits || 0) + creditsGained;
             player.reputation = (player.reputation || 0) + reward.reputation;
           }
           return {
-            reply: { text: `⚔️ Дуэль окончена. ${won ? `Победа! +${reward.credits} кредитов, +${reward.reputation} репутации.` : 'Поражение.'}`, buttons: stationButtons(deps, player) },
+            reply: { text: `⚔️ Дуэль окончена. ${won ? `Победа! +${creditsGained} кредитов, +${reward.reputation} репутации.` : 'Поражение.'}`, buttons: stationButtons(deps, player) },
             nextState: { scene: 'station', player }
           };
         }
         return pvpDuelScreen(deps, state.player, playerId, state.duelId, duel);
       } catch (e) {
-        if (e instanceof PvpError) return { reply: { text: `Не удалось: ${e.code}`, buttons: ['Обновить', 'Назад'] }, nextState: state };
+        if (e instanceof PvpError) return { reply: { text: `Не удалось: ${e.code}`, buttons: ['🔄 Обновить', '⬅️ Назад'] }, nextState: state };
         throw e;
       }
     }
