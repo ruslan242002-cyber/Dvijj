@@ -59,7 +59,7 @@ async function myListingsScreen(deps, player, playerId) {
   const lines = listings.length
     ? listings.map((l) => `${l.itemName} ×${l.qty} — 💳${l.price}/шт (итого 💳${l.price * l.qty})`)
     : ['У тебя нет активных лотов.'];
-  const buttons = [...listings.map((l) => `Снять: ${l.itemName}`), 'Назад'];
+  const buttons = [...listings.map((l) => `Снять: ${l.itemName}`), '⬅️ Назад'];
   return {
     reply: { text: `📋 МОИ ЛОТЫ\n\n${lines.join('\n')}`, buttons },
     nextState: { scene: 'market_my_listings', player, listings }
@@ -89,7 +89,7 @@ async function marketHub(deps, player, playerId) {
   const lines = items.length
     ? items.map((it) => `${it.itemName} — от 💳${it.bestPrice}/шт, доступно ×${it.totalQty}`)
     : ['Пока пусто.'];
-  const buttons = [...items.map((it) => `Купить: ${it.itemName}`), 'Выставить из трюма', 'Мои лоты', 'Назад'];
+  const buttons = [...items.map((it) => `Купить: ${it.itemName}`), 'Выставить из трюма', 'Мои лоты', '⬅️ Назад'];
   return {
     reply: { text: `📈 БИРЖА\n\n${lines.join('\n')}`, buttons },
     nextState: { scene: 'market_hub', player, allListings: listings }
@@ -99,15 +99,15 @@ async function marketHub(deps, player, playerId) {
 async function handleMarket(state, input, rng, deps, playerId) {
   switch (state.scene) {
     case SCENES.MARKET_HUB: {
-      if (input === 'Назад') {
+      if (input === '⬅️ Назад') {
         return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
       }
       if (input === 'Выставить из трюма') {
         const inv = state.player.inventory || [];
         if (!inv.length) {
-          return { reply: { text: 'Трюм пуст — нечего выставлять.', buttons: ['Назад'] }, nextState: { scene: 'market_hub', player: state.player, allListings: state.allListings || [] } };
+          return { reply: { text: 'Трюм пуст — нечего выставлять.', buttons: ['⬅️ Назад'] }, nextState: { scene: 'market_hub', player: state.player, allListings: state.allListings || [] } };
         }
-        const buttons = inv.map((i) => `Лот: ${i.resource} T${i.tier} ×${i.qty}`).concat('Назад');
+        const buttons = inv.map((i) => `Лот: ${i.resource} T${i.tier} ×${i.qty}`).concat('⬅️ Назад');
         return { reply: { text: 'Что выставить целиком?', buttons }, nextState: { scene: 'market_sell_pick', player: state.player } };
       }
       if (input === 'Мои лоты') {
@@ -121,7 +121,7 @@ async function handleMarket(state, input, rng, deps, playerId) {
           .sort((a, b) => a.price - b.price);
         if (!bookListings.length) return marketHub(deps, state.player, playerId);
         const lines = bookListings.map((l, i) => `${i + 1}. 💳${l.price}/шт × ${l.qty} доступно`);
-        const buttons = bookListings.map((_, i) => `${i + 1}`).concat('Назад');
+        const buttons = bookListings.map((_, i) => `${i + 1}`).concat('⬅️ Назад');
         return {
           reply: { text: `📖 ${itemName} — книга заявок (от дешёвых к дорогим)\n\n${lines.join('\n')}\n\nВыбери позицию цифрой.`, buttons },
           nextState: { scene: 'market_item_book', player: state.player, bookListings, itemName }
@@ -131,24 +131,24 @@ async function handleMarket(state, input, rng, deps, playerId) {
     }
 
     case SCENES.MARKET_ITEM_BOOK: {
-      if (input === 'Назад') return marketHub(deps, state.player, playerId);
+      if (input === '⬅️ Назад') return marketHub(deps, state.player, playerId);
       const idx = parseInt(input, 10) - 1;
       const listing = (state.bookListings || [])[idx];
       if (!listing) {
-        const buttons = (state.bookListings || []).map((_, i) => `${i + 1}`).concat('Назад');
+        const buttons = (state.bookListings || []).map((_, i) => `${i + 1}`).concat('⬅️ Назад');
         return { reply: { text: 'Выбери позицию цифрой из списка.', buttons }, nextState: state };
       }
       return {
-        reply: { text: `${listing.itemName} по 💳${listing.price}/шт, доступно ×${listing.qty}.\n\nСколько купить? Напиши число от 1 до ${listing.qty}.`, buttons: ['Назад'] },
+        reply: { text: `${listing.itemName} по 💳${listing.price}/шт, доступно ×${listing.qty}.\n\nСколько купить? Напиши число от 1 до ${listing.qty}.`, buttons: ['⬅️ Назад'] },
         nextState: { scene: 'market_buy_qty', player: state.player, listing }
       };
     }
 
     case SCENES.MARKET_BUY_QTY: {
-      if (input === 'Назад') return marketHub(deps, state.player, playerId);
+      if (input === '⬅️ Назад') return marketHub(deps, state.player, playerId);
       const qty = parseInt(input, 10);
       if (!Number.isInteger(qty) || qty <= 0 || qty > state.listing.qty || String(qty) !== input.trim()) {
-        return { reply: { text: `Введи целое число от 1 до ${state.listing.qty}.`, buttons: ['Назад'] }, nextState: state };
+        return { reply: { text: `Введи целое число от 1 до ${state.listing.qty}.`, buttons: ['⬅️ Назад'] }, nextState: state };
       }
       try {
         const player = await buyFromMarket(deps, state.player, playerId, state.listing, qty);
@@ -163,7 +163,7 @@ async function handleMarket(state, input, rng, deps, playerId) {
     }
 
     case SCENES.MARKET_MY_LISTINGS: {
-      if (input === 'Назад') return marketHub(deps, state.player, playerId);
+      if (input === '⬅️ Назад') return marketHub(deps, state.player, playerId);
       const cancelMatch = /^Снять: (.+)$/.exec(input);
       if (cancelMatch) {
         const listing = (state.listings || []).find((l) => l.itemName === cancelMatch[1]);
@@ -173,7 +173,7 @@ async function handleMarket(state, input, rng, deps, playerId) {
           return { reply: { text: `Лот снят: ${listing.itemName} ×${listing.qty} вернулись в трюм.`, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
         } catch (e) {
           if (e instanceof MarketError) {
-            return { reply: { text: `Не удалось снять лот: ${e.code}`, buttons: ['Назад'] }, nextState: { scene: 'market_my_listings', player: state.player, listings: state.listings || [] } };
+            return { reply: { text: `Не удалось снять лот: ${e.code}`, buttons: ['⬅️ Назад'] }, nextState: { scene: 'market_my_listings', player: state.player, listings: state.listings || [] } };
           }
           throw e;
         }
@@ -182,23 +182,23 @@ async function handleMarket(state, input, rng, deps, playerId) {
     }
 
     case SCENES.MARKET_SELL_PICK: {
-      if (input === 'Назад') return marketHub(deps, state.player, playerId);
+      if (input === '⬅️ Назад') return marketHub(deps, state.player, playerId);
       const match = /^Лот: (.+) T(\d+) ×(\d+)$/.exec(input);
       if (!match) return marketHub(deps, state.player, playerId);
       const [, resource, tierStr, qtyStr] = match;
       const tier = Number(tierStr), qty = Number(qtyStr);
       const suggested = suggestedListingPrice(tier);
       return {
-        reply: { text: `${resource} T${tier} ×${qty}\n\nПо какой цене за штуку выставить? Рекомендуем 💳${suggested} (или впиши своё число — так и работает конкуренция цен на бирже).`, buttons: [String(suggested), 'Назад'] },
+        reply: { text: `${resource} T${tier} ×${qty}\n\nПо какой цене за штуку выставить? Рекомендуем 💳${suggested} (или впиши своё число — так и работает конкуренция цен на бирже).`, buttons: [String(suggested), '⬅️ Назад'] },
         nextState: { scene: 'market_sell_price', player: state.player, resource, tier, qty }
       };
     }
 
     case SCENES.MARKET_SELL_PRICE: {
-      if (input === 'Назад') return marketHub(deps, state.player, playerId);
+      if (input === '⬅️ Назад') return marketHub(deps, state.player, playerId);
       const price = parseInt(input, 10);
       if (!Number.isInteger(price) || price <= 0 || String(price) !== input.trim()) {
-        return { reply: { text: 'Введи целое положительное число — цену за штуку.', buttons: ['Назад'] }, nextState: state };
+        return { reply: { text: 'Введи целое положительное число — цену за штуку.', buttons: ['⬅️ Назад'] }, nextState: state };
       }
       const player = { ...state.player, inventory: (state.player.inventory || []).map((i) => ({ ...i })) };
       try {
