@@ -1,5 +1,7 @@
 'use strict';
 const { applyDerivedStats } = require('./derived-stats.js');
+const { shipLevelUp } = require('./ship.js');
+const { maybeSpeak, levelTriggerFor } = require('../lib/fifth-voice.js');
 
 // Раньше: 50 + (level-1)*25 — линейно, до 100 уровня набегало бы всего
 // ~124 000 опыта суммарно, пара недель активной игры. Теперь — растущая
@@ -25,6 +27,27 @@ function grantXp(player, amount) {
     // полностью, это привычное и приятное ощущение "левел-ап = передышка".
     applyDerivedStats(player);
     player.hp = player.hpMax;
+
+    // Корабль растёт вместе с персонажем — 1 уровень корабля за 1 уровень
+    // персонажа. Без этого shipLevelUp() существовал бы, но никогда не
+    // вызывался нигде в игре: корабль навсегда оставался бы 1 уровня, а
+    // жёлтая/красная зоны (требуют 4/8 уровень корабля — engine/travel.js:
+    // ZONE_DISTANCE_BANDS) были бы физически недостижимы НАВСЕГДА, что и
+    // объясняло путаницу с "пропавшим порталом".
+    if (player.ship) {
+      for (let i = 0; i < levelsGained; i++) shipLevelUp(player.ship);
+    }
+
+    // Пятый Голос — звучит на уровнях 8/15/22/30 (см. lib/fifth-voice.js).
+    // grantXp — чистая функция без доступа к тексту ответа, поэтому не
+    // строит реплику сама, а копит её на игроке; вызывающая сцена сама
+    // решает, дописать ли pendingVoiceMessage к своему тексту и очистить поле.
+    for (const lvl of [8, 15, 22, 30]) {
+      if (player.level >= lvl && (player.level - levelsGained) < lvl) {
+        const line = maybeSpeak(player, levelTriggerFor(lvl));
+        if (line) player.pendingVoiceMessage = player.pendingVoiceMessage ? `${player.pendingVoiceMessage}\n\n${line}` : line;
+      }
+    }
   }
   return { player, leveledUp: levelsGained > 0, levelsGained, level: player.level };
 }
