@@ -88,12 +88,13 @@ function miningDamage(playerLevel) {
   return 8 + Math.floor((playerLevel || 1) / 5);
 }
 
-function applyMining(vein, playerId, playerLevel) {
+function applyMining(vein, playerId, playerLevel, playerFaction) {
   const dmg = miningDamage(playerLevel);
   vein.durability = Math.max(0, vein.durability - dmg);
-  vein.participants[playerId] = vein.participants[playerId] || { level: playerLevel, damageDealt: 0 };
+  vein.participants[playerId] = vein.participants[playerId] || { level: playerLevel, damageDealt: 0, faction: playerFaction };
   vein.participants[playerId].damageDealt += dmg;
   vein.participants[playerId].level = playerLevel;
+  if (playerFaction) vein.participants[playerId].faction = playerFaction;
   return dmg;
 }
 
@@ -171,25 +172,80 @@ function nextBossToJoin(vein) {
 
 // ── Награда ──
 
+// ── Блокада (политика станций, v1) ──
+
+const BLOCKADE_DOMINANCE_THRESHOLD = 0.6; // доля общего вклада, начиная с которой фракция считается доминирующей
+const BLOCKADE_TAX_RATE = 0.3;            // сколько теряют участники ДРУГИХ фракций в пользу доминирующей
+
+/** Какая фракция сейчас контролирует жилу (доминирует по суммарному
+ * вкладу участников) — или null, если ни одна не набрала порог. Не
+ * гильдии/корпорации как отдельная сущность (её в игре нет) — это
+ * экономическое доминирование СТАНЦИИ на конкретной жиле, тот же дух
+ * политики EVE Online, но без нового пласта инфраструктуры гильдий. */
+function dominantFaction(vein) {
+  const totals = {};
+  let grandTotal = 0;
+  for (const entry of Object.values(vein.participants)) {
+    if (!entry.faction) continue;
+    totals[entry.faction] = (totals[entry.faction] || 0) + entry.damageDealt;
+    grandTotal += entry.damageDealt;
+  }
+  if (grandTotal <= 0) return null;
+  const [topFaction, topAmount] = Object.entries(totals).sort((a, b) => b[1] - a[1])[0] || [];
+  if (!topFaction || topAmount / grandTotal < BLOCKADE_DOMINANCE_THRESHOLD) return null;
+  return topFaction;
+}
+
 /** Раздаётся ТОЛЬКО когда все боссы жилы мертвы. Пропорционально ВКЛАДУ
  * (damageDealt) каждого участника — не поровну. Это важно: если PvP на
  * жиле ворует часть чужого вклада (см. engine/vein-pvp.js), кража должна
- * реально что-то менять в итоговой доле, а не быть косметикой. */
+ * реально что-то менять в итоговой доле, а не быть косметикой.
+ *
+ * Если одна фракция доминирует (BLOCKADE_DOMINANCE_THRESHOLD) — она
+ * фактически "блокирует" жилу: участники ДРУГИХ фракций теряют часть
+ * своей доли (BLOCKADE_TAX_RATE), она перераспределяется между
+ * участниками доминирующей фракции пропорционально их же вкладу.
+ */
 function distributeVeinRewards(vein, participantIds) {
   if (!allBossesDead(vein) || !participantIds.length) return {};
   const totalReward = vein.durabilityMax * 2;
   const totalContribution = participantIds.reduce((sum, id) => sum + (vein.participants[id]?.damageDealt || 0), 0);
   if (totalContribution <= 0) {
-    // Никто формально не копал (все участвовали только в боях с боссом) —
-    // страхуемся от деления на 0, делим поровну как раньше.
     const share = Math.floor(totalReward / participantIds.length);
     return participantIds.reduce((acc, id) => { acc[id] = share; return acc; }, {});
   }
-  return participantIds.reduce((acc, id) => {
+
+  const baseShares = participantIds.reduce((acc, id) => {
     const contribution = vein.participants[id]?.damageDealt || 0;
-    acc[id] = Math.floor(totalReward * (contribution / totalContribution));
+    acc[id] = totalReward * (contribution / totalContribution);
     return acc;
   }, {});
+
+  const blockader = dominantFaction(vein);
+  if (!blockader) {
+    return Object.fromEntries(Object.entries(baseShares).map(([id, v]) => [id, Math.floor(v)]));
+  }
+
+  let taxPool = 0;
+  const blockaderIds = [];
+  for (const id of participantIds) {
+    const faction = vein.participants[id]?.faction;
+    if (faction && faction !== blockader) {
+      const tax = baseShares[id] * BLOCKADE_TAX_RATE;
+      baseShares[id] -= tax;
+      taxPool += tax;
+    } else if (faction === blockader) {
+      blockaderIds.push(id);
+    }
+  }
+  if (taxPool > 0 && blockaderIds.length) {
+    const blockaderContribution = blockaderIds.reduce((sum, id) => sum + (vein.participants[id]?.damageDealt || 0), 0);
+    for (const id of blockaderIds) {
+      const share = blockaderContribution > 0 ? (vein.participants[id]?.damageDealt || 0) / blockaderContribution : 1 / blockaderIds.length;
+      baseShares[id] += taxPool * share;
+    }
+  }
+  return Object.fromEntries(Object.entries(baseShares).map(([id, v]) => [id, Math.floor(v)]));
 }
 
 module.exports = {
@@ -197,5 +253,6 @@ module.exports = {
   createVein, durabilityPercent, miningDamage, applyMining,
   BOSS_TRIGGER_PERCENT, PLAYERS_PER_BOSS, shouldSpawnBosses, bossCountForParticipants,
   bossHpFor, spawnBosses, aliveBosses, allBossesDead, nextBossToJoin,
+  BLOCKADE_DOMINANCE_THRESHOLD, BLOCKADE_TAX_RATE, dominantFaction,
   distributeVeinRewards,
 };
