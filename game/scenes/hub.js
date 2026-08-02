@@ -15,38 +15,67 @@ const { marketHub } = require('./market.js');
 const { pvpHub } = require('./pvp.js');
 const { housingHub } = require('./housing.js');
 const { cantinaBoard, contractsBoard } = require('./locations/cantina.js');
+const { repairDiscount, tankUpgradeDiscount, importMarkup, TANK_UPGRADE_CREDITS, TOOL_COSTS } = require('./locations/repair.js');
 const {
-  hubMessage, statusText, stationButtons, startJourney, districtGroupsFor, ZONE_BUTTONS, stationArrivalCard,
+  hubMessage, statusText, stationButtons, startJourney, districtGroupsFor, FACTIONS, stationArrivalCard, deconFee, addToInventory,
 } = require('./common.js');
 const { travelScreen } = require('./travel.js');
+const { zoneForDistance } = require('../../engine/travel.js');
 const { SCENES } = require('./ids.js');
 
-function resolveStationAction(input, state, deps, rng, playerId) {
-  if (input === 'Статус') {
+async function resolveStationAction(input, state, deps, rng, playerId) {
+  if (input === '📊 Статус') {
     return { reply: { text: statusText(state.player), buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
   }
   if (input === 'Профиль') {
     const link = typeof deps.getProfileLink === 'function' ? deps.getProfileLink() : null;
     if (!link) return { reply: { text: 'Терминал профиля сейчас недоступен, попробуйте позже.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
-    return { reply: { text: 'Личный терминал профиля готов:', buttons: [{ label: 'Открыть профиль', url: link }, 'Исследовать', 'Статус', 'Сброс'] }, nextState: { scene: 'station', player: state.player } };
+    return { reply: { text: 'Личный терминал профиля готов:', buttons: [{ label: 'Открыть профиль', url: link }, '📊 Статус', 'Сброс'] }, nextState: { scene: 'station', player: state.player } };
   }
   if (input === 'Мостик') {
-    return { reply: { text: '🎛️ МОСТИК\n\nЗдесь решают судьбу станции. Смена позывного и станции приписки — скоро.', buttons: ['Мифология Тракта', 'Назад'], imageKey: imageForLocation('bridge', state.player.faction) }, nextState: { scene: 'loc_bridge', player: state.player } };
+    return { reply: { text: '🎛️ МОСТИК\n\nЗдесь решают судьбу станции. Смена позывного и станции приписки — скоро.', buttons: ['Мифология Тракта', 'Пассивки', '⬅️ Назад'], imageKey: imageForLocation('bridge', state.player.faction) }, nextState: { scene: 'loc_bridge', player: state.player } };
   }
   if (input === 'Отсек') {
     const p = state.player;
     const items = (p.inventory || []).map((i) => `${i.resource} T${i.tier} ×${i.qty}`).join(', ');
+    const missingHp = Math.max(0, p.ship.hpMax - p.ship.hp);
+    const repairCost = Math.round(missingHp * 3 * (1 - repairDiscount(p.faction)) * (1 + importMarkup(p.faction)));
+    const missingFuel = Math.max(0, p.ship.fuelMax - p.ship.fuel);
+    const fuelCost = Math.round(missingFuel * 2 * (1 + importMarkup(p.faction)));
+    const tankCost = Math.round(TANK_UPGRADE_CREDITS * (1 - tankUpgradeDiscount(p.faction)));
+    const shipLine = missingHp > 0
+      ? `\n\n🚀 Корпус: ❤️ ${p.ship.hp}/${p.ship.hpMax} — ремонт обойдётся в 💳${repairCost}${repairDiscount(p.faction) ? ' (со скидкой Арсенала)' : ' (3 кредита за HP)'}.`
+      : `\n\n🚀 Корпус: ❤️ ${p.ship.hp}/${p.ship.hpMax} — в полном порядке.`;
+    const fuelLine = p.faction === 'Вуаль'
+      ? `\n⛽ Топливо: ${p.ship.fuel}/${p.ship.fuelMax} — при стыковке заправляется бесплатно и без лимита (привилегия Вуали).`
+      : (missingFuel > 0
+        ? `\n⛽ Топливо: ${p.ship.fuel}/${p.ship.fuelMax} — заправка обойдётся в 💳${fuelCost} (2 кредита за ед., но при стыковке заправляется само).`
+        : `\n⛽ Топливо: ${p.ship.fuel}/${p.ship.fuelMax} — баки полны.`);
+    const tankLine = `\n🛢️ Расширение бака: +20 к ёмкости за Сплавы T2 ×15 и 💳${tankCost}${tankUpgradeDiscount(p.faction) ? ' (со скидкой Кузницы)' : ''}.`;
+    const ownedTools = p.tools || [];
+    const toolLines = Object.entries(TOOL_COSTS)
+      .map(([id, cost]) => `\n🔩 ${cost.name}: ${ownedTools.includes(id) ? 'уже есть' : `${cost.resource} T${cost.tier} ×${cost.qty} + 💳${cost.credits}`}`)
+      .join('');
+    const buttons = [];
+    if (items) buttons.push('💰 Продать');
+    if (missingHp > 0) buttons.push(`🔧 Ремонт (💳${repairCost})`);
+    if (missingFuel > 0 && p.faction !== 'Вуаль') buttons.push(`⛽ Заправка (💳${fuelCost})`);
+    buttons.push('🛢️ Расширить бак');
+    for (const [id, cost] of Object.entries(TOOL_COSTS)) {
+      if (!ownedTools.includes(id)) buttons.push(`Купить: ${cost.name}`);
+    }
+    buttons.push('⬅️ Назад');
     return {
-      reply: { text: `🔧 РЕМОНТНЫЙ ОТСЕК\n\n${items ? `В трюме: ${items}` : 'Трюм пуст.'}`, buttons: items ? ['Продать всё', 'Назад'] : ['Назад'], imageKey: imageForLocation('repair', p.faction) },
+      reply: { text: `🔧 РЕМОНТНЫЙ ОТСЕК\n\n${items ? `В трюме: ${items}` : 'Трюм пуст.'}${shipLine}${fuelLine}${tankLine}${toolLines}`, buttons, imageKey: imageForLocation('repair', p.faction) },
       nextState: { scene: 'loc_repair', player: state.player }
     };
   }
   if (input === 'Декон-камера') {
     const p = state.player;
-    const isFree = p.faction === 'Вуаль';
-    const feeLabel = isFree ? 'Снять облучение (бесплатно)' : 'Снять облучение (💳300)';
+    const fee = deconFee(p.faction);
+    const feeLabel = fee === 0 ? '☢️ Снять облучение (бесплатно)' : `☢️ Снять облучение (💳${fee})`;
     return {
-      reply: { text: `☢️ ДЕКОН-КАМЕРА\n\nТекущее облучение: ${p.radiation || 0}%${p.radiation ? `\nСтоимость очистки: ${isFree ? 'бесплатно' : '💳300'}` : ''}`, buttons: p.radiation ? [feeLabel, 'Назад'] : ['Назад'], imageKey: imageForLocation('decon', p.faction) },
+      reply: { text: `☢️ ДЕКОН-КАМЕРА\n\nТекущее облучение: ${p.radiation || 0}%${p.radiation ? `\nСтоимость очистки: ${fee === 0 ? 'бесплатно' : `💳${fee}`}` : ''}`, buttons: p.radiation ? [feeLabel, '⬅️ Назад'] : ['⬅️ Назад'], imageKey: imageForLocation('decon', p.faction) },
       nextState: { scene: 'loc_decon', player: state.player }
     };
   }
@@ -71,27 +100,70 @@ function resolveStationAction(input, state, deps, rng, playerId) {
     }
     const lines = RECIPES.map((r, i) => `${i + 1}. ${describeRecipe(r)}${hasResourcesFor(state.player, r) ? ' ✅' : ''}`);
     return {
-      reply: { text: `🔧 МАСТЕРСКАЯ\n\nВуаль первой из станций открыла настоящую мастерскую — превращай находки в постоянные модули.\n\n${lines.join('\n')}`, buttons: [...RECIPES.map((r) => r.name), 'Назад'] },
+      reply: { text: `🔧 МАСТЕРСКАЯ\n\nВуаль первой из станций открыла настоящую мастерскую — превращай находки в постоянные модули.\n\n${lines.join('\n')}`, buttons: [...RECIPES.map((r) => r.name), '⬅️ Назад'] },
       nextState: { scene: 'workshop', player: state.player }
     };
   }
   if (input === 'Архив теней') {
-    if (state.player.faction !== 'Терминус') {
-      return { reply: { text: 'Архив теней есть только у Терминуса — здесь пока не доступен.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
-    }
-    return {
-      reply: { text: '🕶️ АРХИВ ТЕНЕЙ\n\nСкрытная вылазка — шанс нарваться на засаду заметно ниже обычного, но и находки скромнее: аккуратность стоит времени.', buttons: ['Уйти в тень', 'Назад'] },
-      nextState: { scene: 'stealth_explore', player: state.player }
-    };
+    return { reply: { text: 'Скрытные вылазки временно доступны только через полёт — набери «Полёт» на хабе и выбери скрытную высадку там, когда доберёшься до планеты.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
   }
   if (input === 'Врата Тракта') {
-    return { reply: { text: '🌀 ВРАТА ТРАКТА\n\nВыбери, куда прыгнуть:', buttons: ZONE_BUTTONS, imageKey: imageForLocation('gates', state.player.faction) }, nextState: { scene: 'loc_gates', player: state.player } };
+    const others = FACTIONS.filter((f) => f !== state.player.faction);
+    return { reply: { text: '🌀 ВРАТА ТРАКТА\n\nКуда проложить курс?', buttons: [...others, '⬅️ Назад'], imageKey: imageForLocation('gates', state.player.faction) }, nextState: { scene: 'loc_gates', player: state.player } };
   }
   if (input === 'Исследовать') {
-    return startJourney(state.player, 'explore', { zone: state.player.zone || 'blue', depth: 0 }, rng);
+    return { reply: { text: 'Разведка теперь начинается с полёта — набери «Полёт» на хабе, долети до планеты и высадись там.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
   }
   if (input === 'Полёт') {
     return travelScreen(state.player, 0, '🚀 Врата открываются — курс в открытый космос.\n\n');
+  }
+  if (input === 'Терраса памяти') {
+    const player = { ...state.player, flags: { ...(state.player.flags || {}) } };
+    const firstVisit = !player.flags.visited_memory_terrace;
+    player.flags.visited_memory_terrace = true;
+    const bonusNote = firstVisit ? '\n\n💳 +50 кредитов — за то, что нашёл(нашла) дорогу сюда.' : '';
+    if (firstVisit) player.credits = (player.credits || 0) + 50;
+    return {
+      reply: { text: `🪟 ТЕРРАСА ПАМЯТИ\n\nТа самая смотровая палуба, где всё началось. Новички задерживаются здесь дольше остальных — кто-то ищет ответы во внешнем Тракте, кто-то просто привыкает к тишине после капсулы. Ветераны заходят реже, но заходят.${bonusNote}`, buttons: stationButtons(deps, player) },
+      nextState: { scene: 'station', player }
+    };
+  }
+  if (input === 'Мастерская новичка') {
+    const player = { ...state.player };
+    const firstVisit = !(player.flags || {}).visited_novice_workshop;
+    player.flags = { ...(player.flags || {}), visited_novice_workshop: true };
+    if (firstVisit) {
+      addToInventory(player, 'Сплавы', 1, 10);
+      return {
+        reply: { text: '🛠️ МАСТЕРСКАЯ НОВИЧКА\n\nЗдесь учат работать руками без риска спалить последние ресурсы в минус — инструктор стоит рядом на первых порах. Тебе выдают стартовый набор материалов на пробу.\n\n📦 +10 Сплавы T1.', buttons: stationButtons(deps, player) },
+        nextState: { scene: 'station', player }
+      };
+    }
+    return {
+      reply: { text: '🛠️ МАСТЕРСКАЯ НОВИЧКА\n\nИнструктор кивает — ты уже был(а) здесь. Дальше сам(а), с настоящим риском, как у всех.', buttons: stationButtons(deps, player) },
+      nextState: { scene: 'station', player }
+    };
+  }
+  if (input === 'Барак ожидания') {
+    return {
+      reply: { text: '🛌 БАРАК ОЖИДАНИЯ\n\nРяды коек для тех, кто ещё не выбрал станцию — или выбрал, но не спешит туда переезжать. Здесь тихо обмениваются слухами о том, как оно там, у соседей. Хорошее место, чтобы никуда не торопиться.', buttons: stationButtons(deps, state.player) },
+      nextState: { scene: 'station', player: state.player }
+    };
+  }
+  if (input === '⛏️ Жила') {
+    if (!deps.veinStore) {
+      return { reply: { text: '⛏️ Система жил сейчас недоступна.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
+    }
+    const vein = await deps.veinStore.getActiveVein();
+    if (!vein) {
+      return { reply: { text: '⛏️ Активной жилы сейчас нет. Как только она появится — тебе придёт уведомление, где бы ты ни был(а).', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
+    }
+    const zone = zoneForDistance(vein.distance);
+    const zoneName = { blue: 'патрулируемая', yellow: 'спорная', red: 'открытый космос' }[zone] || zone;
+    return {
+      reply: { text: `⛏️ ЖИЛА ОБНАРУЖЕНА\n\nТ${vein.tier} · ${vein.resource}\nПрочность: ${Math.round((vein.durability / vein.durabilityMax) * 100)}%\nМестоположение: дистанция ${vein.distance} (${zoneName})\n\nНабери «Полёт» и долети до этой дистанции — на месте появится возможность пристыковаться.`, buttons: stationButtons(deps, state.player) },
+      nextState: { scene: 'station', player: state.player }
+    };
   }
   return null;
 }
@@ -140,7 +212,7 @@ async function handleHub(state, input, rng, deps, playerId) {
         }
 
         return {
-          reply: { text: `${prefix}📍 ${group.label}`, buttons: [...group.buttons, 'Назад'] },
+          reply: { text: `${prefix}📍 ${group.label}`, buttons: [...group.buttons, '⬅️ Назад'] },
           nextState: { scene: 'district_hub', player, groupLabel: group.label }
         };
       }
@@ -148,7 +220,7 @@ async function handleHub(state, input, rng, deps, playerId) {
     }
 
     case SCENES.DISTRICT_HUB: {
-      if (input === 'Назад') {
+      if (input === '⬅️ Назад') {
         return stationDefaultView(deps, state.player, rng);
       }
       const direct = await resolveStationAction(input, state, deps, rng, playerId);
@@ -156,7 +228,7 @@ async function handleHub(state, input, rng, deps, playerId) {
 
       const groups = districtGroupsFor(state.player);
       const group = groups.find((g) => g.label === state.groupLabel) || groups[0];
-      return { reply: { text: `📍 ${state.groupLabel}`, buttons: [...group.buttons, 'Назад'] }, nextState: state };
+      return { reply: { text: `📍 ${state.groupLabel}`, buttons: [...group.buttons, '⬅️ Назад'] }, nextState: state };
     }
 
     default:
