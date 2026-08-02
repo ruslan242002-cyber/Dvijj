@@ -12,6 +12,9 @@ const { getNpcLine } = require('../../../city/npc-roster.js');
 const { DISTRICTS } = require('../../../city/districts-data.js');
 const { discoverHypothesis } = require('../../../lore/trakt-mythos.js');
 const { grantXp } = require('../../../engine/leveling.js');
+const { applyDerivedStats } = require('../../../engine/derived-stats.js');
+const { useAbyssTech } = require('../../../lib/abyss-corruption.js');
+const { maybeSpeak } = require('../../../lib/fifth-voice.js');
 const { imageForLocation } = require('../../location-images.js');
 const { imageForCurator } = require('../../curator-images.js');
 const { curatorQuestScreen } = require('../quests/curator.js');
@@ -29,7 +32,7 @@ function contractsBoard(player) {
   return {
     reply: {
       text: `📋 КОНТРАКТЫ КУРАТОРА\n⭐ Репутация: ${player.reputation || 0} (${title})\n\n${lines.join('\n')}`,
-      buttons: anyClaimable ? ['Забрать награды', 'Назад'] : ['Назад']
+      buttons: anyClaimable ? ['Забрать награды', '⬅️ Назад'] : ['⬅️ Назад']
     },
     nextState: { scene: 'contracts', player }
   };
@@ -48,13 +51,15 @@ function cantinaBoard(player) {
 
   if (quests.length === 0 && !arcQuest) {
     return {
-      reply: { text: `🍸 БАР\n\n${greeting ? `${greeting}\n\n` : ''}Куратору сейчас нечего тебе предложить.`, buttons: ['Назад'], imageKey: imageForCurator(player.faction) },
+      reply: { text: `🍸 БАР\n\n${greeting ? `${greeting}\n\n` : ''}Куратору сейчас нечего тебе предложить.`, buttons: ['⬅️ Назад'], imageKey: imageForCurator(player.faction) },
       nextState: { scene: 'loc_cantina', player }
     };
   }
   const lines = quests.map((q, i) => `${i + 1}. «${q.title}» — ${describeObjective(q.objective)} (${progressText(player, q.objective)})`);
   if (arcQuest) lines.push(`✨ Куратор ${CURATORS[player.faction] || ''} хочет поговорить лично: «${arcQuest.name}»`);
-  const buttons = [...quests.map((q) => q.title), ...(arcQuest ? [`Поговорить: ${arcQuest.name}`] : []), 'Назад'];
+  const shardCount = (player.bestiaryItems || []).filter((id) => id === 'oskolok_bezdny').length;
+  const abyssButtons = shardCount > 0 ? ['🌑 Осколок Бездны'] : [];
+  const buttons = [...quests.map((q) => q.title), ...(arcQuest ? [`Поговорить: ${arcQuest.name}`] : []), ...abyssButtons, '⬅️ Назад'];
   return {
     reply: { text: `🍸 БАР\n\n${greeting ? `${greeting}\n\n` : ''}Доступные задания куратора:\n${lines.join('\n')}`, buttons, imageKey: imageForCurator(player.faction) },
     nextState: { scene: 'loc_cantina', player }
@@ -64,8 +69,42 @@ function cantinaBoard(player) {
 function handleCantina(state, input, rng, deps) {
   switch (state.scene) {
     case SCENES.LOC_CANTINA: {
-      if (input === 'Назад') {
+      if (input === '⬅️ Назад') {
         return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
+      }
+      if (input === '🌑 Осколок Бездны') {
+        const shardIdx = (state.player.bestiaryItems || []).indexOf('oskolok_bezdny');
+        if (shardIdx === -1) return cantinaBoard(state.player);
+        if ((state.player.level || 1) < 60) {
+          return {
+            reply: { text: '🌑 Кто-то за дальним столом качает головой, глядя на осколок в твоей руке: «Рано ещё. Организм не выдержит того, что это с тобой сделает — сначала научись жить с тем, что есть» (нужен 60 уровень).', buttons: ['⬅️ Назад'] },
+            nextState: { scene: 'loc_cantina', player: state.player }
+          };
+        }
+        const player = { ...state.player, bestiaryItems: [...state.player.bestiaryItems], stats: { ...state.player.stats } };
+        player.bestiaryItems.splice(shardIdx, 1);
+
+        const statKeys = ['power', 'mind', 'reaction', 'endurance'];
+        const statLabels = { power: 'Силе', mind: 'Интеллекту', reaction: 'Ловкости', endurance: 'Выносливости' };
+        const boostedStat = statKeys[Math.floor(rng() * statKeys.length)];
+        player.stats[boostedStat] += 3;
+        applyDerivedStats(player);
+        grantXp(player, 500);
+        player.hp = player.hpMax;
+
+        const isFirstAbyssTouch = !(player.abyssCorruption > 0);
+        const result = useAbyssTech(player);
+        if (isFirstAbyssTouch) {
+          const voiceLine = maybeSpeak(player, 'abyss_first_touch');
+          if (voiceLine) player.pendingVoiceMessage = player.pendingVoiceMessage ? `${player.pendingVoiceMessage}\n\n${voiceLine}` : voiceLine;
+        }
+        const tierNote = result.crossedTier ? `\n\n⚠️ Заражение перешло на новый порог (${result.newTier}) — максимальное HP снизилось.` : '';
+        const pointNote = result.atPointOfNoReturn ? '\n\n☠️ Ты пересёк(ла) точку невозврата. Обратной дороги больше нет.' : '';
+
+        return {
+          reply: { text: `🌑 Ты активируешь осколок — на миг мир становится слишком ярким и слишком тихим одновременно. Что-то в тебе меняется навсегда.\n\n+3 к ${statLabels[boostedStat]}. +500 опыта. HP полностью восстановлено.${tierNote}${pointNote}`, buttons: stationButtons(deps, player) },
+          nextState: { scene: 'station', player }
+        };
       }
       const talkMatch = /^Поговорить: (.+)$/.exec(input);
       if (talkMatch) {
@@ -83,7 +122,7 @@ function handleCantina(state, input, rng, deps) {
         return {
           reply: {
             text: `Ещё не готово: ${describeObjective(quest.objective)} — сейчас ${progressText(state.player, quest.objective)}. Возвращайся, когда выполнишь.`,
-            buttons: ['Назад']
+            buttons: ['⬅️ Назад']
           },
           nextState: { scene: 'loc_cantina', player: state.player }
         };
@@ -115,7 +154,7 @@ function handleCantina(state, input, rng, deps) {
     }
 
     case SCENES.CONTRACTS: {
-      if (input === 'Назад') {
+      if (input === '⬅️ Назад') {
         return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
       }
       if (input === 'Забрать награды') {
@@ -131,7 +170,7 @@ function handleCantina(state, input, rng, deps) {
         const text = claimableIds.length
           ? `Получено: 💳 ${totalCredits} кредитов, ⭐ +${totalRep} репутации.`
           : 'Нечего забирать — сначала выполни хотя бы один контракт.';
-        return { reply: { text, buttons: ['Назад'] }, nextState: { scene: 'contracts', player } };
+        return { reply: { text, buttons: ['⬅️ Назад'] }, nextState: { scene: 'contracts', player } };
       }
       return contractsBoard({ ...state.player });
     }
