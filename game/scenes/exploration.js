@@ -11,9 +11,12 @@
 const { rollEvent, rollLoot, ZONE_WEIGHTS, generateEnemy } = require('../../engine/exploration-engine.js');
 
 const TICK_RADIATION_GAIN = 2; // % облучения за каждый тик вылазки, независимо от типа события
+const EXPLORATION_XP_BY_ZONE = { blue: 5, yellow: 10, red: 15 }; // скромный опыт за успешные небоевые находки — "чуть-чуть", не замена бою
 const { rollNamedEncounter, buildBestiaryFighter, BESTIARY } = require('../../engine/bestiary.js');
 const { rollEventWithDepth } = require('../../engine/deep-exploration.js');
 const { rollMicroDiscovery, GROUND_DISCOVERIES } = require('../../lib/micro-discovery.js');
+const { grantXp } = require('../../engine/leveling.js');
+const { travelScreen } = require('./travel.js');
 const { attemptEvacuation } = require('../../engine/evacuation.js');
 const { getEvacChanceBonus, getRadiationDiscount } = require('../../lib/housing.js');
 const { pickAnomalyPuzzle, resolvePuzzleAttempt } = require('../../lib/anomaly-puzzles.js');
@@ -60,6 +63,26 @@ function applyConsequenceToPlayer(player, consequenceId) {
   return true;
 }
 
+/** Возврат с планеты — раньше 'Вернуться на станцию' вёл ПРЯМО на
+ * станцию, полностью пропуская корабль, который всё это время ждал в
+ * открытом космосе (реальный баг, не по лору — как персонаж вообще
+ * оказался на станции, если улетал не оттуда?). Теперь — назад к
+ * кораблю на ту же дистанцию, откуда была высадка, с возможностью
+ * лететь дальше или уже оттуда возвращаться домой по-настоящему.
+ * pendingShipDistance ставится в performLanding (game/scenes/travel.js)
+ * и живёт на самом player, поэтому переживает всю цепочку вылазки без
+ * необходимости менять форму каждого промежуточного state. */
+function returnFromPlanet(player, prefixText = '') {
+  const distance = player.pendingShipDistance;
+  const cleanPlayer = { ...player, pendingShipDistance: undefined };
+  if (distance === undefined) {
+    // Подстраховка — если поле почему-то не выставлено (старое состояние
+    // без него), не ломаем игру, просто ведём как раньше.
+    return null;
+  }
+  return travelScreen(cleanPlayer, distance, prefixText);
+}
+
 function resolveExplorationEvent(player, event, zone, depth, deps, rng, prefixText = '', allowContinue = true) {
   // Радиация теперь чисто временнáя — копится с каждым тиком вылазки
   // (2% за тик), а не от конкретных событий-аномалий. Раньше это было
@@ -92,7 +115,7 @@ function resolveExplorationEvent(player, event, zone, depth, deps, rng, prefixTe
       // засада вообще не происходит, вместо неё спокойная находка.
       const calmedFlag = player.currentSectorId && `sector_${player.currentSectorId}_calmed`;
       if (calmedFlag && player.flags?.[calmedFlag] && rng() < 0.5) {
-        const loot = rollLoot(zone, rng);
+        const loot = rollLoot(zone, rng, player.level || 1);
         const mult = stormRewardMult();
         addToInventory(player, loot.resource, loot.tier, loot.qty);
         player.credits = (player.credits || 0) + Math.round(loot.credits * mult);
@@ -139,12 +162,16 @@ function resolveExplorationEvent(player, event, zone, depth, deps, rng, prefixTe
       }
       const mult = stormRewardMult();
       player.credits = (player.credits || 0) + Math.round(event.reward.credits * mult);
-      return safe(`${prefixText}📡 СИГНАЛ БЕДСТВИЯ\n\n${event.text}\n💳 +${Math.round(event.reward.credits * mult)} кредитов за спасательный рейс.`);
+      const expXp = EXPLORATION_XP_BY_ZONE[zone] || 5;
+      grantXp(player, expXp);
+      return safe(`${prefixText}📡 СИГНАЛ БЕДСТВИЯ\n\n${event.text}\n💳 +${Math.round(event.reward.credits * mult)} кредитов за спасательный рейс. ✨ +${expXp} XP.`);
     }
     case 'node': {
       addToInventory(player, event.resource, event.tier, 1);
       checkContractProgress(player, 'loot', { resource: event.resource, amount: 1 });
-      return safe(`${prefixText}⛏️ ЗАЛЕЖЬ\n\n${event.text}\nВ трюм добавлено: 1× ${event.resource} T${event.tier}.`);
+      const nodeXp = EXPLORATION_XP_BY_ZONE[zone] || 5;
+      grantXp(player, nodeXp);
+      return safe(`${prefixText}⛏️ ЗАЛЕЖЬ\n\n${event.text}\nВ трюм добавлено: 1× ${event.resource} T${event.tier}. ✨ +${nodeXp} XP.`);
     }
     case 'find': {
       const mult = stormRewardMult();
@@ -152,7 +179,9 @@ function resolveExplorationEvent(player, event, zone, depth, deps, rng, prefixTe
       player.credits = (player.credits || 0) + Math.round(event.loot.credits * mult);
       checkContractProgress(player, 'loot', { resource: event.loot.resource, amount: event.loot.qty });
       const stormNote = mult > 1 ? ` (🌩️ ×${mult} за шторм)` : '';
-      return safe(`${prefixText}🔭 ${event.text}${stormNote}`);
+      const findXp = EXPLORATION_XP_BY_ZONE[zone] || 5;
+      grantXp(player, findXp);
+      return safe(`${prefixText}🔭 ${event.text}${stormNote} ✨ +${findXp} XP.`);
     }
     case 'sector': {
       player.currentSectorId = event.sectorId;
@@ -303,11 +332,15 @@ function handleExploration(state, input, rng, deps) {
         const bonus = getEvacChanceBonus(player);
         const result = attemptEvacuation(player, zone, depth || 0, rng, bonus);
         if (result.success) {
+          const toShip = returnFromPlanet(player, `🛰️ ${result.text}\n\n`);
+          if (toShip) return toShip;
           return { reply: { text: `🛰️ ${result.text}`, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
         }
         return withMicroDiscovery(resolveExplorationEvent(player, result.blockingEvent, zone, depth || 0, deps, rng, `⚠️ ${result.text}\n\n`), rng);
       }
       if (input === 'Вернуться на станцию') {
+        const toShip = returnFromPlanet(player, '🪐 Ты не торопясь идёшь назад к кораблю — вылазка окончена, всё добытое уже в трюме.\n\n');
+        if (toShip) return toShip;
         return { reply: { text: 'Ты не торопясь идёшь назад пешком — вылазка окончена, всё добытое уже в трюме.', buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
       }
       const fallbackButtons = sectorResident
@@ -402,4 +435,4 @@ function handleExploration(state, input, rng, deps) {
   }
 }
 
-module.exports = { handleExploration, explore, resolveExplorationEvent };
+module.exports = { handleExploration, explore, resolveExplorationEvent, returnFromPlanet };
