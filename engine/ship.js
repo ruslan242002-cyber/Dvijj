@@ -1,5 +1,7 @@
 'use strict';
 
+const { SHIP_SKILL_BY_FACTION } = require('./ship-skills.js');
+
 /**
  * КОРАБЛЬ — отдельная от персонажа боевая сущность. Персонаж (player.stats/
  * player.hp) дерётся ногами на планетах; корабль (player.ship) дерётся в
@@ -9,13 +11,15 @@
  * и заменить, не потеряв самого себя.
  */
 
-function freshShip() {
+function freshShip(faction) {
+  const starterSkill = SHIP_SKILL_BY_FACTION[faction];
   return {
     hp: 300, hpMax: 300,
     armor: 20,       // плоское снижение входящего урона — аналог shielding у персонажа
     firepower: 30,   // базовый урон корабля в бою
     fuel: 100, fuelMax: 100,
     level: 1,
+    equippedSkills: starterSkill ? [starterSkill] : [],
   };
 }
 
