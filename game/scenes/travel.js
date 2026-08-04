@@ -12,6 +12,7 @@ const { SHIP_SKILLS, shipSkillButtons, shipSkillIdByName } = require('../../engi
 const { resolveTurn } = require('../../engine/combat-engine.js');
 const { buyFromTrader } = require('../../engine/trader-encounter.js');
 const { addToTripCargo, bankTripCargo, loseFullCargo, tripCargoUnits } = require('../../lib/trip-cargo.js');
+const { combatFullCard } = require('../../lib/combat-card.js');
 const { rollMicroDiscovery, SPACE_DISCOVERIES } = require('../../lib/micro-discovery.js');
 const { createAmbush, AMBUSH_DURATION_MS, pickAmbusher } = require('../../lib/ambush-registry.js');
 const { hubMessage, stationButtons, startJourney } = require('./common.js');
@@ -72,7 +73,11 @@ function performLanding(player, distance, rng, stealthMode, location) {
   const { banked } = bankTripCargo(player);
   const bankedNote = banked.length ? '📦 Груз рейса сдан в трюм перед высадкой.\n\n' : '';
   const zone = zoneForDistance(distance);
-  const landingPlayer = { ...player, zone };
+  // Корабль остаётся ждать на этой дистанции — именно сюда, а не сразу на
+  // станцию, нужно вернуться, когда вылазка закончится (см. фикс в
+  // game/scenes/exploration.js: 'Вернуться на станцию' раньше вёл прямо
+  // на станцию, минуя корабль вообще — реальный баг).
+  const landingPlayer = { ...player, zone, pendingShipDistance: distance };
   const landed = startJourney(landingPlayer, 'explore', { zone, depth: 0, stealthMode }, rng);
   const modeNote = stealthMode ? ' Скрытно — риск засады заметно ниже, но и находки скромнее.' : '';
   const placeName = location ? `«${location.name}»` : `зоне «${ZONE_NAMES[zone]}»`;
@@ -256,10 +261,6 @@ function resolveSpaceEvent(deps, player, event, distance, rng) {
   }
 }
 
-function shipCombatCard(player, enemy) {
-  return `👾 ${enemy.name}: ❤️ ${enemy.hp}/${enemy.hpMax}\n❤️ ${player.ship.hpMax ? 'Твой корабль' : ''}: ❤️ ${player.ship.hp}/${player.ship.hpMax}`;
-}
-
 /**
  * Переносит потерянный груз реальному засадчику — читает его сохранённое
  * состояние из основного стора игроков (deps.store, тот же, что и весь
@@ -313,9 +314,10 @@ async function resolveShipCombatTurn(deps, state, playerFighter, enemyFighter, r
   }
 
   const buttons = ['⚔️ Атаковать', ...shipSkillButtons(state.player.ship.equippedSkills || [])];
+  const playerFighterNow = shipToFighter(state.player.ship, 'Твой корабль');
   return {
-    reply: { text: `💥 ${enemyTurn.log.join(' ')}\n\n${shipCombatCard(state.player, enemyTurn.attacker)}`, buttons },
-    nextState: { scene: SCENES.SHIP_COMBAT, player: state.player, distance: state.distance, enemy: enemyTurn.attacker, onWinReturnHome: state.onWinReturnHome, ambusherPlayerId: state.ambusherPlayerId }
+    reply: { text: `💥 ${enemyTurn.log.join(' ')}\n\n${combatFullCard(playerFighterNow, enemyTurn.attacker, { prevPlayerHp: state.prevPlayerHp, prevEnemyHp: state.prevEnemyHp })}`, buttons },
+    nextState: { scene: SCENES.SHIP_COMBAT, player: state.player, distance: state.distance, enemy: enemyTurn.attacker, onWinReturnHome: state.onWinReturnHome, ambusherPlayerId: state.ambusherPlayerId, prevPlayerHp: playerFighterNow.hp, prevEnemyHp: enemyTurn.attacker.hp }
   };
 }
 
@@ -468,9 +470,10 @@ async function handleTravel(state, input, rng, deps, playerId) {
         // не удалось уйти — бой всё равно начинается
       }
       const buttons = ['⚔️ Атаковать', ...shipSkillButtons(state.player.ship.equippedSkills || [])];
+      const playerFighterStart = shipToFighter(state.player.ship, 'Твой корабль');
       return {
-        reply: { text: `${shipCombatCard(state.player, state.enemy)}\n\nВыбери действие:`, buttons },
-        nextState: { scene: SCENES.SHIP_COMBAT, player: state.player, distance: state.distance, enemy: state.enemy, onWinReturnHome: state.onWinReturnHome, ambusherPlayerId: state.ambusherPlayerId }
+        reply: { text: `${combatFullCard(playerFighterStart, state.enemy)}\n\nВыбери действие:`, buttons },
+        nextState: { scene: SCENES.SHIP_COMBAT, player: state.player, distance: state.distance, enemy: state.enemy, onWinReturnHome: state.onWinReturnHome, ambusherPlayerId: state.ambusherPlayerId, prevPlayerHp: playerFighterStart.hp, prevEnemyHp: state.enemy.hp }
       };
     }
 
