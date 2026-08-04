@@ -43,6 +43,22 @@ const SHIP_SKILLS = {
     damaging: true, shieldShred: 10,
     formula: (a) => a.stats.mind * 0.5 + a.stats.reaction * 0.4,
   },
+  forge_cannon: {
+    id: 'forge_cannon', name: 'Плавильный залп', station: 'Кузница', cd: 3, usesFocus: true,
+    damaging: true, pure: true,
+    formula: (a) => a.stats.firepower * 0.7 + a.stats.power * 0.5,
+    applyDot: { type: 'dot', amount: 16, turnsLeft: 3 },
+  },
+};
+
+/** Стартовый корабельный модуль по фракции — тот же принцип, что и у
+ * личных умений персонажа (по одному сигнатурному на станцию). */
+const SHIP_SKILL_BY_FACTION = {
+  'Приют': 'nanite_repair',
+  'Терминус': 'armor_piercing_volley',
+  'Арсенал': 'missile_barrage',
+  'Вуаль': 'ecm_jam',
+  'Кузница': 'forge_cannon',
 };
 
 function shipSkillButtons(equippedShipSkillIds = []) {
@@ -52,4 +68,4 @@ function shipSkillIdByName(name) {
   return Object.values(SHIP_SKILLS).find((s) => s.name === name)?.id || null;
 }
 
-module.exports = { SHIP_SKILLS, shipSkillButtons, shipSkillIdByName };
+module.exports = { SHIP_SKILLS, SHIP_SKILL_BY_FACTION, shipSkillButtons, shipSkillIdByName };
