@@ -12,8 +12,9 @@ const { resolvePlayerTurn } = require('../../engine/combat-turn.js');
 const { SKILLS } = require('../../engine/skills-data.js');
 const { stimButtons, stimIdByName } = require('../../engine/stim-buttons.js');
 const { rollLoot } = require('../../engine/exploration-engine.js');
+const { returnFromPlanet } = require('./exploration.js');
 const { rollLootByEnemyName } = require('../../engine/bestiary.js');
-const { xpForTier, grantXp } = require('../../engine/leveling.js');
+const { xpForKill, grantXp } = require('../../engine/leveling.js');
 const { collectFragment } = require('../../lore/trakt-mythos.js');
 const { checkContractProgress } = require('../../contracts/contracts-engine.js');
 const { recordKill } = require('../../lib/trophies.js');
@@ -49,7 +50,7 @@ function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prev
       }
       const zone = state.zone || 'blue';
       const depth = state.depth || 0;
-      const loot = rollLoot(zone, rng);
+      const loot = rollLoot(zone, rng, result.attacker.level || 1);
       const player = { ...result.attacker };
       addToInventory(player, loot.resource, loot.tier, loot.qty);
       // Фракционный перк Терминуса — +25% к кредитам с трофеев убийств
@@ -60,7 +61,7 @@ function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prev
       if ((state.enemy.tier || 0) >= 5) player.highTierKills = (player.highTierKills || 0) + 1;
       checkContractProgress(player, 'combat_win', { zone });
       checkContractProgress(player, 'loot', { resource: loot.resource, amount: loot.qty });
-      const xpGain = xpForTier(state.enemy.tier || 1);
+      const xpGain = xpForKill(state.enemy.tier || 1, player.level || 1);
       const { leveledUp, level } = grantXp(player, xpGain);
       const bestiaryDrops = rollLootByEnemyName(state.enemy.name, rng);
       const chipDrops = bestiaryDrops.filter((d) => d.id.startsWith('chip_'));
@@ -97,10 +98,18 @@ function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prev
     if (state.curatorQuest) {
       return curatorQuestScreen(deps, { ...result.attacker, hp: Math.round(result.attacker.hpMax * 0.5) }, state.curatorQuest.questId, state.curatorQuest.loseNext);
     }
-    return {
-      reply: { text: `💥 ${result.log.join(' ')}\n\n💀 Скафандр пробит. Аварийная капсула эвакуирует тебя на станцию.`, buttons: stationButtons(deps, state.player) },
-      nextState: { scene: 'station', player: { ...result.attacker, hp: Math.round(result.attacker.hpMax * 0.5) } }
-    };
+    {
+      const defeatedPlayer = { ...result.attacker, hp: Math.round(result.attacker.hpMax * 0.5) };
+      const toShip = returnFromPlanet(defeatedPlayer, '');
+      if (toShip) {
+        toShip.reply.text = `💥 ${result.log.join(' ')}\n\n💀 Скафандр пробит. Аварийная капсула тянет тебя обратно к кораблю.\n\n${toShip.reply.text}`;
+        return toShip;
+      }
+      return {
+        reply: { text: `💥 ${result.log.join(' ')}\n\n💀 Скафандр пробит. Аварийная капсула эвакуирует тебя на станцию.`, buttons: stationButtons(deps, state.player) },
+        nextState: { scene: 'station', player: defeatedPlayer }
+      };
+    }
   }
 
   const { skill: enemySkill, telegraphText } = pickEnemyAction(result.defender);
@@ -112,10 +121,18 @@ function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prev
     if (state.curatorQuest) {
       return curatorQuestScreen(deps, { ...enemyTurn.defender, hp: Math.round(enemyTurn.defender.hpMax * 0.5) }, state.curatorQuest.questId, state.curatorQuest.loseNext);
     }
-    return {
-      reply: { text: `💥 ${log}\n\n💀 Скафандр пробит.`, buttons: stationButtons(deps, state.player) },
-      nextState: { scene: 'station', player: { ...enemyTurn.defender, hp: Math.round(enemyTurn.defender.hpMax * 0.5) } }
-    };
+    {
+      const defeatedPlayer = { ...enemyTurn.defender, hp: Math.round(enemyTurn.defender.hpMax * 0.5) };
+      const toShip = returnFromPlanet(defeatedPlayer, '');
+      if (toShip) {
+        toShip.reply.text = `💥 ${log}\n\n💀 Скафандр пробит. Аварийная капсула тянет тебя обратно к кораблю.\n\n${toShip.reply.text}`;
+        return toShip;
+      }
+      return {
+        reply: { text: `💥 ${log}\n\n💀 Скафандр пробит.`, buttons: stationButtons(deps, state.player) },
+        nextState: { scene: 'station', player: defeatedPlayer }
+      };
+    }
   }
 
   let cooldowns = state.skillCooldowns || {};
@@ -139,6 +156,11 @@ function handleCombat(state, input, rng, deps) {
   switch (state.scene) {
     case SCENES.PRE_COMBAT: {
       if (input === 'Отступить') {
+        const toShip = returnFromPlanet(state.player, '');
+        if (toShip) {
+          toShip.reply.text = `Ты отступаешь на безопасное расстояние.\n\n${toShip.reply.text}`;
+          return toShip;
+        }
         return { reply: { text: 'Ты отступаешь на безопасное расстояние.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
       }
       const buttons = ['🗡️ Обычная атака', ...skillButtons(state.player, {}), 'Стим'];
