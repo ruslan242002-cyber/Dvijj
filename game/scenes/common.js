@@ -140,7 +140,7 @@ function freshPlayer(name, faction) {
     equippedSkills: starterSkills.slice(0, MAX_EQUIPPED_SKILLS),
     inventory: [],
     tripCargo: [],
-    ship: freshShip(),
+    ship: freshShip(faction),
     equippedPassives: [],
     knownPassives: [],
     credits: 0,
@@ -287,7 +287,7 @@ function stormRewardMult() {
 const DISTRICT_GROUPS = {
   'Приют': [
     { label: 'Штаб', buttons: ['Мостик', '📊 Статус'] },
-    { label: 'Отсек', buttons: ['Отсек'] },
+    { label: 'Отсек', buttons: ['Отсек', 'Мастерская'] },
     { label: 'Декон-камера', buttons: ['Декон-камера'] },
     { label: 'Палубы', buttons: ['Бар', 'Биржа', 'Жильё'] },
     { label: 'Терраса памяти', buttons: ['Терраса памяти'] },
@@ -301,7 +301,7 @@ const DISTRICT_GROUPS = {
   ],
   'Терминус': [
     { label: 'Гарнизон', buttons: ['Мостик', '📊 Статус'] },
-    { label: 'Отсек', buttons: ['Отсек'] },
+    { label: 'Отсек', buttons: ['Отсек', 'Мастерская'] },
     { label: 'Декон-камера', buttons: ['Декон-камера'] },
     { label: 'Казармы', buttons: ['Бар', 'Биржа', 'Жильё'] },
     { label: 'Рубеж', buttons: ['Архив теней'] },
@@ -313,7 +313,7 @@ const DISTRICT_GROUPS = {
   ],
   'Арсенал': [
     { label: 'Штаб', buttons: ['Мостик', '📊 Статус'] },
-    { label: 'Отсек', buttons: ['Отсек'] },
+    { label: 'Отсек', buttons: ['Отсек', 'Мастерская'] },
     { label: 'Декон-камера', buttons: ['Декон-камера'] },
     { label: 'Склад', buttons: ['Бар', 'Биржа', 'Жильё'] },
     { label: 'Дуэль', buttons: ['Дуэль'] },
@@ -335,7 +335,7 @@ const DISTRICT_GROUPS = {
   ],
   'Кузница': [
     { label: 'Плавильня', buttons: ['Мостик', '📊 Статус'] },
-    { label: 'Отсек', buttons: ['Отсек'] },
+    { label: 'Отсек', buttons: ['Отсек', 'Мастерская'] },
     { label: 'Декон-камера', buttons: ['Декон-камера'] },
     { label: 'Слобода', buttons: ['Бар', 'Биржа', 'Жильё'] },
     { label: 'Дуэль', buttons: ['Дуэль'] },
