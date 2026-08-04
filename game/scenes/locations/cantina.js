@@ -59,7 +59,7 @@ function cantinaBoard(player) {
   if (arcQuest) lines.push(`✨ Куратор ${CURATORS[player.faction] || ''} хочет поговорить лично: «${arcQuest.name}»`);
   const shardCount = (player.bestiaryItems || []).filter((id) => id === 'oskolok_bezdny').length;
   const abyssButtons = shardCount > 0 ? ['🌑 Осколок Бездны'] : [];
-  const buttons = [...quests.map((q) => q.title), ...(arcQuest ? [`Поговорить: ${arcQuest.name}`] : []), ...abyssButtons, '⬅️ Назад'];
+  const buttons = [...quests.map((q) => q.title), ...(arcQuest ? [`💬 ${arcQuest.name}`] : []), ...abyssButtons, '⬅️ Назад'];
   return {
     reply: { text: `🍸 БАР\n\n${greeting ? `${greeting}\n\n` : ''}Доступные задания куратора:\n${lines.join('\n')}`, buttons, imageKey: imageForCurator(player.faction) },
     nextState: { scene: 'loc_cantina', player }
@@ -106,7 +106,7 @@ function handleCantina(state, input, rng, deps) {
           nextState: { scene: 'station', player }
         };
       }
-      const talkMatch = /^Поговорить: (.+)$/.exec(input);
+      const talkMatch = /^💬 (.+)$/.exec(input);
       if (talkMatch) {
         const arc = getArcForFaction(state.player.faction);
         const arcQuest = arc ? getNextAvailableQuest(state.player, arc) : null;
