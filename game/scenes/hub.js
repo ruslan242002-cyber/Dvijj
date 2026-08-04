@@ -7,7 +7,7 @@
  * 'station' напрямую, и из district_hub.
  */
 
-const { RECIPES, hasResourcesFor, describeRecipe } = require('../../crafting/crafting-engine.js');
+const { workshopScreen } = require('./locations/workshop.js');
 const { DISTRICTS } = require('../../city/districts-data.js');
 const { rollStationEvent } = require('../../city/station-events.js');
 const { imageForLocation } = require('../location-images.js');
@@ -95,14 +95,7 @@ async function resolveStationAction(input, state, deps, rng, playerId) {
     return housingHub(deps, state.player);
   }
   if (input === 'Мастерская') {
-    if (state.player.faction !== 'Вуаль') {
-      return { reply: { text: 'Мастерская есть только у Вуали — здесь пока не доступна.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
-    }
-    const lines = RECIPES.map((r, i) => `${i + 1}. ${describeRecipe(r)}${hasResourcesFor(state.player, r) ? ' ✅' : ''}`);
-    return {
-      reply: { text: `🔧 МАСТЕРСКАЯ\n\nВуаль первой из станций открыла настоящую мастерскую — превращай находки в постоянные модули.\n\n${lines.join('\n')}`, buttons: [...RECIPES.map((r) => r.name), '⬅️ Назад'] },
-      nextState: { scene: 'workshop', player: state.player }
-    };
+    return workshopScreen(state.player);
   }
   if (input === 'Архив теней') {
     return { reply: { text: 'Скрытные вылазки временно доступны только через полёт — набери «Полёт» на хабе и выбери скрытную высадку там, когда доберёшься до планеты.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
