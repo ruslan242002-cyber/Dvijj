@@ -46,6 +46,16 @@ function stationArrivalCard(player, rng = Math.random) {
 
 const FACTIONS = ['Приют', 'Терминус', 'Арсенал', 'Вуаль', 'Кузница'];
 
+/** Расписание открытия городов по уровню — старт только в Приюте,
+ * остальные открываются постепенно (не смена фракции, а доступ на
+ * посещение/торговлю/квесты через Врата Тракта). */
+const CITY_UNLOCK_LEVEL = {
+  'Арсенал': 5,
+  'Вуаль': 10,
+  'Терминус': 15,
+  'Кузница': 20,
+};
+
 const { unlockedSkillsForPlayer } = require('../../engine/skills-data.js');
 const { freshShip } = require('../../engine/ship.js');
 
@@ -357,7 +367,7 @@ function districtGroupsFor(player) {
  * показать дальше (либо район, либо переспросить). */
 
 module.exports = {
-  FACTIONS, FACTION_KIT, MAX_EQUIPPED_SKILLS, RESET_COMMAND,
+  FACTIONS, FACTION_KIT, CITY_UNLOCK_LEVEL, MAX_EQUIPPED_SKILLS, RESET_COMMAND,
   ZONE_BUTTONS, ZONE_BY_LABEL, ZONE_LABEL, MIN_LEVEL_FOR_ZONE, CURATORS,
   ZONE_TRAVEL_PHRASES, STATION_TRAVEL_PHRASES, DISTRICT_GROUPS,
   trainerDrone, freshPlayer, equippedSkillIds, skillButtons, skillIdByName, skillCooldownNote,
