@@ -66,6 +66,7 @@ const SCENE_HANDLERS = {
   [SCENES.LOC_BRIDGE]: handleBridge,
   [SCENES.LORE_MYTHOS]: handleBridge,
   [SCENES.PASSIVE_MANAGEMENT]: handleBridge,
+  [SCENES.FACTION_TRANSFER]: handleBridge,
   [SCENES.QUEST_SHYOPOT]: handleBridge,
 
   [SCENES.LOC_REPAIR]: handleRepair,
