@@ -85,7 +85,7 @@ function maybeVisitSector(player, zone, rng = Math.random) {
 // а не гарантированно перехватывают его.
 const DYNAMIC_EVENT_CHANCE = 0.15;
 
-function rollEventWithContext(player, zone, rng = Math.random, depth = 0) {
+function rollEventWithContext(player, zone, rng = Math.random, depth = 0, weightsOverride = null) {
   const sectorVisit = maybeVisitSector(player, zone, rng);
   if (sectorVisit) return sectorVisit;
 
@@ -95,7 +95,7 @@ function rollEventWithContext(player, zone, rng = Math.random, depth = 0) {
   }
 
   const effectiveLevel = depth > 0 ? (player.level ?? 1) + Math.floor(depth / 2) : player.level ?? null;
-  return { ...rollEvent(zone, rng, effectiveLevel), source: 'procedural' };
+  return { ...rollEvent(zone, rng, effectiveLevel, weightsOverride), source: 'procedural' };
 }
 
 module.exports = { rollEventWithContext, maybeVisitSector, sectorsForZone };
