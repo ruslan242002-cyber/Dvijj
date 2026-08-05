@@ -17,7 +17,7 @@ const { housingHub } = require('./housing.js');
 const { cantinaBoard, contractsBoard } = require('./locations/cantina.js');
 const { repairDiscount, tankUpgradeDiscount, importMarkup, TANK_UPGRADE_CREDITS, TOOL_COSTS } = require('./locations/repair.js');
 const {
-  hubMessage, statusText, stationButtons, startJourney, districtGroupsFor, FACTIONS, stationArrivalCard, deconFee, addToInventory,
+  hubMessage, statusText, stationButtons, startJourney, districtGroupsFor, FACTIONS, CITY_UNLOCK_LEVEL, stationArrivalCard, deconFee, addToInventory,
 } = require('./common.js');
 const { travelScreen } = require('./travel.js');
 const { zoneForDistance } = require('../../engine/travel.js');
@@ -102,7 +102,13 @@ async function resolveStationAction(input, state, deps, rng, playerId) {
   }
   if (input === 'Врата Тракта') {
     const others = FACTIONS.filter((f) => f !== state.player.faction);
-    return { reply: { text: '🌀 ВРАТА ТРАКТА\n\nКуда проложить курс?', buttons: [...others, '⬅️ Назад'], imageKey: imageForLocation('gates', state.player.faction) }, nextState: { scene: 'loc_gates', player: state.player } };
+    const level = state.player.level || 1;
+    const unlocked = others.filter((f) => level >= (CITY_UNLOCK_LEVEL[f] || 0));
+    const locked = others.filter((f) => level < (CITY_UNLOCK_LEVEL[f] || 0));
+    const lockedNote = locked.length
+      ? `\n\nЕщё закрыто: ${locked.map((f) => `${f} (ур. ${CITY_UNLOCK_LEVEL[f]})`).join(', ')}.`
+      : '';
+    return { reply: { text: `🌀 ВРАТА ТРАКТА\n\nКуда проложить курс?${lockedNote}`, buttons: [...unlocked, '⬅️ Назад'], imageKey: imageForLocation('gates', state.player.faction) }, nextState: { scene: 'loc_gates', player: state.player } };
   }
   if (input === 'Исследовать') {
     return { reply: { text: 'Разведка теперь начинается с полёта — набери «Полёт» на хабе, долети до планеты и высадись там.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
