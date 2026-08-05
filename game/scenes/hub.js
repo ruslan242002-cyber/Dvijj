@@ -8,6 +8,7 @@
  */
 
 const { workshopScreen } = require('./locations/workshop.js');
+const { bridgeScreen } = require('./locations/bridge.js');
 const { DISTRICTS } = require('../../city/districts-data.js');
 const { rollStationEvent } = require('../../city/station-events.js');
 const { imageForLocation } = require('../location-images.js');
@@ -33,7 +34,7 @@ async function resolveStationAction(input, state, deps, rng, playerId) {
     return { reply: { text: 'Личный терминал профиля готов:', buttons: [{ label: 'Открыть профиль', url: link }, '📊 Статус', 'Сброс'] }, nextState: { scene: 'station', player: state.player } };
   }
   if (input === 'Мостик') {
-    return { reply: { text: '🎛️ МОСТИК\n\nЗдесь решают судьбу станции. Смена позывного и станции приписки — скоро.', buttons: ['Мифология Тракта', 'Пассивки', '⬅️ Назад'], imageKey: imageForLocation('bridge', state.player.faction) }, nextState: { scene: 'loc_bridge', player: state.player } };
+    return bridgeScreen(state.player);
   }
   if (input === 'Отсек') {
     const p = state.player;
