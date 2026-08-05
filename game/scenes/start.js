@@ -5,7 +5,7 @@
  * доклад куратору -> первая продажа хлама -> открытие Врат Тракта.
  */
 
-const { FACTIONS, CURATORS, freshPlayer, trainerDrone, sellInventory, addToInventory, stationButtons } = require('./common.js');
+const { CURATORS, freshPlayer, trainerDrone, sellInventory, addToInventory, stationButtons } = require('./common.js');
 const { imageForCurator } = require('../curator-images.js');
 const { SCENES } = require('./ids.js');
 
@@ -20,33 +20,27 @@ function handleStart(state, input, rng, deps) {
 
     case SCENES.ASK_NAME: {
       if (!input) return { reply: { text: 'Нужен хоть какой-то позывной.', buttons: [] }, nextState: state };
-      const memoryTerraceText = `Позывной принят, ${input}.\n\n` +
-        `Медтехник кивает и уводит тебя дальше по коридору — «стандартная адаптация», как она это называет. Заканчивается коридор смотровой палубой с окнами на внешний Тракт. Здесь тебя оставляют одного(одну), «пока не осядет».\n\n` +
-        `И оно оседает — обрывками, без предупреждения.\n\n` +
-        `🔹 Вспышка дисциплины: приказ сквозь огонь, и ты его выполняешь, не задумываясь.\n` +
-        `🔹 Вспышка ярости: препятствие рвётся под голыми руками, и это чувствуется правильно.\n` +
-        `🔹 Вспышка расчёта: чужая ложь распадается на составные части, как только ты приглядываешься.\n\n` +
-        `На палубе рядом с тобой — трое. Не кураторы, обычные люди со своих станций, тоже здесь «по адаптации». Каждый честно, без напора, говорит, почему его дом — дом. Никто не осуждает за молчание.\n\n` +
-        `Куратор Приюта подходит последним:\n` +
-        `«Тракт стёр тебе память, но не стёр то, кем ты хочешь стать. Выбирай не потому, что должен — потому, что откликнулось».\n\n` +
-        `К какому доку пристыковаться?`;
+      const player = freshPlayer(input, 'Приют');
+      const curator = CURATORS['Приют'] || 'куратор станции';
+      const wakeText = `Позывной принят, ${input}.\n\n` +
+        `Медтехник кивает и уводит тебя дальше по коридору — «стандартная адаптация», как она это называет. Заканчивается коридор смотровой палубой с окнами на внешний Тракт.\n\n` +
+        `Здесь просыпаются все — Приют первым принимает потерявших память, задолго до того, как кто-то решает, куда двигаться дальше. Остальные станции подождут: доберёшься, когда будешь готов(а).\n\n` +
+        `Куратор ${curator} встречает новичков лично: «Тракт стёр тебе память, но не стёр рефлексы. Проверим?»`;
       return {
-        reply: { text: memoryTerraceText, buttons: FACTIONS },
-        nextState: { scene: 'ask_faction', name: input }
+        reply: { text: wakeText, buttons: ['⚔️ Атаковать'] },
+        nextState: { scene: 'pre_combat', player, enemy: trainerDrone(), trainingFight: true }
       };
     }
 
     case SCENES.ASK_FACTION: {
-      if (!FACTIONS.includes(input)) {
-        return { reply: { text: 'Выбери одну из четырёх станций кнопкой ниже.', buttons: FACTIONS }, nextState: state };
-      }
-      const player = freshPlayer(state.name, input);
-      const curator = CURATORS[input] || 'куратор станции';
+      // Больше не используется в обычном потоке онбординга (выбора
+      // фракции больше нет — все стартуют в Приюте, см. ASK_NAME выше).
+      // Оставлено на случай, если где-то в состоянии игрока всё ещё
+      // всплывёт этот сценарий — не должно происходить, но лучше мягкий
+      // фолбэк, чем краш.
+      const player = freshPlayer(state.name || 'Пилот', 'Приют');
       return {
-        reply: {
-          text: `Добро пожаловать на борт, ${state.name}. Станция «${input}» тебя ждёт.\n\nКуратор ${curator} лично встречает новичков в тренировочном отсеке — активировался дежурный дрон-манекен, никакого риска, просто проверка со скафандром.`,
-          buttons: ['⚔️ Атаковать']
-        },
+        reply: { text: `Добро пожаловать в Приют, ${player.name}.`, buttons: ['⚔️ Атаковать'] },
         nextState: { scene: 'pre_combat', player, enemy: trainerDrone(), trainingFight: true }
       };
     }
