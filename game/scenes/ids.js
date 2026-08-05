@@ -24,6 +24,7 @@ const SCENES = Object.freeze({
   LOC_BRIDGE: 'loc_bridge',
   LORE_MYTHOS: 'lore_mythos',
   PASSIVE_MANAGEMENT: 'passive_management',
+  FACTION_TRANSFER: 'faction_transfer',
   QUEST_SHYOPOT: 'quest_shyopot',
   LOC_REPAIR: 'loc_repair',
   LOC_DECON: 'loc_decon',
