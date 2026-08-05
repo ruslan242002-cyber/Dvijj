@@ -15,6 +15,8 @@ const { DISTRICTS } = require('../../city/districts-data.js');
 const { rollStationEvent } = require('../../city/station-events.js');
 const { trophyProgressText } = require('../../lib/trophies.js');
 const { stormStatusText, isStormActive, STORM_REWARD_MULTIPLIER } = require('../../lib/world-storm.js');
+const { applyDerivedStats } = require('../../engine/derived-stats.js');
+const { SHIP_SKILL_BY_FACTION } = require('../../engine/ship-skills.js');
 
 const DANGER_LABEL = { low: 'низкая', medium: 'средняя', high: 'высокая' };
 
@@ -128,6 +130,53 @@ function trainerDrone() {
     stats: { power: 8, mind: 8, reaction: 8, endurance: 10, firepower: 10, shielding: 5 },
     luck: 0, accuracy: 0.5, dodge: 0.05, focus: 0.4, periodic: []
   };
+}
+
+const MIN_LEVEL_TO_JOIN_FACTION = 30;
+
+/**
+ * Смена станции приписки — доступна с 30 уровня (город на посещение
+ * открывается раньше, но ВСТУПИТЬ во фракцию — только с 30-го, по
+ * условиям задачи). Аккуратно отменяет бонус статов старой фракции и
+ * применяет бонус новой (а не просто прибавляет поверх — иначе бонусы
+ * бы накапливались при повторных сменах), сбрасывает набор умений на
+ * стартовый для новой фракции (старые умения физически не существуют в
+ * новой фракции — не может Приют держать «Плазменный залп» Арсенала).
+ */
+function canJoinFaction(player, newFaction) {
+  if (!FACTIONS.includes(newFaction)) return { ok: false, reason: 'UNKNOWN_FACTION' };
+  if (player.faction === newFaction) return { ok: false, reason: 'ALREADY_THIS_FACTION' };
+  if ((player.level || 1) < MIN_LEVEL_TO_JOIN_FACTION) return { ok: false, reason: 'LEVEL_TOO_LOW' };
+  return { ok: true };
+}
+
+function switchFaction(player, newFaction) {
+  const oldBias = (FACTION_KIT[player.faction] || {}).statBias || {};
+  const newBias = (FACTION_KIT[newFaction] || {}).statBias || {};
+
+  player.stats = { ...player.stats };
+  player.stats.power = (player.stats.power || 0) - (oldBias.power || 0) + (newBias.power || 0);
+  player.stats.mind = (player.stats.mind || 0) - (oldBias.mind || 0) + (newBias.mind || 0);
+  player.stats.reaction = (player.stats.reaction || 0) - (oldBias.reaction || 0) + (newBias.reaction || 0);
+  player.stats.endurance = (player.stats.endurance || 0) - (oldBias.endurance || 0) + (newBias.endurance || 0);
+  // firepowerBonus у старой фракции убираем из base, не из текущего
+  // stats.firepower (который и так пересчитывается заново каждый раз в
+  // applyDerivedStats) — трогаем именно ту "базу", что заложена при
+  // создании персонажа.
+  player.baseFirepower = (player.baseFirepower ?? 26) - (oldBias.firepowerBonus || 0) + (newBias.firepowerBonus || 0);
+
+  player.faction = newFaction;
+
+  const starterSkills = unlockedSkillsForPlayer(newFaction, player.level || 1).map((s) => s.id);
+  player.equippedSkills = starterSkills.slice(0, MAX_EQUIPPED_SKILLS);
+
+  if (player.ship) {
+    const shipSkill = SHIP_SKILL_BY_FACTION[newFaction];
+    player.ship.equippedSkills = shipSkill ? [shipSkill] : [];
+  }
+
+  applyDerivedStats(player);
+  return player;
 }
 
 function freshPlayer(name, faction) {
@@ -367,7 +416,7 @@ function districtGroupsFor(player) {
  * показать дальше (либо район, либо переспросить). */
 
 module.exports = {
-  FACTIONS, FACTION_KIT, CITY_UNLOCK_LEVEL, MAX_EQUIPPED_SKILLS, RESET_COMMAND,
+  FACTIONS, FACTION_KIT, CITY_UNLOCK_LEVEL, MIN_LEVEL_TO_JOIN_FACTION, canJoinFaction, switchFaction, MAX_EQUIPPED_SKILLS, RESET_COMMAND,
   ZONE_BUTTONS, ZONE_BY_LABEL, ZONE_LABEL, MIN_LEVEL_FOR_ZONE, CURATORS,
   ZONE_TRAVEL_PHRASES, STATION_TRAVEL_PHRASES, DISTRICT_GROUPS,
   trainerDrone, freshPlayer, equippedSkillIds, skillButtons, skillIdByName, skillCooldownNote,
