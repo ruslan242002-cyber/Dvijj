@@ -15,7 +15,7 @@ const { createQuestState, advanceQuest, completeQuest, renderQuestText } = requi
 const { SHYOPOT_HYPOTHESES_QUEST } = require('../../../quests/narrative/shyopot-hypotheses.js');
 const { imageForLocation } = require('../../location-images.js');
 const { imageForCurator } = require('../../curator-images.js');
-const { hubMessage, stationButtons } = require('../common.js');
+const { hubMessage, stationButtons, FACTIONS, CITY_UNLOCK_LEVEL, MIN_LEVEL_TO_JOIN_FACTION, canJoinFaction, switchFaction } = require('../common.js');
 const { SCENES } = require('../ids.js');
 const {
   PASSIVE_SKILLS, passiveSlotsFor, canEquipPassive, equipPassive, unequipPassive, learnPassive, knowsPassive, SLOTS_PER_LEVEL_MILESTONE, MAX_PASSIVE_SLOTS,
@@ -103,6 +103,36 @@ function passiveScreen(player, prefixText = '') {
   };
 }
 
+/** Единая точка правды для главного экрана Мостика — раньше текст/кнопки
+ * дублировались в двух местах (после Мифологии и после Пассивок) и уже
+ * дважды расходились из-за этого в прошлом. Один источник теперь. */
+function bridgeScreen(player, prefixText = '') {
+  return {
+    reply: { text: `${prefixText}🎛️ МОСТИК\n\nЗдесь решают судьбу станции.`, buttons: ['Мифология Тракта', 'Пассивки', 'Станция приписки', '⬅️ Назад'], imageKey: imageForLocation('bridge', player.faction) },
+    nextState: { scene: 'loc_bridge', player }
+  };
+}
+
+/** Смена станции приписки — с 30 уровня. Показывает текущую фракцию и,
+ * если уровень позволяет, кнопки перехода в любую ДРУГУЮ уже открытую
+ * (по CITY_UNLOCK_LEVEL) станцию. */
+function factionTransferScreen(player, prefixText = '') {
+  const level = player.level || 1;
+  if (level < MIN_LEVEL_TO_JOIN_FACTION) {
+    return {
+      reply: { text: `${prefixText}🎖️ СТАНЦИЯ ПРИПИСКИ\n\nСейчас: «${player.faction}».\n\nВступить в другую фракцию можно с ${MIN_LEVEL_TO_JOIN_FACTION} уровня — рано.`, buttons: ['⬅️ Назад'] },
+      nextState: { scene: SCENES.FACTION_TRANSFER, player }
+    };
+  }
+  const options = FACTIONS.filter((f) => f !== player.faction && level >= (CITY_UNLOCK_LEVEL[f] || 0));
+  const buttons = [...options.map((f) => `Вступить: ${f}`), '⬅️ Назад'];
+  const optionsNote = options.length ? '' : '\n\nПока нет ни одной другой открытой станции для перехода.';
+  return {
+    reply: { text: `${prefixText}🎖️ СТАНЦИЯ ПРИПИСКИ\n\nСейчас: «${player.faction}».${optionsNote}`, buttons },
+    nextState: { scene: SCENES.FACTION_TRANSFER, player }
+  };
+}
+
 function mythosScreen(player, prefixText = '') {
   const act = getCurrentAct(player);
   const statuses = getFragmentStatus(player);
@@ -143,12 +173,37 @@ function handleBridge(state, input, rng, deps) {
       if (input === 'Пассивки') {
         return passiveScreen(state.player);
       }
+      if (input === 'Станция приписки') {
+        return factionTransferScreen(state.player);
+      }
       return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
+    }
+
+    case SCENES.FACTION_TRANSFER: {
+      if (input === '⬅️ Назад') {
+        return bridgeScreen(state.player);
+      }
+      const match = /^Вступить: (.+)$/.exec(input);
+      if (match) {
+        const newFaction = match[1];
+        const check = canJoinFaction(state.player, newFaction);
+        if (!check.ok) {
+          const reasonText = check.reason === 'LEVEL_TOO_LOW' ? `нужен ${MIN_LEVEL_TO_JOIN_FACTION} уровень.` : 'не получилось.';
+          return factionTransferScreen(state.player, `Не удалось: ${reasonText}\n\n`);
+        }
+        const player = { ...state.player };
+        switchFaction(player, newFaction);
+        return {
+          reply: { text: `🎖️ Ты официально вступил(а) в станцию «${newFaction}». Умения и статы пересчитаны под новую фракцию.`, buttons: stationButtons(deps, player), imageKey: imageForLocation('station', player.faction) },
+          nextState: { scene: 'station', player }
+        };
+      }
+      return factionTransferScreen(state.player);
     }
 
     case SCENES.PASSIVE_MANAGEMENT: {
       if (input === '⬅️ Назад') {
-        return { reply: { text: '🎛️ МОСТИК\n\nЗдесь решают судьбу станции. Смена позывного и станции приписки — скоро.', buttons: ['Мифология Тракта', 'Пассивки', '⬅️ Назад'], imageKey: imageForLocation('bridge', state.player.faction) }, nextState: { scene: 'loc_bridge', player: state.player } };
+        return bridgeScreen(state.player);
       }
 
       const findByName = (name) => Object.values(PASSIVE_SKILLS).find((s) => s.name === name)?.id;
@@ -192,7 +247,7 @@ function handleBridge(state, input, rng, deps) {
 
     case SCENES.LORE_MYTHOS: {
       if (input === '⬅️ Назад') {
-        return { reply: { text: '🎛️ МОСТИК\n\nЗдесь решают судьбу станции. Смена позывного и станции приписки — скоро.', buttons: ['Мифология Тракта', 'Пассивки', '⬅️ Назад'], imageKey: imageForLocation('bridge', state.player.faction) }, nextState: { scene: 'loc_bridge', player: state.player } };
+        return bridgeScreen(state.player);
       }
       if (input === 'Гипотезы') {
         return stepShyopotQuest(state.player, null);
@@ -229,4 +284,4 @@ function handleBridge(state, input, rng, deps) {
   }
 }
 
-module.exports = { handleBridge, mythosScreen, stepShyopotQuest };
+module.exports = { handleBridge, mythosScreen, bridgeScreen, stepShyopotQuest };
