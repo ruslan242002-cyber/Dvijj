@@ -39,8 +39,8 @@ function depthRewardMultiplier(depth) {
  * своя, более редкая логика эскалации, трогать её глубиной вылазки
  * не нужно (см. комментарий в world-context.js).
  */
-function rollEventWithDepth(player, zone, depth = 0, rng = Math.random) {
-  const event = rollEventWithContext(player, zone, rng, depth);
+function rollEventWithDepth(player, zone, depth = 0, rng = Math.random, weightsOverride = null) {
+  const event = rollEventWithContext(player, zone, rng, depth, weightsOverride);
 
   if (event.source !== 'procedural') return event;
 
