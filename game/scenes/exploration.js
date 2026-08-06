@@ -37,7 +37,11 @@ const {
   hubMessage, stationButtons, addToInventory, startJourney, buildGuardianEnemy,
   journeyContinueButtons, safeReturnChoice, stormRewardMult,
   ZONE_TRAVEL_PHRASES, STATION_TRAVEL_PHRASES, CURATORS,
+  skillButtons, skillIdByName, skillCooldownNote,
 } = require('./common.js');
+const { SKILLS } = require('../../engine/skills-data.js');
+const { startCooldown, tickCooldowns } = require('../../engine/cooldowns.js');
+const { combatPackCard } = require('../../lib/combat-card.js');
 const { SCENES } = require('./ids.js');
 
 /**
@@ -324,6 +328,53 @@ function explore(player, zone, rng, deps, stealthMode = false, depth = 0) {
   return withMicroDiscovery(resolveExplorationEvent(player, event, zone, depth, deps, rng), rng);
 }
 
+/** Резолвит один полный раунд боя со стаей — умение (или обычная атака)
+ * + выбранная цель, с честным кулдауном (тот же движок, что и в бою
+ * 1 на 1), новой картой на всю стаю, и правильными исходами победы/
+ * поражения. Общий хелпер для PACK_COMBAT (когда цель всего одна и
+ * выбирать не из чего) и PACK_TARGET (обычный путь). */
+function resolvePackAction(state, targetName, skillId, rng, deps) {
+  const skill = skillId ? SKILLS[skillId] : null;
+  const targetIndex = state.pack.findIndex((p) => p.name === targetName && p.hp > 0);
+  const prevPlayerHp = state.player.hp;
+  const prevPackHp = state.pack.map((p) => p.hp);
+
+  const result = resolvePackRound(state.player, state.pack, targetIndex, skill, rng);
+  const player = result.playerFighter;
+  const cooldownsAfterUse = skillId ? startCooldown(state.packCooldowns || {}, skillId, skill, player.cooldownReductionPct || 0) : (state.packCooldowns || {});
+  const tickedCooldowns = tickCooldowns(cooldownsAfterUse);
+
+  if (result.playerDefeated) {
+    const defeatedPlayer = { ...player, hp: Math.round(player.hpMax * 0.3) };
+    const toShip = returnFromPlanet(defeatedPlayer, '');
+    if (toShip) {
+      toShip.reply.text = `💥 ${result.log.join(' ')}\n\n💀 Стая берёт числом. Аварийная капсула тянет тебя обратно к кораблю.\n\n${toShip.reply.text}`;
+      return toShip;
+    }
+    return { reply: { text: `💥 ${result.log.join(' ')}\n\n💀 Стая берёт числом. Эвакуация на станцию.`, buttons: stationButtons(deps, defeatedPlayer) }, nextState: { scene: 'station', player: defeatedPlayer } };
+  }
+
+  if (result.packDefeated) {
+    const loot = rollLoot(state.zone, rng, player.level || 1);
+    const mult = stormRewardMult();
+    addToInventory(player, loot.resource, loot.tier, loot.qty);
+    player.credits = (player.credits || 0) + Math.round(loot.credits * mult);
+    grantXp(player, (EXPLORATION_XP_BY_ZONE[state.zone] || 5) * state.pack.length);
+    return {
+      reply: { text: `💥 ${result.log.join(' ')}\n\n🏆 Стая выбита целиком. 📦 +${loot.qty} ${loot.resource} T${loot.tier}, 💳 +${Math.round(loot.credits * mult)}.`, buttons: ['Углубиться дальше', 'Вернуться на станцию'] },
+      nextState: { scene: 'journey_continue', player, zone: state.zone, depth: state.depth }
+    };
+  }
+
+  const buttons = ['🗡️ Обычная атака', ...skillButtons(player, tickedCooldowns)];
+  const cdNote = skillCooldownNote(player, tickedCooldowns);
+  const cdLine = cdNote ? `\n\n${cdNote}` : '';
+  return {
+    reply: { text: `💥 ${result.log.join(' ')}\n\n${combatPackCard(player, result.pack, { prevPlayerHp, prevPackHp })}${cdLine}`, buttons },
+    nextState: { scene: SCENES.PACK_COMBAT, player, zone: state.zone, depth: state.depth, pack: result.pack, packCooldowns: tickedCooldowns }
+  };
+}
+
 function handleExploration(state, input, rng, deps) {
   switch (state.scene) {
     case SCENES.STEALTH_EXPLORE: {
@@ -340,50 +391,41 @@ function handleExploration(state, input, rng, deps) {
       if (input === 'Отступить') {
         return { reply: { text: 'Ты отступаешь, не связываясь со стаей.', buttons: ['Углубиться дальше', 'Вернуться на станцию'] }, nextState: { scene: 'journey_continue', player: state.player, zone: state.zone, depth: state.depth } };
       }
-      const targets = state.pack.map((p) => `⚔️ Атаковать: ${p.name}`);
+      const buttons = ['🗡️ Обычная атака', ...skillButtons(state.player, {})];
       return {
-        reply: { text: `⚠️ Стая окружает — бей по одной цели за раз, но отвечают все живые разом.\n\n${packStatusText(state.pack)}`, buttons: targets },
-        nextState: { scene: SCENES.PACK_COMBAT, player: state.player, zone: state.zone, depth: state.depth, pack: state.pack }
+        reply: { text: `⚠️ Стая окружает — бей по одной цели за раз, но отвечают все живые разом.\n\n${combatPackCard(state.player, state.pack)}`, buttons },
+        nextState: { scene: SCENES.PACK_COMBAT, player: state.player, zone: state.zone, depth: state.depth, pack: state.pack, packCooldowns: {} }
       };
     }
 
     case SCENES.PACK_COMBAT: {
-      const match = /^⚔️ Атаковать: (.+)$/.exec(input);
-      const targetIndex = match ? state.pack.findIndex((p) => p.name === match[1] && p.hp > 0) : -1;
-      if (targetIndex === -1) {
-        const targets = state.pack.filter((p) => p.hp > 0).map((p) => `⚔️ Атаковать: ${p.name}`);
+      // Шаг 1 из 2 — выбор действия (обычная атака или умение), без цели.
+      const skillId = input === '🗡️ Обычная атака' ? null : skillIdByName(input);
+      const skill = skillId ? SKILLS[skillId] : null;
+      if (input !== '🗡️ Обычная атака' && !skill) {
+        const buttons = ['🗡️ Обычная атака', ...skillButtons(state.player, state.packCooldowns || {})];
+        return { reply: { text: 'Выбери действие кнопкой ниже.', buttons }, nextState: state };
+      }
+      const alive = state.pack.filter((p) => p.hp > 0);
+      if (alive.length === 1) {
+        // Единственная живая цель — не заставляем выбирать вручную.
+        return resolvePackAction(state, alive[0].name, skillId, rng, deps);
+      }
+      const targets = alive.map((p) => `🎯 ${p.name}`);
+      return {
+        reply: { text: `Цель для «${skill ? skill.name : 'Обычной атаки'}»:`, buttons: targets },
+        nextState: { scene: SCENES.PACK_TARGET, player: state.player, zone: state.zone, depth: state.depth, pack: state.pack, packCooldowns: state.packCooldowns, pendingSkillId: skillId }
+      };
+    }
+
+    case SCENES.PACK_TARGET: {
+      const match = /^🎯 (.+)$/.exec(input);
+      const targetName = match ? match[1] : null;
+      if (!targetName || !state.pack.some((p) => p.name === targetName && p.hp > 0)) {
+        const targets = state.pack.filter((p) => p.hp > 0).map((p) => `🎯 ${p.name}`);
         return { reply: { text: 'Выбери живую цель кнопкой ниже.', buttons: targets }, nextState: state };
       }
-      const result = resolvePackRound(state.player, state.pack, targetIndex, null, rng);
-      const player = result.playerFighter;
-
-      if (result.playerDefeated) {
-        const defeatedPlayer = { ...player, hp: Math.round(player.hpMax * 0.3) };
-        const toShip = returnFromPlanet(defeatedPlayer, '');
-        if (toShip) {
-          toShip.reply.text = `💥 ${result.log.join(' ')}\n\n💀 Стая берёт числом. Аварийная капсула тянет тебя обратно к кораблю.\n\n${toShip.reply.text}`;
-          return toShip;
-        }
-        return { reply: { text: `💥 ${result.log.join(' ')}\n\n💀 Стая берёт числом. Эвакуация на станцию.`, buttons: stationButtons(deps, defeatedPlayer) }, nextState: { scene: 'station', player: defeatedPlayer } };
-      }
-
-      if (result.packDefeated) {
-        const loot = rollLoot(state.zone, rng, player.level || 1);
-        const mult = stormRewardMult();
-        addToInventory(player, loot.resource, loot.tier, loot.qty);
-        player.credits = (player.credits || 0) + Math.round(loot.credits * mult);
-        grantXp(player, (EXPLORATION_XP_BY_ZONE[state.zone] || 5) * state.pack.length);
-        return {
-          reply: { text: `💥 ${result.log.join(' ')}\n\n🏆 Стая выбита целиком. 📦 +${loot.qty} ${loot.resource} T${loot.tier}, 💳 +${Math.round(loot.credits * mult)}.`, buttons: ['Углубиться дальше', 'Вернуться на станцию'] },
-          nextState: { scene: 'journey_continue', player, zone: state.zone, depth: state.depth }
-        };
-      }
-
-      const targets = result.pack.filter((p) => p.hp > 0).map((p) => `⚔️ Атаковать: ${p.name}`);
-      return {
-        reply: { text: `💥 ${result.log.join(' ')}\n\n❤️ Ты: ${player.hp}/${player.hpMax}\n${packStatusText(result.pack)}`, buttons: targets },
-        nextState: { scene: SCENES.PACK_COMBAT, player, zone: state.zone, depth: state.depth, pack: result.pack }
-      };
+      return resolvePackAction(state, targetName, state.pendingSkillId, rng, deps);
     }
 
     case 'distress_choice': {
