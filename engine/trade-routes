@@ -1,0 +1,62 @@
+'use strict';
+/**
+* ТОРГОВЫЕ МАРШРУТЫ — довези ресурс с одной станции на другую, получи
+* бонус к награде за риск в пути (в отличие от продажи на бирже на
+* месте — тут награда выше именно за то, что вёз груз через открытый
+* космос, где его можно потерять). Опирается на уже готовые инвентарь и
+* кредиты игрока — никакого нового хранилища ресурсов не требуется.
+*
+* Маршрут — это КОНТРАКТ (аналог contracts-engine.js по духу, но не
+* дублирует его файл — своя, более простая логика): взял на станции A
+* (списывает ресурс из инвентаря сразу, груз становится player.activeRoute),
+* довёз до станции B (сдал — награда), либо погиб/эвакуировался в
+* процессе — груз потерян, ничего не возвращается.
+*/
+const ROUTES = [
+{ id: 'route_priyut_terminus', from: 'Приют', to: 'Терминус', resource: 'Биомасса', tier: 2, qty: 8, reward: { credits: 220, reputation: 12 } },
+{ id: 'route_terminus_arsenal', from: 'Терминус', to: 'Арсенал', resource: 'Реголит', tier: 2, qty: 8, reward: { credits: 240, reputation: 12 } },
+{ id: 'route_arsenal_vual', from: 'Арсенал', to: 'Вуаль', resource: 'Изотопы', tier: 2, qty: 6, reward: { credits: 260, reputation: 14 } },
+{ id: 'route_vual_priyut', from: 'Вуаль', to: 'Приют', resource: 'Полимеры', tier: 2, qty: 8, reward: { credits: 220, reputation: 12 } },
+// Обратные направления — тот же груз, но встречным курсом, чуть другая награда
+{ id: 'route_terminus_priyut', from: 'Терминус', to: 'Приют', resource: 'Сплавы', tier: 2, qty: 8, reward: { credits: 210, reputation: 10 } },
+{ id: 'route_vual_arsenal', from: 'Вуаль', to: 'Арсенал', resource: 'Изотопы', tier: 3, qty: 5, reward: { credits: 280, reputation: 15 } },
+];
+function routesFrom(station) {
+return ROUTES.filter((r) => r.from === station);
+}
+function findRoute(routeId) {
+return ROUTES.find((r) => r.id === routeId) || null;
+}
+/** Взять маршрут — списывает груз из инвентаря сразу (это и есть риск:
+* если погибнешь в пути, груз не вернётся). Один активный маршрут за
+* раз — не даёт задваивать выгоду с одного и того же рейса. */
+function acceptRoute(player, routeId) {
+if (player.activeRoute) return { success: false, reason: 'ALREADY_ON_ROUTE' };
+const route = findRoute(routeId);
+if (!route) return { success: false, reason: 'ROUTE_NOT_FOUND' };
+if (player.faction !== route.from) return { success: false, reason: 'WRONG_STATION' };
+const stack = (player.inventory || []).find((i) => i.resource === route.resource && i.tier === route.tier);
+if (!stack || stack.qty < route.qty) return { success: false, reason: 'NOT_ENOUGH_CARGO' };
+stack.qty -= route.qty;
+player.inventory = player.inventory.filter((i) => i.qty > 0);
+player.activeRoute = { routeId, acceptedAt: Date.now() };
+return { success: true, route };
+}
+/** Сдать маршрут на станции назначения — награда только если игрок
+* реально долетел на станцию 'to' с активным маршрутом на руках. */
+function completeRoute(player) {
+if (!player.activeRoute) return { success: false, reason: 'NO_ACTIVE_ROUTE' };
+const route = findRoute(player.activeRoute.routeId);
+if (!route) { player.activeRoute = null; return { success: false, reason: 'ROUTE_NOT_FOUND' }; }
+if (player.faction !== route.to) return { success: false, reason: 'WRONG_DESTINATION' };
+player.credits = (player.credits || 0) + route.reward.credits;
+player.activeRoute = null;
+return { success: true, route, reward: route.reward };
+}
+/** Вызывать при смерти/потере корабля — груз маршрута теряется без
+* возврата ресурсов (это и есть цена риска, отличающая маршрут от
+* обычной продажи на месте). */
+function loseRouteOnDeath(player) {
+if (player.activeRoute) player.activeRoute = null;
+}
+module.exports = { ROUTES, routesFrom, findRoute, acceptRoute, completeRoute, loseRouteOnDeath };
