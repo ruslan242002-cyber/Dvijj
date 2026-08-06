@@ -1,0 +1,42 @@
+'use strict';
+/**
+* ТИТУЛЫ/ДОСТИЖЕНИЯ — чисто косметика поверх уже существующих полей
+* player (killCount, visitedLocations, completedContracts и т.д.), не
+* новая система прогресса. Хранится как player.achievements: string[]
+* (id разблокированных). checkAchievements(player) вызывать после любого
+* значимого события (победа в бою, высадка, сдача контракта) — дёшево,
+* просто перебирает список условий по уже актуальным полям player.
+*/
+const ACHIEVEMENTS = [
+{ id: 'first_named_kill', title: 'Первая кровь', description: 'Победить первого именного монстра.', check: (p) => (p.namedKillCount || 0) >= 1 },
+{ id: 'ten_named_kills', title: 'Охотник на легенд', description: 'Победить 10 именных монстров.', check: (p) => (p.namedKillCount || 0) >= 10 },
+{ id: 'all_planets_visited', title: 'Странник Периферии', description: 'Побывать на всех 12 известных планетах.', check: (p) => (p.visitedLocations || []).length >= 12 },
+{ id: 'first_legendary_contract', title: 'Ловец Осколков', description: 'Выполнить легендарный контракт.', check: (p) => (p.completedLegendaryContracts || 0) >= 1 },
+{ id: 'level_30', title: 'Ветеран Периферии', description: 'Достичь 30 уровня.', check: (p) => (p.level || 1) >= 30 },
+{ id: 'all_fragments', title: 'Хранитель Тракта', description: 'Собрать все 7 фрагментов лора.', check: (p) => ((p.lore && p.lore.fragments) || []).length >= 7 },
+{ id: 'guild_founder', title: 'Основатель', description: 'Создать гильдию.', check: (p) => !!p.guildFounded },
+{ id: 'market_trader', title: 'Торговец Периферии', description: 'Совершить 20 сделок на бирже.', check: (p) => (p.marketTradeCount || 0) >= 20 },
+{ id: 'deep_diver', title: 'Глубинный ныряльщик', description: 'Долететь до дистанции 20+ в одной вылазке.', check: (p) => (p.maxDistanceReached || 0) >= 20 },
+{ id: 'first_death_red', title: 'Выживший', description: 'Пережить бой в открытом космосе на 5% HP или меньше.', check: (p) => !!p.survivedCloseCall },
+];
+/** Возвращает НОВЫЕ разблокированные достижения (те, что прошли check(),
+* но ещё не в player.achievements) — мутирует player.achievements. Не
+* мутирует ничего другого — сами условия (killCount и т.п.) должны быть
+* уже обновлены вызывающим кодом до этого вызова. */
+function checkAchievements(player) {
+player.achievements = player.achievements || [];
+const newly = [];
+for (const a of ACHIEVEMENTS) {
+if (player.achievements.includes(a.id)) continue;
+if (a.check(player)) {
+player.achievements.push(a.id);
+newly.push(a);
+}
+}
+return newly;
+}
+function achievementsText(player) {
+const unlocked = new Set(player.achievements || []);
+return ACHIEVEMENTS.map((a) => `${unlocked.has(a.id) ? '🏆' : '🔒'} ${a.title} — ${a.description}`).join('\n');
+}
+module.exports = { ACHIEVEMENTS, checkAchievements, achievementsText };
