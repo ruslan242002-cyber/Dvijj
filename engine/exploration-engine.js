@@ -9,9 +9,9 @@ yellow: ['Отголосок-падальщик', 'Резонансный хищ
 red: ['Глубинный Отголосок', 'Тракт-порождение', 'Искажённый страж', 'Голос из разлома', 'Пожиратель сигналов']
 };
 const ZONE_WEIGHTS = {
-blue: { find: 18, ambush: 42, anomaly: 10, distress: 10, node: 20 },
-yellow: { find: 12, ambush: 52, anomaly: 13, distress: 8, node: 15 },
-red: { find: 8, ambush: 62, anomaly: 15, distress: 5, node: 10 }
+blue: { find: 15, ambush: 36, anomaly: 8, distress: 8, node: 17, cache: 5, resonance_pedestal: 3, terminal_hack: 3, echo_playback: 2, reaction_hazard: 2, corrupted_ai: 1 },
+yellow: { find: 10, ambush: 44, anomaly: 11, distress: 7, node: 13, cache: 5, resonance_pedestal: 3, terminal_hack: 3, echo_playback: 2, reaction_hazard: 2, corrupted_ai: 1 },
+red: { find: 6, ambush: 52, anomaly: 12, distress: 4, node: 9, cache: 5, resonance_pedestal: 4, terminal_hack: 3, echo_playback: 2, reaction_hazard: 2, corrupted_ai: 1 },
 };
 function weightedPick(weights, rng) {
 const entries = Object.entries(weights);
@@ -174,13 +174,129 @@ text: nodeState === 'guarded'
 : `Заряды жилы: ${charges}/7`,
 };
 }
+case 'cache':
+return rollCacheEvent(zone, rng, playerLevel, theme);
+case 'resonance_pedestal':
+return rollResonancePedestal();
+case 'terminal_hack':
+return rollTerminalHack();
+case 'echo_playback':
+return rollEchoPlayback();
+case 'reaction_hazard':
+return rollReactionHazard();
+case 'corrupted_ai':
+return rollCorruptedAi();
 default:
 return { type: 'find', loot: rollLoot(zone, rng, playerLevel, theme), text: 'Пустая находка.' };
 }
 }
 
-/** Резолвит выбор игрока на событии 'anomaly'. touch — риск/награда,
-* scan_safe — без риска и без лута, mark_for_curator — репутация. */
+/**
+* НОВЫЕ ИНТЕРАКТИВНЫЕ СОБЫТИЯ — по референсу (лор-адаптация "алтаря" +
+* 3 дополнительных идеи). Все — с реальным выбором/риском, не просто
+* текст-и-награда. rollEvent() ниже собирает их в общий пул через
+* тот же switch, что и старые типы.
+*/
+const CACHE_FLAVOR = [
+'Проржавевший грузовой контейнер, вскрытый чьими-то давними руками — но не до конца.',
+'Тайник в обшивке, замаскированный под обычную панель обшивки. Кто-то не хотел, чтобы это нашли случайно.',
+'Полуразрушенный склад — судя по маркировке, довоенный, судя по запаху — нет.',
+'Связка герметичных капсул, вмёрзших в породу. На одной из них ещё виден логотип станции, которой больше нет.',
+];
+function rollCacheEvent(zone, rng, playerLevel, theme) {
+const itemCount = 2 + Math.floor(rng() * 3); // 2-4
+const items = [];
+for (let i = 0; i < itemCount; i++) {
+items.push(rollLoot(zone, rng, playerLevel, theme));
+}
+const flavor = CACHE_FLAVOR[Math.floor(rng() * CACHE_FLAVOR.length)];
+return { type: 'cache', items, text: flavor };
+}
+/** Резонансный постамент — один "Дотронуться", исход непредсказуем
+* заранее (в отличие от аномалии с явными тремя вариантами). Таблица
+* исходов взвешена, но игрок её не видит до нажатия. */
+const PEDESTAL_OUTCOMES = [
+{ weight: 25, type: 'vision', text: 'Постамент отзывается вспышкой — на миг перед глазами проносится образ, которого здесь не должно быть.' },
+{ weight: 20, type: 'radiation', text: 'Резонанс отдаётся в теле неприятным жаром. Датчик облучения тревожно пискнул.' },
+{ weight: 20, type: 'resource', text: 'Поверхность постамента открывается, как ларец — внутри что-то есть.' },
+{ weight: 20, type: 'nothing', text: 'Ничего не происходит. Постамент остывает под рукой так же внезапно, как ожил.' },
+{ weight: 15, type: 'reputation', text: 'Символы на постаменте на миг складываются в нечто похожее на координаты. Стоит доложить куратору.' },
+];
+function rollResonancePedestal() {
+return { type: 'resonance_pedestal', text: 'Артефакт с шёпотом Тракта, вырезанным незнакомыми символами на поверхности. Что-то тянет коснуться его.', choices: ['touch'] };
+}
+function resolveResonancePedestal(rng = Math.random, playerLevel = 1) {
+const total = PEDESTAL_OUTCOMES.reduce((s, o) => s + o.weight, 0);
+let roll = rng() * total;
+let picked = PEDESTAL_OUTCOMES[PEDESTAL_OUTCOMES.length - 1];
+for (const o of PEDESTAL_OUTCOMES) { if (roll < o.weight) { picked = o; break; } roll -= o.weight; }
+if (picked.type === 'vision') return { ...picked, xp: 15 };
+if (picked.type === 'radiation') return { ...picked, radiationGain: 8 + Math.floor(rng() * 12) };
+if (picked.type === 'resource') return { ...picked, loot: rollLoot('red', rng, playerLevel) };
+if (picked.type === 'reputation') return { ...picked, reputationGain: 8 };
+return picked;
+}
+/** Сигнал из тишины — терминал станции с кодовым замком. Взлом зависит
+* от mind игрока, не от рандома напрямую (порог, не шанс) — та же логика,
+* что уже используется для scan у дистресса. */
+function rollTerminalHack() {
+return { type: 'terminal_hack', text: 'Заброшенный терминал станции, ещё держащий заряд. Экран блокировки мигает — можно попробовать взломать.', choices: ['hack', 'leave'] };
+}
+function resolveTerminalHack(choice, player, rng = Math.random, playerLevel = 1) {
+if (choice === 'leave') return { outcome: 'left', text: 'Решаешь не рисковать со взломом.' };
+const mind = player?.stats?.mind || 0;
+const threshold = 20;
+if (mind < threshold) return { outcome: 'fail_low_mind', text: `Не хватает подготовки для взлома (нужно mind ${threshold}+). Терминал блокируется намертво.` };
+const success = rng() < 0.65 + Math.min(0.25, (mind - threshold) * 0.01);
+if (success) return { outcome: 'success', loot: rollLoot('yellow', rng, playerLevel), xp: 20, text: 'Взлом проходит чисто — терминал выдаёт архивные данные и что-то материальное вместе с ними.' };
+return { outcome: 'fail_alarm', enemy: generateEnemy('yellow', rng, playerLevel), text: 'Взлом срывается — терминал включает тревогу. Что-то реагирует на шум.' };
+}
+/** Эхо-передача — обрывок голосовой записи. Дольше слушаешь — больше
+* награда, но и выше риск, что запись привлечёт внимание Отголосков. */
+function rollEchoPlayback() {
+return { type: 'echo_playback', text: 'Обрывок голосовой записи довоенной эпохи, зацикленный и потрескивающий. Слушать дальше — рискованно, но там явно есть что дослушать.', choices: ['listen_short', 'listen_full', 'skip'] };
+}
+function resolveEchoPlayback(choice, rng = Math.random, playerLevel = 1) {
+if (choice === 'skip') return { outcome: 'skipped', text: 'Проходишь мимо, не дослушав.' };
+if (choice === 'listen_short') {
+return { outcome: 'short', xp: 10, text: 'Слушаешь недолго — обрывок фразы, ничего важного, зато безопасно.' };
+}
+// listen_full — 35% шанс привлечь Отголоска, зато лор + лут при удаче
+const ambushed = rng() < 0.35;
+if (ambushed) return { outcome: 'ambushed', enemy: generateEnemy('red', rng, playerLevel), text: 'Запись обрывается на полуслове — что-то услышало её вместе с тобой.' };
+return { outcome: 'full', loot: rollLoot('red', rng, playerLevel), xp: 25, text: 'Запись доигрывает до конца. То, что в ней сказано, стоило риска.' };
+}
+/** Ловушка-резонанс — reaction-check. Успел среагировать — награда
+* именно там, где остальные бы прошли мимо; не успел — расплата. */
+function rollReactionHazard() {
+return { type: 'reaction_hazard', text: 'На вид — обычный участок пути. Но что-то в воздухе едва заметно подрагивает.', choices: ['react'] };
+}
+function resolveReactionHazard(player, rng = Math.random, playerLevel = 1) {
+const reaction = player?.stats?.reaction || 0;
+const chance = Math.min(0.85, 0.35 + reaction * 0.01);
+const succeeded = rng() < chance;
+if (succeeded) return { outcome: 'success', loot: rollLoot('red', rng, playerLevel), text: 'В последний миг успеваешь заметить неладное и вовремя отступить — а заодно находишь то, что здесь спрятала сама опасность.' };
+return { outcome: 'fail', dmg: 8 + Math.floor(rng() * 12), text: 'Не успеваешь среагировать — резонансный разряд задевает по касательной.' };
+}
+/** Спор с искажённым ИИ — чистый диалог, без боя. Выбор влияет на
+* репутацию фракции или открывает лорный флаг, не на статы напрямую. */
+function rollCorruptedAi() {
+return {
+type: 'corrupted_ai',
+text: 'Голос искажённого ИИ станции звучит из динамика, вмонтированного в стену: «Ты не в списке. Но список давно никто не проверял. Что тебе нужно?»',
+choices: ['ask_about_trakt', 'ask_about_station', 'shut_down'],
+};
+}
+function resolveCorruptedAi(choice, player) {
+if (choice === 'ask_about_trakt') {
+return { outcome: 'lore', flag: 'heard_corrupted_ai_trakt', text: '«Тракт не разрывался. Тракт... закрывался. Разница важна, но я не помню, почему». Связь обрывается прежде, чем ИИ успевает договорить.' };
+}
+if (choice === 'ask_about_station') {
+return { outcome: 'reputation', reputationGain: 6, faction: player?.faction, text: '«Эта станция принадлежала нам всем когда-то. Расскажи своему куратору — пусть знает, что я ещё здесь». Небольшая, но искренняя благодарность.' };
+}
+return { outcome: 'shutdown', text: 'Отключаешь динамик. Голос обрывается на полуслове — может, к лучшему.' };
+}
+
 function resolveAnomalyChoice(choice, rng = Math.random, playerLevel = 1) {
 if (choice === 'touch') {
 const loot = rollLoot('red', rng, playerLevel);
@@ -221,4 +337,7 @@ rollEvent, rollLoot, generateEnemy, RESOURCES, ZONE_WEIGHTS, ENEMY_NAMES,
 rollPathEvent, resolvePathEvent,
 resolveAnomalyChoice, resolveDistressChoice,
 rollNodeState, NODE_STATE_WEIGHTS,
+rollCacheEvent, rollResonancePedestal, resolveResonancePedestal,
+rollTerminalHack, resolveTerminalHack, rollEchoPlayback, resolveEchoPlayback,
+rollReactionHazard, resolveReactionHazard, rollCorruptedAi, resolveCorruptedAi,
 };
