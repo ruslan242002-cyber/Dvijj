@@ -8,16 +8,18 @@ const {
 const { rollSpaceEvent } = require('../../engine/space-events.js');
 const { generateHostileShip } = require('../../engine/ship-encounters.js');
 const { shipToFighter, applyFighterResultToShip } = require('../../engine/ship.js');
-const { SHIP_SKILLS, shipSkillButtons, shipSkillIdByName } = require('../../engine/ship-skills.js');
+const { SHIP_SKILLS, shipSkillButtons, shipSkillCooldownNote, shipSkillIdByName } = require('../../engine/ship-skills.js');
+const { startCooldown, tickCooldowns } = require('../../engine/cooldowns.js');
 const { resolveTurn } = require('../../engine/combat-engine.js');
 const { buyFromTrader } = require('../../engine/trader-encounter.js');
 const { addToTripCargo, bankTripCargo, loseFullCargo, tripCargoUnits } = require('../../lib/trip-cargo.js');
 const { combatFullCard } = require('../../lib/combat-card.js');
 const { rollMicroDiscovery, SPACE_DISCOVERIES } = require('../../lib/micro-discovery.js');
 const { createAmbush, AMBUSH_DURATION_MS, pickAmbusher } = require('../../lib/ambush-registry.js');
-const { hubMessage, stationButtons, startJourney } = require('./common.js');
+const { hubMessage, stationButtons, startJourney, addToInventory } = require('./common.js');
 const { veinHubEntry } = require('./vein.js');
-const { locationsForZone } = require('../../lib/named-locations.js');
+const { locationsForZone, firstVisitRewardFor } = require('../../lib/named-locations.js');
+const { maybeSpeak } = require('../../lib/fifth-voice.js');
 const { SCENES } = require('./ids.js');
 
 const ZONE_NAMES = { blue: 'патрулируемая', yellow: 'спорная', red: 'открытый космос' };
@@ -45,7 +47,6 @@ function travelButtons(player, distance) {
   if (canAffordStep(ship) && !blockedByShipLevel) {
     buttons.push(canSafelyGoDeeper(ship, distance) ? '🚀 Лететь дальше' : '🚀 Рискнуть и лететь');
   }
-  if (ship.fuel < ship.fuelMax) buttons.push('⛽ Топливо');
   buttons.push('🕳️ Засада');
   if (distance > 0) buttons.push('🔙 Домой');
   else buttons.push('🔙 Отменить вылет');
@@ -77,11 +78,38 @@ function performLanding(player, distance, rng, stealthMode, location) {
   // станцию, нужно вернуться, когда вылазка закончится (см. фикс в
   // game/scenes/exploration.js: 'Вернуться на станцию' раньше вёл прямо
   // на станцию, минуя корабль вообще — реальный баг).
-  const landingPlayer = { ...player, zone, pendingShipDistance: distance };
+  const landingPlayer = { ...player, zone, pendingShipDistance: distance, currentLocationTheme: location?.theme };
   const landed = startJourney(landingPlayer, 'explore', { zone, depth: 0, stealthMode }, rng);
   const modeNote = stealthMode ? ' Скрытно — риск засады заметно ниже, но и находки скромнее.' : '';
   const placeName = location ? `«${location.name}»` : `зоне «${ZONE_NAMES[zone]}»`;
-  landed.reply.text = `${bankedNote}🪐 Высадка на ${placeName}.${modeNote}\n\n${landed.reply.text}`;
+
+  // Скромная награда за ПЕРВОЕ посещение конкретного места (не повторные
+  // визиты) — стимул реально облететь все точки, не оседать на одной.
+  // Бездна Оррин — особый случай, отклик Пятого Голоса вместо ресурсов
+  // (место и так лорно обещало это в своём описании).
+  let firstVisitNote = '';
+  if (location && landed.nextState.player) {
+    const finalPlayer = landed.nextState.player;
+    finalPlayer.visitedLocations = finalPlayer.visitedLocations || [];
+    if (!finalPlayer.visitedLocations.includes(location.id)) {
+      finalPlayer.visitedLocations.push(location.id);
+      if (location.theme === 'abyss') {
+        const voiceLine = maybeSpeak(finalPlayer, 'landed_at_bezdna_orrin');
+        if (voiceLine) firstVisitNote = `\n\n${voiceLine}`;
+      } else {
+        const reward = firstVisitRewardFor(location);
+        if (reward?.credits) {
+          finalPlayer.credits = (finalPlayer.credits || 0) + reward.credits;
+          firstVisitNote = `\n\n🆕 Первое посещение места — 💳 +${reward.credits} кредитов.`;
+        } else if (reward?.resource) {
+          addToInventory(finalPlayer, reward.resource, reward.tier, reward.qty);
+          firstVisitNote = `\n\n🆕 Первое посещение места — 📦 +${reward.qty} ${reward.resource} T${reward.tier}.`;
+        }
+      }
+    }
+  }
+
+  landed.reply.text = `${bankedNote}🪐 Высадка на ${placeName}.${modeNote}\n\n${landed.reply.text}${firstVisitNote}`;
   return landed;
 }
 
@@ -131,37 +159,52 @@ function safeReturnToStation(deps, player, distance, rng, prefixText = '') {
  * ловушку в этой клетке) — и только если там пусто, порождает случайного
  * фантомного противника тем же шансом, чтобы риск не пропадал вовсе там,
  * где никто не устраивал засад. */
+/** Один тик пути домой — раньше "Домой" мгновенно телепортировал на
+ * любой дистанции разом (единственный currentDistance-зависимый бросок
+ * шанса встречи на ВСЮ дорогу сразу). Теперь это настоящий многошаговый
+ * перелёт: 1 тик = 10 секунд полёта, дистанция снижается на 1 за раз,
+ * топливо тратится за каждый тик (как и при полёте вперёд), реальные
+ * засады (реестр deps.ambushStore) проверяются на каждом шаге. */
 async function attemptReturnHome(deps, player, distance, rng) {
-  if (distance === 0) return safeReturnToStation(deps, player, 0, rng);
+  if (distance <= 0) return safeReturnToStation(deps, player, 0, rng);
 
-  const pvpChance = returnTripPvpChance(distance);
-  if (rng() < pvpChance) {
-    if (deps.ambushStore) {
-      const activeAmbushes = await deps.ambushStore.listActiveAmbushes();
-      const cellId = cellIdForDistance(distance);
-      const neighborCellIds = neighborCellIdsForDistance(distance);
-      const ambusher = pickAmbusher(cellId, neighborCellIds, activeAmbushes, player.id, rng);
-      if (ambusher && ambusher.shipSnapshot) {
-        const enemy = shipToFighter(ambusher.shipSnapshot, ambusher.playerName || 'Незнакомый корабль');
-        return {
-          reply: {
-            text: `⚠️ На обратном пути наперерез выходит ${enemy.name} — кто-то реально ждал именно здесь.`,
-            buttons: ['⚔️ Атаковать', '🏃 Уйти'],
-          },
-          nextState: { scene: SCENES.SHIP_PRE_COMBAT, player, distance, enemy, onWinReturnHome: true, ambusherPlayerId: ambusher.playerId }
-        };
-      }
+  player.ship.fuel = Math.max(0, player.ship.fuel - fuelCostForStep(rng));
+  const newDistance = distance - 1;
+
+  if (deps.ambushStore) {
+    const activeAmbushes = await deps.ambushStore.listActiveAmbushes();
+    const cellId = cellIdForDistance(newDistance);
+    const neighborCellIds = neighborCellIdsForDistance(newDistance);
+    const ambusher = pickAmbusher(cellId, neighborCellIds, activeAmbushes, player.id, rng);
+    if (ambusher && ambusher.shipSnapshot) {
+      const enemy = shipToFighter(ambusher.shipSnapshot, ambusher.playerName || 'Незнакомый корабль');
+      return {
+        reply: { text: `⚠️ На обратном пути наперерез выходит ${enemy.name} — кто-то реально ждал именно здесь.`, buttons: ['⚔️ Атаковать', '🏃 Уйти'] },
+        nextState: { scene: SCENES.SHIP_PRE_COMBAT, player, distance: newDistance, enemy, onWinReturnHome: true, ambusherPlayerId: ambusher.playerId, returningHome: true }
+      };
     }
-    const enemy = generateHostileShip(distance, player.ship.level, rng);
+  }
+
+  // Небольшой шанс случайной (не настоящей игрок-установленной) встречи
+  // за ОДИН тик — суммарно за весь обратный путь по-прежнему растёт с
+  // дистанцией, просто размазано по тикам, а не одним броском разом.
+  const perTickPvpChance = Math.min(0.08, returnTripPvpChance(distance) / Math.max(1, distance));
+  if (rng() < perTickPvpChance) {
+    const enemy = generateHostileShip(newDistance, player.ship.level, rng);
     return {
-      reply: {
-        text: `⚠️ На обратном пути наперерез выходит ${enemy.name} — кто-то ждал именно здесь.`,
-        buttons: ['⚔️ Атаковать', '🏃 Уйти'],
-      },
-      nextState: { scene: SCENES.SHIP_PRE_COMBAT, player, distance, enemy, onWinReturnHome: true }
+      reply: { text: `⚠️ На обратном пути наперерез выходит ${enemy.name} — кто-то ждал именно здесь.`, buttons: ['⚔️ Атаковать', '🏃 Уйти'] },
+      nextState: { scene: SCENES.SHIP_PRE_COMBAT, player, distance: newDistance, enemy, onWinReturnHome: true, returningHome: true }
     };
   }
-  return safeReturnToStation(deps, player, distance, rng, '🌌 Путь домой свободен.\n\n');
+
+  if (newDistance <= 0) {
+    return safeReturnToStation(deps, player, 0, rng, '🌌 Ты выходишь на посадочную траекторию.\n\n');
+  }
+
+  return {
+    reply: { text: `🚀 Летишь домой... Осталось ${newDistance} (~${newDistance * 10} сек полёта).\n⛽ Топливо: ${player.ship.fuel}/${player.ship.fuelMax}`, buttons: ['🔙 Продолжить домой'] },
+    nextState: { scene: SCENES.SHIP_RETURNING, player, distance: newDistance }
+  };
 }
 
 /** Настоящая засада, сработавшая на пути ВПЕРЁД (не на обратном) — бой
@@ -238,11 +281,15 @@ function resolveSpaceEvent(deps, player, event, distance, rng) {
         nextState: { scene: SCENES.SHIP_TRADER, player, distance, offers: event.offers }
       };
 
-    case 'hostile_ship':
+    case 'hostile_ship': {
+      const objectivesText = event.objectives
+        ? `\n\n🎯 ЦЕЛИ:\n${event.objectives.map((o) => `${o.done ? '✅' : '◻️'} ${o.label}`).join('\n')}`
+        : '';
       return {
-        reply: { text: `${event.text}`, buttons: ['⚔️ Атаковать', '🏃 Уйти'] },
-        nextState: { scene: SCENES.SHIP_PRE_COMBAT, player, distance, enemy: event.enemy, onWinReturnHome: false }
+        reply: { text: `${event.text}${objectivesText}`, buttons: ['⚔️ Атаковать', '🏃 Уйти'] },
+        nextState: { scene: SCENES.SHIP_PRE_COMBAT, player, distance, enemy: event.enemy, escort: event.escort, objectives: event.objectives, onWinReturnHome: false, hpAtEncounterStart: player.ship.hp }
       };
+    }
 
     case 'ambush_pvp': {
       // Полноценное межигровое разрешение засады (снимок корабля другого
@@ -291,7 +338,7 @@ async function creditLootToAmbusher(deps, ambusherPlayerId, lostItems) {
 
 async function resolveShipCombatTurn(deps, state, playerFighter, enemyFighter, rng) {
   const enemyTurn = resolveTurn({ attacker: enemyFighter, defender: playerFighter, rng });
-  applyFighterResultToShip(state.player.ship, enemyTurn.defender);
+  applyFighterResultToShip(state.player.ship, enemyTurn.defender, rng);
 
   if (enemyTurn.defender.hp <= 0) {
     const { lostTrip, lostInventory } = loseFullCargo(state.player);
@@ -313,11 +360,13 @@ async function resolveShipCombatTurn(deps, state, playerFighter, enemyFighter, r
     };
   }
 
-  const buttons = ['⚔️ Атаковать', ...shipSkillButtons(state.player.ship.equippedSkills || [])];
+  const tickedCooldowns = tickCooldowns(state.shipSkillCooldowns || {});
+  const buttons = ['⚔️ Атаковать', ...shipSkillButtons(state.player.ship.equippedSkills || [], tickedCooldowns)];
+  const cdNote = shipSkillCooldownNote(state.player.ship.equippedSkills || [], tickedCooldowns);
   const playerFighterNow = shipToFighter(state.player.ship, 'Твой корабль');
   return {
-    reply: { text: `💥 ${enemyTurn.log.join(' ')}\n\n${combatFullCard(playerFighterNow, enemyTurn.attacker, { prevPlayerHp: state.prevPlayerHp, prevEnemyHp: state.prevEnemyHp })}`, buttons },
-    nextState: { scene: SCENES.SHIP_COMBAT, player: state.player, distance: state.distance, enemy: enemyTurn.attacker, onWinReturnHome: state.onWinReturnHome, ambusherPlayerId: state.ambusherPlayerId, prevPlayerHp: playerFighterNow.hp, prevEnemyHp: enemyTurn.attacker.hp }
+    reply: { text: `💥 ${enemyTurn.log.join(' ')}\n\n${combatFullCard(playerFighterNow, enemyTurn.attacker, { prevPlayerHp: state.prevPlayerHp, prevEnemyHp: state.prevEnemyHp })}${cdNote.length ? `\n\n${cdNote.join('\n')}` : ''}`, buttons },
+    nextState: { scene: SCENES.SHIP_COMBAT, player: state.player, distance: state.distance, enemy: enemyTurn.attacker, escort: state.escort, objectives: state.objectives, fightingEscort: state.fightingEscort, hpAtEncounterStart: state.hpAtEncounterStart, onWinReturnHome: state.onWinReturnHome, ambusherPlayerId: state.ambusherPlayerId, prevPlayerHp: playerFighterNow.hp, prevEnemyHp: enemyTurn.attacker.hp, shipSkillCooldowns: tickedCooldowns }
   };
 }
 
@@ -338,19 +387,6 @@ async function handleTravel(state, input, rng, deps, playerId) {
           rewardNote = `📦 +${state.microDiscovery.reward.qty} ${state.microDiscovery.reward.resource} T${state.microDiscovery.reward.tier}.`;
         }
         return travelScreen(player, distance, `Забираешь находку. ${rewardNote}\n\n`);
-      }
-
-      if (input === '⛽ Топливо') {
-        const needed = player.ship.fuelMax - player.ship.fuel;
-        if (needed <= 0) return travelScreen(player, distance, 'Топливный бак уже полон.\n\n');
-        const affordableUnits = Math.floor((player.credits || 0) / FUEL_PRICE_PER_UNIT);
-        const units = Math.min(needed, affordableUnits);
-        if (units <= 0) return travelScreen(player, distance, '💳 Не хватает кредитов даже на минимальную заправку.\n\n');
-        const cost = units * FUEL_PRICE_PER_UNIT;
-        player.credits = (player.credits || 0) - cost;
-        player.ship.fuel += units;
-        const partialNote = units < needed ? ' (бак заполнен не полностью — не хватило кредитов)' : '';
-        return travelScreen(player, distance, `⛽ Заправлено ${units} ед. топлива за 💳${cost}${partialNote}.\n\n`);
       }
 
       if (input === '🕳️ Засада') {
@@ -459,6 +495,16 @@ async function handleTravel(state, input, rng, deps, playerId) {
       return travelScreen(state.player, state.distance, `Сделка заключена: ${res.offer.resource} T${res.offer.tier} ×${res.offer.qty}.\n\n`);
     }
 
+    case SCENES.SHIP_RETURNING: {
+      if (input === '🔙 Продолжить домой') {
+        return await attemptReturnHome(deps, state.player, state.distance, rng);
+      }
+      return {
+        reply: { text: `🚀 Летишь домой... Осталось ${state.distance} (~${state.distance * 10} сек полёта).\n⛽ Топливо: ${state.player.ship.fuel}/${state.player.ship.fuelMax}`, buttons: ['🔙 Продолжить домой'] },
+        nextState: state
+      };
+    }
+
     case SCENES.SHIP_PRE_COMBAT: {
       if (input === '🏃 Уйти') {
         // Побег из боя корабля — без гарантии: шанс уйти зависит от того,
@@ -473,7 +519,7 @@ async function handleTravel(state, input, rng, deps, playerId) {
       const playerFighterStart = shipToFighter(state.player.ship, 'Твой корабль');
       return {
         reply: { text: `${combatFullCard(playerFighterStart, state.enemy)}\n\nВыбери действие:`, buttons },
-        nextState: { scene: SCENES.SHIP_COMBAT, player: state.player, distance: state.distance, enemy: state.enemy, onWinReturnHome: state.onWinReturnHome, ambusherPlayerId: state.ambusherPlayerId, prevPlayerHp: playerFighterStart.hp, prevEnemyHp: state.enemy.hp }
+        nextState: { scene: SCENES.SHIP_COMBAT, player: state.player, distance: state.distance, enemy: state.enemy, escort: state.escort, objectives: state.objectives, fightingEscort: state.fightingEscort, hpAtEncounterStart: state.hpAtEncounterStart, onWinReturnHome: state.onWinReturnHome, ambusherPlayerId: state.ambusherPlayerId, prevPlayerHp: playerFighterStart.hp, prevEnemyHp: state.enemy.hp, shipSkillCooldowns: {} }
       };
     }
 
@@ -481,29 +527,65 @@ async function handleTravel(state, input, rng, deps, playerId) {
       const skillId = input === '⚔️ Атаковать' ? null : shipSkillIdByName(input);
       const skill = skillId ? SHIP_SKILLS[skillId] : null;
       if (input !== '⚔️ Атаковать' && !skill) {
-        const buttons = ['⚔️ Атаковать', ...shipSkillButtons(state.player.ship.equippedSkills || [])];
+        const buttons = ['⚔️ Атаковать', ...shipSkillButtons(state.player.ship.equippedSkills || [], state.shipSkillCooldowns || {})];
         return { reply: { text: 'Выбери действие кнопкой ниже.', buttons }, nextState: state };
       }
 
       const playerFighter = shipToFighter(state.player.ship, 'Твой корабль');
       const enemyFighter = state.enemy;
       const result = resolveTurn({ attacker: playerFighter, defender: enemyFighter, skill, rng });
-      applyFighterResultToShip(state.player.ship, result.attacker);
+      applyFighterResultToShip(state.player.ship, result.attacker, rng);
+      const cooldownsAfterUse = skillId ? startCooldown(state.shipSkillCooldowns || {}, skillId, skill, 0) : (state.shipSkillCooldowns || {});
 
       if (result.defender.hp <= 0) {
+        const killedEscort = !!state.fightingEscort;
+        const updatedObjectives = (state.objectives || []).map((o) => {
+          if (o.id === 'main' && !killedEscort) return { ...o, done: true };
+          if (o.id === 'escort' && killedEscort) return { ...o, done: true };
+          return o;
+        });
+
+        // Если это была основная цель и остался неразобранный эскорт —
+        // бой продолжается сразу против него, без возврата на экран
+        // полёта между схватками (эскорт "переходит в атаку" тут же).
+        if (state.escort && !killedEscort) {
+          return {
+            reply: { text: `💥 ${result.log.join(' ')}\n\n🏆 ${result.defender.name} уничтожен.\n\n⚠️ Сопровождение переходит в атаку — ${state.escort.name}!`, buttons: ['⚔️ Атаковать', '🏃 Уйти'] },
+            nextState: { scene: SCENES.SHIP_PRE_COMBAT, player: state.player, distance: state.distance, enemy: state.escort, escort: null, fightingEscort: true, objectives: updatedObjectives, onWinReturnHome: state.onWinReturnHome, hpAtEncounterStart: state.hpAtEncounterStart }
+          };
+        }
+
+        // Финальная победа (эскорта не было, или он уже уничтожен) —
+        // считаем бонус награды по выполненным целям.
+        const noDamageObjective = updatedObjectives.find((o) => o.id === 'no_damage');
+        if (noDamageObjective) {
+          noDamageObjective.done = state.player.ship.hp >= (state.hpAtEncounterStart ?? state.player.ship.hpMax);
+        }
+
         const mult = distanceRewardMultiplier(state.distance || 0);
         const creditMult = state.player.faction === 'Терминус' ? 1.25 : 1;
-        const reward = Math.round((20 + (result.defender.tier || 1) * 15) * mult * creditMult);
+        let reward = Math.round((20 + (result.defender.tier || 1) * 15) * mult * creditMult);
+
+        let objectivesNote = '';
+        if (updatedObjectives.length > 1) {
+          const bonusObjectives = updatedObjectives.filter((o) => o.id !== 'main');
+          const completedBonus = bonusObjectives.filter((o) => o.done).length;
+          reward = Math.round(reward * (1 + completedBonus * 0.15));
+          objectivesNote = `\n\n🎯 Итог целей:\n${updatedObjectives.map((o) => `${o.done ? '✅' : '❌'} ${o.label}`).join('\n')}`;
+        }
+
         state.player.credits = (state.player.credits || 0) + reward;
-        const doneText = `💥 ${result.log.join(' ')}\n\n🏆 ${result.defender.name} уничтожен. 💳 +${reward} кредитов.`;
+        const doneText = `💥 ${result.log.join(' ')}\n\n🏆 ${result.defender.name} уничтожен. 💳 +${reward} кредитов.${objectivesNote}`;
 
         if (state.onWinReturnHome) {
-          return safeReturnToStation(deps, state.player, state.distance, rng, `${doneText}\n\n`);
+          const continued = await attemptReturnHome(deps, state.player, state.distance, rng);
+          continued.reply.text = `${doneText}\n\n${continued.reply.text}`;
+          return continued;
         }
         return travelScreen(state.player, state.distance, `${doneText}\n\n`);
       }
 
-      return await resolveShipCombatTurn(deps, { ...state, player: state.player }, result.attacker, result.defender, rng);
+      return await resolveShipCombatTurn(deps, { ...state, player: state.player, shipSkillCooldowns: cooldownsAfterUse }, result.attacker, result.defender, rng);
     }
 
     default:
