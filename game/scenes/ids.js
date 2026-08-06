@@ -28,6 +28,7 @@ const SCENES = Object.freeze({
   SHIP_RETURNING: 'ship_returning',
   PACK_PRE_COMBAT: 'pack_pre_combat',
   PACK_COMBAT: 'pack_combat',
+  PACK_TARGET: 'pack_target',
   DISTRESS_CHOICE: 'distress_choice',
   RESONANCE_PEDESTAL_CHOICE: 'resonance_pedestal_choice',
   TERMINAL_HACK_CHOICE: 'terminal_hack_choice',
