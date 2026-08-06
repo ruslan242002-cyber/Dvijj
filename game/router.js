@@ -98,6 +98,7 @@ const SCENE_HANDLERS = {
   [SCENES.SHIP_RETURNING]: handleTravel,
   [SCENES.PACK_PRE_COMBAT]: handleExploration,
   [SCENES.PACK_COMBAT]: handleExploration,
+  [SCENES.PACK_TARGET]: handleExploration,
   [SCENES.DISTRESS_CHOICE]: handleExploration,
   [SCENES.RESONANCE_PEDESTAL_CHOICE]: handleExploration,
   [SCENES.TERMINAL_HACK_CHOICE]: handleExploration,
