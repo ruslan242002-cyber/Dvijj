@@ -34,6 +34,22 @@ async function handleVkEvent(body, deps) {
       store,
     };
 
+    // БЛОКИРОВКА ОТ ГОНКИ ПРИ СПАМ-КЛИКАХ (lib/player-lock.js) — если
+    // store.tryLockPlayer/unlockPlayer не подключены (deps.store их не
+    // поддерживает), просто пропускаем блокировку без ошибки — это не
+    // обязательная зависимость, деградация мягкая.
+    const hasLock = typeof store.tryLockPlayer === 'function' && typeof store.unlockPlayer === 'function';
+    if (hasLock) {
+      const locked = await store.tryLockPlayer(peerId);
+      if (!locked) {
+        // Предыдущий ход этого же игрока ещё не сохранён — это дубль-клик
+        // или повторная доставка события от VK. Тихо подтверждаем, НЕ
+        // трогая состояние повторно (именно так раньше диалог куратора
+        // мог показать рассинхронизированный текст на втором нажатии).
+        return 'ok';
+      }
+    }
+
     let reply, nextState, veinJustSpawned;
     try {
       ({ reply, nextState, veinJustSpawned } = await step(prevState, text, rng, routerDeps, peerId));
@@ -47,6 +63,8 @@ async function handleVkEvent(body, deps) {
         nextState = { scene: 'start' };
         reply = { text: '⚠️ Что-то пошло не так. Начнём заново — напиши что угодно.', buttons: [] };
       }
+    } finally {
+      if (hasLock) await store.unlockPlayer(peerId).catch(() => {});
     }
 
     await store.set(peerId, nextState);
