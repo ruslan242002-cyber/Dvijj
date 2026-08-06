@@ -217,4 +217,5 @@ return resolveCombatTurn(deps, state, result, rng, { prevPlayerHp, prevEnemyHp, 
 default:
 return null;
 }
+}
 module.exports = { handleCombat, resolveCombatTurn };
