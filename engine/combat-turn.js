@@ -25,8 +25,6 @@ return {
 stimUsedThisFight: stimUsedThisFight || !!stim,
 };
 }
-module.exports = { resolvePlayerTurn, attemptFlee, FLEE_BASE_CHANCE };
-
 /**
 * ОТСТУПЛЕНИЕ ИЗ 1v1 — по разбору доп. улучшений: сейчас в обычном бою
 * нет способа выйти, если игрок явно проигрывает (эвакуация есть только
@@ -57,3 +55,4 @@ const { resolveTurn } = require('./combat-engine');
 const result = resolveTurn({ attacker: enemy, defender: player, rng });
 return { escaped: false, log: ['Не удаётся оторваться — враг этим пользуется.', ...result.log], result };
 }
+module.exports = { resolvePlayerTurn, attemptFlee, FLEE_BASE_CHANCE };
