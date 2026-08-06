@@ -1,143 +1,107 @@
-/**
- * ДВИЖОК ВЕТВЯЩИХСЯ КВЕСТОВ — для диалоговых квестов с этапами и реальным
- * выбором (в отличие от game/quests-data.js, где квест — это просто
- * "принеси/убей/исследуй N" без диалоговых развилок). Обе системы не
- * конфликтуют: это движок именно для НАРРАТИВНЫХ квестов.
- *
- * Что поправил при адаптации:
- *
- *  1. Реальный баг в присланном варианте: createQuestState заводит поле
- *     `completed: false` (булево), а failQuest пишет в СОВСЕМ ДРУГОЕ поле —
- *     `status = 'failed'`. Получалось два несогласованных признака
- *     состояния квеста: чтобы понять, провален ли квест, нужно было бы
- *     смотреть на questState.status, а чтобы понять, завершён ли —
- *     на questState.completed, и они никогда не пересекались явно. Здесь
- *     единое поле status (ACTIVE/COMPLETED/FAILED) для всего.
- *
- *  2. Присланный файл импортировал TRAKT_FRAGMENTS/getFragmentStatus/
- *     checkUnlock из lore/trakt-mythos.js, но ни разу их не использовал —
- *     мёртвый импорт. Раз намерение явно было связать квесты с прогрессом
- *     по фрагментам — реализовал это по-настоящему: prerequisites.hasFragment
- *     в isQuestAvailable реально проверяет, собран ли конкретный фрагмент.
- *
- *  3. state → player, как и везде в этом роутере.
- *
- *  4. Имена полей в prerequisites исправлены под то, что реально существует:
- *       - completedQuests сверяется с player.completedQuests (общий список
- *         из game/quests-data.js, а не с отдельным state.quests.completed,
- *         которого нигде больше нет — так завершение обычного
- *         "принеси/убей" квеста может открывать доступ к диалоговому, и наоборот);
- *       - worldFlags → flags, сверяется с player.flags (то самое поле,
- *         которое реально пишет choices/consequence-engine.js — раньше
- *         сверялось с state.worldFlags, которого никто никогда не создавал).
- *
- *  5. Ниже — только сам движок (createQuestState/advanceQuest/renderQuestText
- *     и т.д.), без конкретных questDef с этапами и текстом: в присланном
- *     файле их и не было, это чистая инфраструктура. Реальные ветвящиеся
- *     квесты (наборы stages/choices) — следующий шаг, когда будет готов
- *     хотя бы один сценарий.
- */
 'use strict';
-
-const { getFragmentStatus } = require('../lore/trakt-mythos.js');
-
+const { TRAKT_FRAGMENTS, getFragmentStatus, checkUnlock } = require('../lore/trakt-mythos.js');
+const { getFactionReputation } = require('../engine/reputation.js');
 const QUEST_STATES = {
-  ACTIVE: 'active',
-  COMPLETED: 'completed',
-  FAILED: 'failed'
+INACTIVE: 'inactive',
+ACTIVE: 'active',
+COMPLETED: 'completed',
+FAILED: 'failed',
+LOCKED: 'locked'
 };
-
 function createQuestState(questId, initialStage = 'start') {
-  return {
-    id: questId,
-    stage: initialStage,
-    choices: [],
-    flags: {},
-    status: QUEST_STATES.ACTIVE,
-    startedAt: Date.now()
-  };
+return {
+id: questId,
+stage: initialStage,
+choices: [],
+flags: {},
+completed: false,
+startedAt: Date.now()
+};
 }
-
-/** Переводит квест на следующий этап, опционально логируя сделанный выбор
- * и добавляя новые флаги. Мутирует questState напрямую. */
 function advanceQuest(questState, nextStage, choiceMade = null, flags = {}) {
-  if (choiceMade) questState.choices.push(choiceMade);
-  Object.assign(questState.flags, flags);
-  questState.stage = nextStage;
-  return questState;
+if (choiceMade) questState.choices.push(choiceMade);
+Object.assign(questState.flags, flags);
+questState.stage = nextStage;
+return questState;
 }
-
 function completeQuest(questState, reward = {}) {
-  questState.status = QUEST_STATES.COMPLETED;
-  questState.completedAt = Date.now();
-  return { questState, reward };
+questState.completed = true;
+questState.completedAt = Date.now();
+return { questState, reward };
 }
-
 function failQuest(questState, reason = '') {
-  questState.status = QUEST_STATES.FAILED;
-  questState.failReason = reason;
-  questState.failedAt = Date.now();
-  return questState;
+questState.status = QUEST_STATES.FAILED;
+questState.failReason = reason;
+return questState;
 }
-
-/** Доступен ли квест игроку по его текущему прогрессу. questDef.prerequisites
- * — необязательный объект, отсутствие prerequisites = квест всегда доступен. */
-function isQuestAvailable(player, questDef) {
-  if (!questDef.prerequisites) return true;
-  const prereq = questDef.prerequisites;
-
-  if (prereq.completedQuests) {
-    const completed = player.completedQuests || [];
-    if (!prereq.completedQuests.every((q) => completed.includes(q))) return false;
-  }
-
-  if (prereq.reputation) {
-    if ((player.reputation || 0) < prereq.reputation) return false;
-  }
-
-  if (prereq.fragments) {
-    const fragments = (player.lore && player.lore.fragments) || [];
-    if (fragments.length < prereq.fragments) return false;
-  }
-
-  if (prereq.hasFragment) {
-    const status = getFragmentStatus(player).find((f) => f.id === prereq.hasFragment);
-    if (!status || !status.collected) return false;
-  }
-
-  if (prereq.flags) {
-    const flags = player.flags || {};
-    if (!prereq.flags.every((f) => flags[f])) return false;
-  }
-
-  return true;
+function isQuestAvailable(state, questDef) {
+if (!questDef.prerequisites) return true;
+const prereq = questDef.prerequisites;
+if (prereq.completedQuests) {
+const completed = state.quests?.completed || [];
+if (!prereq.completedQuests.every(q => completed.includes(q))) return false;
+}
+if (prereq.reputation) {
+// Репутация с домашней фракцией игрока (было: общее player.reputation).
+const rep = getFactionReputation(state.player, state.player.faction);
+if (rep < prereq.reputation) return false;
+}
+if (prereq.fragments) {
+const fragments = state.lore?.fragments || [];
+if (fragments.length < prereq.fragments) return false;
+}
+if (prereq.npcTrust) {
+// Доверие к конкретному NPC — переиспользует уже существующий счётчик
+// встреч (player.npcMeetings), тот же, что двигает firstMeeting→
+// repeatMeeting→trusted реплики в city/npc-roster.js. Никакой новой
+// системы доверия не заводится (см. storylines/npc-arcs.js).
+const meetings = (state.player.npcMeetings || {})[prereq.npcTrust.npc] || 0;
+if (meetings < prereq.npcTrust.count) return false;
+}
+if (prereq.worldFlags) {
+const worldFlags = state.worldFlags || {};
+if (!prereq.worldFlags.every(f => worldFlags[f])) return false;
+}
+return true;
 }
 
 /**
- * Собирает текст текущего этапа квеста с подстановкой переменных и
- * условных блоков по флагам этого конкретного квеста (questState.flags,
- * НЕ player.flags — это разные вещи: одно локально для квеста, другое
- * общестанционное).
- *
- * Поддерживаемые переменные: ${playerName} ${faction} ${reputation}
- * Условные блоки: [if:флаг]текст[/if]  [if_not:флаг]текст[/if_not]
- */
-function renderQuestText(questDef, questState, player) {
-  const stage = questDef.stages[questState.stage];
-  if (!stage) return { text: '[ОШИБКА: этап не найден]', choices: [], isTerminal: true };
-
-  let text = stage.text;
-  text = text.replace(/\$\{playerName\}/g, player.name || '');
-  text = text.replace(/\$\{faction\}/g, player.faction || '');
-  text = text.replace(/\$\{reputation\}/g, player.reputation || 0);
-
-  text = text.replace(/\[if:([\w_]+)\](.*?)\[\/if\]/gs, (match, flag, content) => (questState.flags[flag] ? content : ''));
-  text = text.replace(/\[if_not:([\w_]+)\](.*?)\[\/if_not\]/gs, (match, flag, content) => (!questState.flags[flag] ? content : ''));
-
-  return { text, choices: stage.choices || [], isTerminal: !!stage.terminal };
+* ЭСКАЛАЦИЯ КВЕСТОВ ПО РЕАЛЬНОМУ ВРЕМЕНИ — по разбору Kimi. Квест
+* остаётся тем же questState (не создаётся заново), но если игрок
+* "летал" дольше questDef.escalation.afterDays реальных суток с
+* questState.startedAt, следующий рендер текста уходит НЕ на обычный
+* stage, а на questDef.escalation.stage (куратор комментирует
+* задержку, условия могли ухудшиться). Только для нарративных квестов
+* с диалоговым движком (storylines/curator-arcs.js) — квесты доски
+* (game/quests-data.js: deliver/kill/explore) эскалацию не получают,
+* они не нарративные и это выглядело бы неестественно.
+*
+* Опционален: если у questDef нет поля escalation — функция не делает
+* ничего и questState.stage остаётся как есть.
+*/
+function checkEscalation(questState, questDef, now = Date.now()) {
+if (!questDef.escalation || questState.completed || questState.escalated) return questState;
+const daysElapsed = (now - questState.startedAt) / 86400000;
+if (daysElapsed >= questDef.escalation.afterDays) {
+questState.stage = questDef.escalation.stage;
+questState.escalated = true;
+}
+return questState;
 }
 
-module.exports = {
-  QUEST_STATES, createQuestState, advanceQuest, completeQuest, failQuest,
-  isQuestAvailable, renderQuestText
-};
+function renderQuestText(questDef, questState, state) {
+const stage = questDef.stages[questState.stage];
+if (!stage) return { text: '[ОШИБКА: этап не найден]', choices: [] };
+let text = stage.text;
+text = text.replace(/\$\{playerName\}/g, state.player.name);
+text = text.replace(/\$\{faction\}/g, state.player.faction);
+text = text.replace(/\$\{reputation\}/g, getFactionReputation(state.player, state.player.faction));
+text = text.replace(/\[if:([\w_]+)\](.*?)\[\/if\]/gs, (match, flag, content) => {
+return questState.flags[flag] ? content : '';
+});
+text = text.replace(/\[if_not:([\w_]+)\](.*?)\[\/if_not\]/gs, (match, flag, content) => {
+return !questState.flags[flag] ? content : '';
+});
+return { text, choices: stage.choices || [], isTerminal: stage.terminal || false };
+}
+module.exports = { QUEST_STATES, createQuestState, advanceQuest, completeQuest, failQuest, isQuestAvailable, checkEscalation, renderQuestText };
