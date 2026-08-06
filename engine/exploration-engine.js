@@ -40,11 +40,22 @@ function tierForZone(zone, rng, playerLevel = 1) {
   return min + Math.floor(rng() * (max - min + 1));
 }
 
+// ⚠️ ТЕСТОВЫЙ РЕЖИМ — временный множитель наград ×500 (кредиты и
+// количество ресурсов), чтобы не фармить вручную при тестировании.
+// ОБЯЗАТЕЛЬНО выставить false / убрать перед реальным релизом — это
+// единственная точка, которую нужно тронуть, чтобы вернуть всё к норме,
+// т.к. rollLoot() используется и боем (combat.js), и находками при
+// вылазке (exploration.js: find/node/cache) — патч здесь покрывает всё
+// разом.
+const TESTING_MODE = true;
+const TESTING_LOOT_MULTIPLIER = 500;
+
 function rollLoot(zone, rng = Math.random, playerLevel = 1, theme = null) {
   const resource = theme ? pickResourceForTheme(RESOURCES, theme, rng) : RESOURCES[Math.floor(rng() * RESOURCES.length)];
   const tier = tierForZone(zone, rng, playerLevel);
-  const qty = 1 + Math.floor(rng() * 4);
-  const credits = Math.round((10 + rng() * 40) * tier);
+  let qty = 1 + Math.floor(rng() * 4);
+  let credits = Math.round((10 + rng() * 40) * tier);
+  if (TESTING_MODE) { qty *= TESTING_LOOT_MULTIPLIER; credits *= TESTING_LOOT_MULTIPLIER; }
   return { resource, tier, qty, credits };
 }
 
