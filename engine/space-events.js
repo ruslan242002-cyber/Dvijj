@@ -41,6 +41,10 @@ const SPACE_EVENT_WEIGHTS = {
 };
 
 const SPACE_RESOURCES = ['Изотопы', 'Сплавы', 'Реголит', 'Полимеры', 'Биомасса'];
+// Корабельные детали — падают только в космосе (обломки/бой), нужны
+// именно на ремонт узлов корабля (см. engine/ship-systems.js), не на
+// обычный крафт модулей/снаряжения персонажа.
+const SHIP_PART_RESOURCES = ['Фрагмент брони', 'Энергоячейка', 'Навигационный чир', 'Сплав титана'];
 
 function pickWeighted(weights, rng) {
   const total = Object.values(weights).reduce((s, w) => s + w, 0);
@@ -52,12 +56,19 @@ function pickWeighted(weights, rng) {
   return Object.keys(weights)[0];
 }
 
-function rollSpaceLoot(distance, rng) {
+// ⚠️ ТЕСТОВЫЙ РЕЖИМ — тот же множитель, что в engine/exploration-engine.js
+// (rollLoot), но для космической добычи. Убрать вместе с тем флагом.
+const TESTING_MODE = true;
+const TESTING_LOOT_MULTIPLIER = 500;
+
+function rollSpaceLoot(distance, rng, preferShipParts = false) {
   const mult = distanceRewardMultiplier(distance);
-  const resource = SPACE_RESOURCES[Math.floor(rng() * SPACE_RESOURCES.length)];
+  const pool = preferShipParts ? SHIP_PART_RESOURCES : SPACE_RESOURCES;
+  const resource = pool[Math.floor(rng() * pool.length)];
   const tier = 1 + Math.floor(Math.min(distance / 2, 4));
-  const qty = Math.max(1, Math.round((2 + Math.floor(rng() * 3)) * mult));
-  const credits = Math.round((10 + tier * 8) * mult);
+  let qty = Math.max(1, Math.round((2 + Math.floor(rng() * 3)) * mult));
+  let credits = Math.round((10 + tier * 8) * mult);
+  if (TESTING_MODE) { qty *= TESTING_LOOT_MULTIPLIER; credits *= TESTING_LOOT_MULTIPLIER; }
   return { resource, tier, qty, credits };
 }
 
@@ -161,11 +172,35 @@ function rollSpaceEvent(player, distance, rng = Math.random, ambushContext = nul
 
     case 'hostile_ship': {
       const enemy = generateHostileShip(distance, player.shipLevel || 1, rng);
-      return { type: 'hostile_ship', enemy, text: `⚠️ ${pick(HOSTILE_SHIP_LEAD_LINES)} — ${enemy.name}. Курс на пересечение.` };
+      // Часть враждебных встреч приходит с эскортом — не всегда одиночный
+      // корабль, иногда цель прикрыта сопровождением (см. "ЦЕЛИ" в
+      // референсе: уничтожить катер + уничтожить сопровождение +
+      // избежать повреждений). Шанс растёт с дистанцией — глубже, серьёзнее.
+      const escortChance = Math.min(0.5, 0.15 + distance * 0.015);
+      const hasEscort = rng() < escortChance;
+      let escort = null;
+      if (hasEscort) {
+        escort = generateHostileShip(distance, player.shipLevel || 1, rng);
+        escort.name = `Эскорт «${escort.name}»`;
+        escort.hp = Math.round(escort.hp * 0.7);
+        escort.hpMax = escort.hp;
+      }
+      const objectives = [
+        { id: 'main', label: `Уничтожить ${enemy.name}`, done: false },
+        ...(escort ? [{ id: 'escort', label: `Уничтожить ${escort.name}`, done: false }] : []),
+        { id: 'no_damage', label: 'Избежать повреждений', done: true }, // сбрасывается в false при первом полученном уроне
+      ];
+      const interceptedLine = escort
+        ? `\n\n📡 Перехваченный сигнал источника «${enemy.name}»:\n«Неизвестное судно. Вы нарушаете запретную зону. Немедленно измените курс или будете уничтожены».`
+        : '';
+      return {
+        type: 'hostile_ship', enemy, escort, objectives,
+        text: `⚠️ ${pick(HOSTILE_SHIP_LEAD_LINES)} — ${enemy.name}${escort ? ` с сопровождением (${escort.name})` : ''}. Курс на пересечение.${interceptedLine}`
+      };
     }
 
     case 'derelict_wreck': {
-      const loot = rollSpaceLoot(distance, rng);
+      const loot = rollSpaceLoot(distance, rng, true);
       return { type: 'derelict_wreck', loot, text: `${pick(DERELICT_WRECK_LINES)} Забираешь ${loot.qty}× ${loot.resource} T${loot.tier}.` };
     }
 
