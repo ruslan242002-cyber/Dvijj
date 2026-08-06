@@ -127,7 +127,7 @@ if (usedSkillId) {
 cooldowns = startCooldown(cooldowns, usedSkillId, SKILLS[usedSkillId], state.player.cooldownReductionPct || 0);
 }
 cooldowns = tickCooldowns(cooldowns);
-const buttons = [' Обычная атака', ...skillButtons(enemyTurn.defender, cooldowns)];
+const buttons = ['⚔️ Обычная атака', ...skillButtons(enemyTurn.defender, cooldowns)];
 if (!result.stimUsedThisFight) buttons.push('Стим');// Прокачка от использования (не в тренировочном бою — там статы и так
 // сбрасываются после, счётчик был бы бессмысленным шумом).
 let trainingNote = '';
@@ -163,14 +163,14 @@ return toShip;
 }
 return { reply: { text: 'Ты отступаешь на безопасное расстояние.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
 }
-const buttons = [' Обычная атака', ...skillButtons(state.player, {}), 'Стим'];
+const buttons = ['⚔️ Обычная атака', ...skillButtons(state.player, {}), 'Стим'];
 return {
 reply: { text: `${combatFullCard(state.player, state.enemy)}\n\nВыбери действие:`, buttons, imageKey: imageForEnemy(state.enemy.name) },
 nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: false, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident, skillCooldowns: {} }
 };
 }
 case SCENES.COMBAT_STIM_SELECT: {
-const backButtons = [' Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
+const backButtons = ['⚔️ Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
 if (!state.stimUsedThisFight) backButtons.push('Стим');
 if (input === ' Назад') {return {
 reply: { text: `${combatFullCard(state.player, state.enemy)}\n\nВыбери действие:`, buttons: backButtons, imageKey: imageForEnemy(state.enemy.name) },
@@ -189,7 +189,7 @@ return resolveCombatTurn(deps, state, result, rng, { prevPlayerHp, prevEnemyHp }
 case SCENES.COMBAT: {
 if (input === 'Стим') {
 if (state.stimUsedThisFight) {
-const buttons = [' Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
+const buttons = ['⚔️ Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
 return { reply: { text: 'Стим уже использован в этом бою.', buttons }, nextState: state };
 }
 return {
@@ -197,15 +197,16 @@ reply: { text: 'Выбери стим:', buttons: [...stimButtons(), ' Наза�
 nextState: { scene: 'combat_stim_select', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident, skillCooldowns: state.skillCooldowns }
 };
 }
-const skillId = input === ' Обычная атака' ? null : skillIdByName(input);
+const isAttackButton = (input || '').trim().endsWith('Обычная атака');
+const skillId = isAttackButton ? null : skillIdByName(input);
 const skill = skillId ? SKILLS[skillId] : null;
-if (input !== ' Обычная атака' && !skill) {
-const buttons = [' Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
+if (!isAttackButton && !skill) {
+const buttons = ['⚔️ Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
 if (!state.stimUsedThisFight) buttons.push('Стим');
 return { reply: { text: 'Выбери действие кнопкой ниже.', buttons }, nextState: state };
 }
 if (skillId && state.skillCooldowns?.[skillId] > 0) {
-const buttons = [' Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
+const buttons = ['⚔️ Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
 if (!state.stimUsedThisFight) buttons.push('Стим');
 return { reply: { text: `${skill.name} ещё перезаряжается (${state.skillCooldowns[skillId]} х.) — выбери другое действие.`, buttons }, nextState: state };
 }
