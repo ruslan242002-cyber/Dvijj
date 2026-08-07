@@ -1,49 +1,55 @@
 'use strict';
+
 /**
-* ДРОН-КОМПАНЬОН — коллекционный элемент с реальным (но небольшим)
-* пассивным эффектом, не боевой стат-модуль (для этого уже есть
-* crafting/crafting-engine.js). Падает только с именных боссов (тир A/S
-* в engine/bestiary.js), редко — это статусная вещь, не фарм-цель.
-* Игрок носит ОДНОГО компаньона за раз (player.equippedCompanion),
-* остальные собранные — в коллекции (player.companions[]) просто как
-* факт владения, без стакающихся бонусов.
-*/
+ * ДРОН-КОМПАНЬОН — коллекционный элемент с реальным (но небольшим)
+ * пассивным эффектом, не боевой стат-модуль (для этого уже есть
+ * crafting/crafting-engine.js). Падает только с именных боссов
+ * (engine/bestiary.js), редко — это статусная вещь, не фарм-цель.
+ * Игрок носит ОДНОГО компаньона за раз (player.equippedCompanion),
+ * остальные собранные — в коллекции (player.companions[]) просто как
+ * факт владения, без стакающихся бонусов.
+ */
 const COMPANIONS = [
-{ id: 'drone_scavenger', name: 'Дрон-падальщик', bossSource: 'skrap_zhuk', description: 'Маленький ремонтный дрон, подобранный у обломков Скрап-жука. Тихо жужжит рядом, помогая находить то, что другие проглядели.', effect: { type: 'resourceFindBonus', amount: 0.02 } },
-{ id: 'drone_echo_shard', name: 'Осколок-эхо', bossSource: 'trakt_eho_matka', description: 'Крошечный фрагмент Тракт-эхо-матки, каким-то образом сохранивший подобие сознания. Иногда шепчет за секунду до опасности.', effect: { type: 'ambushWarning', amount: 0.15 } },
-{ id: 'drone_graviarh_seed', name: 'Гравитационное семя', bossSource: 'graviarh', description: 'Микроскопический фрагмент ядра Гравиарха — слегка искажает пространство вокруг, немного облегчая маршруты.', effect: { type: 'fuelSaving', amount: 0.05 } },
-{ id: 'drone_pulsarid_core', name: 'Пульсар-ядро', bossSource: 'pulsarid', description: 'Пульсирующий осколок энергетического ядра Пульсарида — заметно ускоряет восстановление умений.', effect: { type: 'cooldownReduction', amount: 1 } },
-{ id: 'drone_oskolok_trakta', name: 'Спутник Осколка', bossSource: 'oskolok_trakta', description: 'Крошечная копия самого Осколка Тракта, застывшая в движении. Редчайший компаньон — говорят, он что-то помнит.', effect: { type: 'xpBonus', amount: 0.05 } },
+  { id: 'drone_scavenger', name: 'Дрон-падальщик', bossSource: 'scrap_zhuk', description: 'Маленький ремонтный дрон, подобранный у обломков Скрап-жука. Тихо жужжит рядом, помогая находить то, что другие проглядели.', effect: { type: 'resourceFindBonus', amount: 0.02 } },
+  { id: 'drone_echo_shard', name: 'Осколок-эхо', bossSource: 'trakt_eho_matka', description: 'Крошечный фрагмент Тракт-эхо-матки, каким-то образом сохранивший подобие сознания. Иногда шепчет за секунду до опасности.', effect: { type: 'ambushWarning', amount: 0.15 } },
+  { id: 'drone_graviarh_seed', name: 'Гравитационное семя', bossSource: 'graviarh', description: 'Микроскопический фрагмент ядра Гравиарха — слегка искажает пространство вокруг, немного облегчая маршруты.', effect: { type: 'fuelSaving', amount: 0.05 } },
+  { id: 'drone_pulsarid_core', name: 'Пульсар-ядро', bossSource: 'pulsarid', description: 'Пульсирующий осколок энергетического ядра Пульсарида — заметно ускоряет восстановление умений.', effect: { type: 'cooldownReduction', amount: 1 } },
 ];
-const COMPANION_DROP_CHANCE = 0.03; // 3% с боссов тира A/S — статусная редкость, не фарм
+const COMPANION_DROP_CHANCE = 0.03; // 3% с именных боссов — статусная редкость, не фарм
+
 function companionForBoss(bossId) {
-return COMPANIONS.find((c) => c.bossSource === bossId) || null;
+  return COMPANIONS.find((c) => c.bossSource === bossId) || null;
 }
-/** Вызывать после победы над именным боссом (danger A/S) — не гарантия,
-* редкий шанс. Мутирует player.companions, если повезло. */
+
+/** Вызывать после победы над именным боссом — не гарантия, редкий шанс.
+ * Мутирует player.companions, если повезло. */
 function rollCompanionDrop(player, bossId, rng = Math.random) {
-const companion = companionForBoss(bossId);
-if (!companion) return null;
-if (rng() >= COMPANION_DROP_CHANCE) return null;
-player.companions = player.companions || [];
-if (player.companions.includes(companion.id)) return null; // уже есть, повторно не выпадает
-player.companions.push(companion.id);
-return companion;
+  const companion = companionForBoss(bossId);
+  if (!companion) return null;
+  if (rng() >= COMPANION_DROP_CHANCE) return null;
+  player.companions = player.companions || [];
+  if (player.companions.includes(companion.id)) return null; // уже есть, повторно не выпадает
+  player.companions.push(companion.id);
+  return companion;
 }
+
 function equipCompanion(player, companionId) {
-if (!(player.companions || []).includes(companionId)) return { success: false, reason: 'NOT_OWNED' };
-player.equippedCompanion = companionId;
-return { success: true };
+  if (!(player.companions || []).includes(companionId)) return { success: false, reason: 'NOT_OWNED' };
+  player.equippedCompanion = companionId;
+  return { success: true };
 }
+
 function unequipCompanion(player) {
-player.equippedCompanion = null;
+  player.equippedCompanion = null;
 }
+
 /** Активный эффект — читать там, где применимо (rollLoot для
-* resourceFindBonus, ambush-роллы для ambushWarning, fuelCostForStep для
-* fuelSaving, cooldown-тик для cooldownReduction, grantXp для xpBonus). */
+ * resourceFindBonus, ambush-роллы для ambushWarning, fuelCostForStep для
+ * fuelSaving, cooldown-тик для cooldownReduction). */
 function activeCompanionEffect(player) {
-if (!player.equippedCompanion) return null;
-const companion = COMPANIONS.find((c) => c.id === player.equippedCompanion);
-return companion ? companion.effect : null;
+  if (!player.equippedCompanion) return null;
+  const companion = COMPANIONS.find((c) => c.id === player.equippedCompanion);
+  return companion ? companion.effect : null;
 }
+
 module.exports = { COMPANIONS, COMPANION_DROP_CHANCE, companionForBoss, rollCompanionDrop, equipCompanion, unequipCompanion, activeCompanionEffect };
