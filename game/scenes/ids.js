@@ -41,6 +41,7 @@ const SCENES = Object.freeze({
   GUILD_DONATE_CREDITS: 'guild_donate_credits',
   GUILD_DONATE_RESOURCE: 'guild_donate_resource',
   GUILD_WITHDRAW_RESOURCE: 'guild_withdraw_resource',
+  DICE_GAME: 'dice_game',
   QUEST_SHYOPOT: 'quest_shyopot',
   LOC_REPAIR: 'loc_repair',
   LOC_DECON: 'loc_decon',
