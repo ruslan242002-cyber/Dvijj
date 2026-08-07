@@ -1,9 +1,11 @@
 'use strict';
 
 const { imageForLocation } = require('../../location-images.js');
-const { hubMessage, stationButtons, sellInventory } = require('../common.js');
+const { hubMessage, stationButtons, sellInventory, sellUnprotectedInventory, currentStation } = require('../common.js');
 const { SCENES } = require('../ids.js');
 const { TANK_UPGRADE_FUEL_BONUS } = require('../../../engine/travel.js');
+const { SYSTEM_NAMES, repairSystem } = require('../../../engine/ship-systems.js');
+const { SHIP_SKINS, purchaseSkin, equipSkin } = require('../../../engine/ship-skins.js');
 
 const REPAIR_CREDITS_PER_HP = 3;
 const FUEL_CREDITS_PER_UNIT = 2;
@@ -36,10 +38,16 @@ function importMarkup(faction) {
 
 function handleRepair(state, input, rng, deps) {
   if (state.scene !== SCENES.LOC_REPAIR) return null;
-  if (input === '💰 Продать') {
+  if (input === '💰 Продать всё') {
     const player = { ...state.player };
     const gained = sellInventory(player);
     return { reply: { text: gained ? `Завхоз отсчитывает ${gained} кредитов за находки.` : 'Продавать нечего.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player } };
+  }
+  if (input === '🧹 Продать лишнее') {
+    const player = { ...state.player };
+    const { total, keptCount } = sellUnprotectedInventory(player);
+    const keptNote = keptCount ? ` Оставлено ${keptCount} видов ресурсов — они ещё нужны для крафта или ремонта корабля.` : '';
+    return { reply: { text: total ? `Завхоз отсчитывает ${total} кредитов за второстепенное.${keptNote}` : 'Продавать второстепенное нечего — либо трюм пуст, либо всё ещё пригодится.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player } };
   }
   if (input.startsWith('🔧 Ремонт')) {
     const player = { ...state.player, ship: { ...state.player.ship } };
@@ -47,7 +55,7 @@ function handleRepair(state, input, rng, deps) {
     if (missingHp === 0) {
       return { reply: { text: 'Корабль и так в полном порядке.', buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
     }
-    const cost = Math.round(missingHp * REPAIR_CREDITS_PER_HP * (1 - repairDiscount(player.faction)) * (1 + importMarkup(player.faction)));
+    const cost = Math.round(missingHp * REPAIR_CREDITS_PER_HP * (1 - repairDiscount(currentStation(player))) * (1 + importMarkup(currentStation(player))));
     if ((player.credits || 0) < cost) {
       return {
         reply: { text: `Не хватает кредитов на полный ремонт (нужно 💳${cost}, есть 💳${player.credits || 0}).`, buttons: stationButtons(deps, player) },
@@ -64,11 +72,11 @@ function handleRepair(state, input, rng, deps) {
     if (missingFuel === 0) {
       return { reply: { text: 'Баки и так полны.', buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
     }
-    const cost = Math.round(missingFuel * FUEL_CREDITS_PER_UNIT * (1 + importMarkup(player.faction)));
+    const cost = Math.round(missingFuel * FUEL_CREDITS_PER_UNIT * (1 + importMarkup(currentStation(player))));
     if ((player.credits || 0) < cost) {
       // Заправляем настолько, насколько хватает кредитов — не обязательно
       // всё-или-ничего, частичная дозаправка тоже полезна.
-      const perUnit = FUEL_CREDITS_PER_UNIT * (1 + importMarkup(player.faction));
+      const perUnit = FUEL_CREDITS_PER_UNIT * (1 + importMarkup(currentStation(player)));
       const affordableUnits = Math.floor((player.credits || 0) / perUnit);
       if (affordableUnits <= 0) {
         return { reply: { text: `Не хватает кредитов даже на минимальную заправку (💳${Math.round(perUnit)}/ед.).`, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
@@ -86,7 +94,7 @@ function handleRepair(state, input, rng, deps) {
     const player = { ...state.player, ship: { ...state.player.ship }, inventory: (state.player.inventory || []).map((i) => ({ ...i })) };
     const stack = player.inventory.find((i) => i.resource === TANK_UPGRADE_RESOURCE && i.tier === TANK_UPGRADE_TIER);
     const haveQty = stack ? stack.qty : 0;
-    const tankCost = Math.round(TANK_UPGRADE_CREDITS * (1 - tankUpgradeDiscount(player.faction)));
+    const tankCost = Math.round(TANK_UPGRADE_CREDITS * (1 - tankUpgradeDiscount(currentStation(player))));
     if (haveQty < TANK_UPGRADE_QTY || (player.credits || 0) < tankCost) {
       return {
         reply: { text: `Не хватает материалов для расширения бака (нужно ${TANK_UPGRADE_RESOURCE} T${TANK_UPGRADE_TIER} ×${TANK_UPGRADE_QTY} и 💳${tankCost}; есть ×${haveQty} и 💳${player.credits || 0}).`, buttons: stationButtons(deps, player) },
@@ -100,6 +108,44 @@ function handleRepair(state, input, rng, deps) {
     player.ship.fuel += TANK_UPGRADE_FUEL_BONUS;
     return { reply: { text: `Инженеры вваривают дополнительную секцию бака — вместимость топлива выросла на ${TANK_UPGRADE_FUEL_BONUS} (теперь ${player.ship.fuelMax}). Списано ${TANK_UPGRADE_RESOURCE} T${TANK_UPGRADE_TIER} ×${TANK_UPGRADE_QTY} и 💳${tankCost}.`, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
   }
+  const buySkinMatch = /^💳 Купить окраску: (.+)$/.exec(input);
+  if (buySkinMatch) {
+    const skinName = buySkinMatch[1];
+    const skin = SHIP_SKINS.find((s) => s.name === skinName);
+    if (!skin) return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', currentStation(state.player)) }, nextState: { scene: 'station', player: state.player } };
+    const player = { ...state.player, ship: { ...state.player.ship } };
+    const result = purchaseSkin(player, skin.id);
+    if (!result.success) {
+      const reasonText = result.reason === 'INSUFFICIENT_CREDITS' ? `не хватает кредитов (нужно 💳${skin.cost}).` : 'не удалось купить.';
+      return { reply: { text: `${skinName}: ${reasonText}`, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
+    }
+    return { reply: { text: `Куплена окраска «${skinName}» за 💳${skin.cost}.`, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
+  }
+
+  const equipSkinMatch = /^🎨 Надеть: (.+)$/.exec(input);
+  if (equipSkinMatch) {
+    const skinName = equipSkinMatch[1];
+    const skin = SHIP_SKINS.find((s) => s.name === skinName);
+    if (!skin) return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', currentStation(state.player)) }, nextState: { scene: 'station', player: state.player } };
+    const player = { ...state.player, ship: { ...state.player.ship } };
+    equipSkin(player, skin.id);
+    return { reply: { text: `Окраска сменена на «${skinName}».`, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
+  }
+
+  const systemRepairMatch = /^⚙️ Чинить: (.+)$/.exec(input);
+  if (systemRepairMatch) {
+    const sysName = systemRepairMatch[1];
+    const sysId = Object.keys(SYSTEM_NAMES).find((id) => SYSTEM_NAMES[id] === sysName);
+    if (!sysId) return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', currentStation(state.player)) }, nextState: { scene: 'station', player: state.player } };
+    const player = { ...state.player, ship: { ...state.player.ship }, inventory: (state.player.inventory || []).map((i) => ({ ...i })) };
+    const result = repairSystem(player, sysId);
+    if (!result.success) {
+      const reasonText = result.reason === 'ALREADY_FULL' ? 'уже в полном порядке.' : `не хватает материалов (нужно ${result.cost.resource} T${result.cost.tier} ×${result.cost.qty} и 💳${result.cost.credits}).`;
+      return { reply: { text: `${sysName}: ${reasonText}`, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
+    }
+    return { reply: { text: `Механики восстанавливают узел «${sysName}» до 100%. Списано ${result.cost.resource} T${result.cost.tier} ×${result.cost.qty} и 💳${result.cost.credits}.`, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
+  }
+
   const toolMatch = /^Купить: (.+)$/.exec(input);
   if (toolMatch) {
     const toolId = Object.keys(TOOL_COSTS).find((id) => TOOL_COSTS[id].name === toolMatch[1]);
@@ -124,7 +170,7 @@ function handleRepair(state, input, rng, deps) {
       return { reply: { text: `Инструмент собран: ${cost.name}. Списано ${cost.resource} T${cost.tier} ×${cost.qty} и 💳${cost.credits}.`, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
     }
   }
-  return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
+  return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', currentStation(state.player)) }, nextState: { scene: 'station', player: state.player } };
 }
 
 module.exports = { handleRepair, REPAIR_CREDITS_PER_HP, FUEL_CREDITS_PER_UNIT, repairDiscount, tankUpgradeDiscount, importMarkup, TANK_UPGRADE_CREDITS, TOOL_COSTS };
