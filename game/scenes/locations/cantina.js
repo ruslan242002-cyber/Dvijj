@@ -8,6 +8,8 @@
 const { availableQuests, describeObjective, progressText, objectiveMet, consumeObjective } = require('../../quests-data.js');
 const { getDailyContracts, checkContractProgress, claimContractRewards, maybeUnlockRareContract, getReputationTitle, } = require('../../../contracts/contracts-engine.js');
 const { getFactionReputation } = require('../../../engine/reputation.js');
+const { checkAchievements } = require('../../../lib/achievements.js');
+const { MIN_BET, MAX_BET, playDice } = require('../../../lib/gambling.js');
 const { getArcForFaction, getNextAvailableQuest } = require('../../../storylines/curator-arcs.js');
 const { getNpcLine } = require('../../../city/npc-roster.js');
 const { DISTRICTS } = require('../../../city/districts-data.js');
@@ -39,6 +41,15 @@ function contractsBoard(player) {
   };
 }
 
+/** Атмосфера бара по фракциям — у каждого своё лицо, не просто «БАР» с
+ * одинаковым текстом везде. Терминус пока без образа — не было
+ * референса, оставлен нейтральным до появления материала. */
+const BAR_FLAVOR = {
+  'Приют': { name: 'ПОСЛЕДНИЙ ГЛОТОК', intro: '«Не важно, кто ты. Важно, что ты закажешь». Пилоты, торговцы, контрабандисты — здесь не задают лишних вопросов, а хороший напиток дороже громкого имени.' },
+  'Вуаль': { name: 'ГОРИЗОНТ', intro: 'Место встречи умов — учёные, инженеры и авантюристы обмениваются идеями за бокалом. Нейтральная территория, под защитой протоколов Вуали.' },
+  'Арсенал': { name: 'БАР АРСЕНАЛА', intro: '«Мы не просто пьём — мы становимся сильнее». Крепкие напитки, армрестлинг на ставки, оружие оставить на входе.' },
+};
+
 function cantinaBoard(player) {
   const curatorId = (DISTRICTS[player.faction]?.npcs || [])[0];
   player.npcMeetings = player.npcMeetings || {};
@@ -60,9 +71,11 @@ function cantinaBoard(player) {
   if (arcQuest) lines.push(`✨ Куратор ${CURATORS[player.faction] || ''} хочет поговорить лично: «${arcQuest.name}»`);
   const shardCount = (player.bestiaryItems || []).filter((id) => id === 'oskolok_bezdny').length;
   const abyssButtons = shardCount > 0 ? ['🌑 Осколок Бездны'] : [];
-  const buttons = [...quests.map((q) => q.title), ...(arcQuest ? [`💬 ${arcQuest.name}`] : []), ...abyssButtons, '⬅️ Назад'];
+  const diceButtons = BAR_FLAVOR[player.faction] ? ['🎲 Кости'] : [];
+  const buttons = [...quests.map((q) => q.title), ...(arcQuest ? [`💬 ${arcQuest.name}`] : []), ...abyssButtons, ...diceButtons, '⬅️ Назад'];
+  const barHeader = BAR_FLAVOR[player.faction] || { name: 'БАР', intro: '' };
   return {
-    reply: { text: `🍸 БАР\n\n${greeting ? `${greeting}\n\n` : ''}Доступные задания куратора:\n${lines.join('\n')}`, buttons, imageKey: imageForCurator(player.faction) },
+    reply: { text: `🍸 ${barHeader.name}${barHeader.intro ? `\n${barHeader.intro}` : ''}\n\n${greeting ? `${greeting}\n\n` : ''}Доступные задания куратора:\n${lines.join('\n')}`, buttons, imageKey: imageForCurator(player.faction) },
     nextState: { scene: 'loc_cantina', player }
   };
 }
@@ -72,6 +85,13 @@ function handleCantina(state, input, rng, deps) {
     case SCENES.LOC_CANTINA: {
       if (input === '⬅️ Назад') {
         return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
+      }
+      if (input === '🎲 Кости') {
+        const barName = BAR_FLAVOR[state.player.faction]?.name || 'бар';
+        return {
+          reply: { text: `🎲 КОСТИ (${barName})\n\nСтавка от ${MIN_BET} до ${MAX_BET} кредитов. Два кубика против заведения — у кого сумма больше, тот и забирает банк. Ничья — ставка возвращается.\n\nСколько ставишь? Напиши число:`, buttons: ['⬅️ Назад'] },
+          nextState: { scene: SCENES.DICE_GAME, player: state.player }
+        };
       }
       if (input === '🌑 Осколок Бездны') {
         const shardIdx = (state.player.bestiaryItems || []).indexOf('oskolok_bezdny');
@@ -172,12 +192,38 @@ function handleCantina(state, input, rng, deps) {
         const unlockedNote = unlocked.length
           ? `\n\n🔓 Открылось новое задание (${unlocked.length > 1 ? 'редкое + легендарное' : 'редкое'}) — загляни в доску снова.`
           : '';
+        const newAchievements = checkAchievements(player);
+        const achievementsNote = newAchievements.length ? `\n\n${newAchievements.map((a) => `🏆 Достижение: «${a.title}»`).join('\n')}` : '';
         const text = claimableIds.length
-          ? `Получено: 💳 ${totalCredits} кредитов, ⭐ +${totalRep} репутации.${unlockedNote}`
+          ? `Получено: 💳 ${totalCredits} кредитов, ⭐ +${totalRep} репутации.${unlockedNote}${achievementsNote}`
           : 'Нечего забирать — сначала выполни хотя бы один контракт.';
         return { reply: { text, buttons: ['⬅️ Назад'] }, nextState: { scene: 'contracts', player } };
       }
       return contractsBoard({ ...state.player });
+    }
+
+    case SCENES.DICE_GAME: {
+      if (input === '⬅️ Назад') return cantinaBoard(state.player);
+      const rawInput = input === '🎲 Ещё раз' && state.lastBet ? String(state.lastBet) : input;
+      const bet = parseInt(rawInput, 10);
+      if (!Number.isFinite(bet) || bet < MIN_BET || bet > MAX_BET) {
+        return { reply: { text: `Ставка должна быть от ${MIN_BET} до ${MAX_BET} кредитов. Сколько ставишь?`, buttons: ['⬅️ Назад'] }, nextState: state };
+      }
+      if ((state.player.credits || 0) < bet) {
+        return { reply: { text: `Не хватает кредитов на такую ставку (у тебя 💳${state.player.credits || 0}). Сколько ставишь?`, buttons: ['⬅️ Назад'] }, nextState: state };
+      }
+      const player = { ...state.player };
+      const result = playDice(bet, rng);
+      player.credits = (player.credits || 0) - bet + result.payout;
+      const outcomeText = result.outcome === 'win'
+        ? `🎲 Твои кости: ${result.playerRoll}. Заведение: ${result.houseRoll}.\n\n🏆 Выигрыш! +💳${result.payout - bet} чистыми.`
+        : result.outcome === 'push'
+        ? `🎲 Твои кости: ${result.playerRoll}. Заведение: ${result.houseRoll}.\n\n🤝 Ничья — ставка вернулась.`
+        : `🎲 Твои кости: ${result.playerRoll}. Заведение: ${result.houseRoll}.\n\n💸 Не повезло — ставка ушла заведению.`;
+      return {
+        reply: { text: `${outcomeText}\n\n💳 Баланс: ${player.credits}`, buttons: ['🎲 Ещё раз', '⬅️ Назад'] },
+        nextState: { scene: SCENES.DICE_GAME, player, lastBet: bet }
+      };
     }
 
     default:
