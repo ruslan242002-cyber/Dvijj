@@ -23,7 +23,7 @@ const { SHIP_SYSTEMS, SYSTEM_NAMES, freshShipSystems, shipSystemsText, repairSys
 const { findSkin, skinsAvailableFor, ownedSkins, purchaseSkin, equipSkin } = require('../../engine/ship-skins.js');
 const { guildHub } = require('./guild.js');
 const {
-  hubMessage, statusText, stationButtons, startJourney, districtGroupsFor, FACTIONS, CITY_UNLOCK_LEVEL, stationArrivalCard, deconFee, addToInventory,
+  hubMessage, statusText, stationButtons, startJourney, districtGroupsFor, FACTIONS, CITY_UNLOCK_LEVEL, currentStation, stationArrivalCard, deconFee, addToInventory,
 } = require('./common.js');
 const { travelScreen } = require('./travel.js');
 const { zoneForDistance } = require('../../engine/travel.js');
@@ -45,19 +45,19 @@ async function resolveStationAction(input, state, deps, rng, playerId) {
     const p = state.player;
     const items = (p.inventory || []).map((i) => `${i.resource} T${i.tier} ×${i.qty}`).join(', ');
     const missingHp = Math.max(0, p.ship.hpMax - p.ship.hp);
-    const repairCost = Math.round(missingHp * 3 * (1 - repairDiscount(p.faction)) * (1 + importMarkup(p.faction)));
+    const repairCost = Math.round(missingHp * 3 * (1 - repairDiscount(currentStation(p))) * (1 + importMarkup(currentStation(p))));
     const missingFuel = Math.max(0, p.ship.fuelMax - p.ship.fuel);
-    const fuelCost = Math.round(missingFuel * 2 * (1 + importMarkup(p.faction)));
-    const tankCost = Math.round(TANK_UPGRADE_CREDITS * (1 - tankUpgradeDiscount(p.faction)));
+    const fuelCost = Math.round(missingFuel * 2 * (1 + importMarkup(currentStation(p))));
+    const tankCost = Math.round(TANK_UPGRADE_CREDITS * (1 - tankUpgradeDiscount(currentStation(p))));
     const shipLine = missingHp > 0
-      ? `\n\n🚀 Корпус: ❤️ ${p.ship.hp}/${p.ship.hpMax} — ремонт обойдётся в 💳${repairCost}${repairDiscount(p.faction) ? ' (со скидкой Арсенала)' : ' (3 кредита за HP)'}.`
+      ? `\n\n🚀 Корпус: ❤️ ${p.ship.hp}/${p.ship.hpMax} — ремонт обойдётся в 💳${repairCost}${repairDiscount(currentStation(p)) ? ' (со скидкой Арсенала)' : ' (3 кредита за HP)'}.`
       : `\n\n🚀 Корпус: ❤️ ${p.ship.hp}/${p.ship.hpMax} — в полном порядке.`;
-    const fuelLine = p.faction === 'Вуаль'
+    const fuelLine = currentStation(p) === 'Вуаль'
       ? `\n⛽ Топливо: ${p.ship.fuel}/${p.ship.fuelMax} — при стыковке заправляется бесплатно и без лимита (привилегия Вуали).`
       : (missingFuel > 0
         ? `\n⛽ Топливо: ${p.ship.fuel}/${p.ship.fuelMax} — заправка обойдётся в 💳${fuelCost} (2 кредита за ед., но при стыковке заправляется само).`
         : `\n⛽ Топливо: ${p.ship.fuel}/${p.ship.fuelMax} — баки полны.`);
-    const tankLine = `\n🛢️ Расширение бака: +20 к ёмкости за Сплавы T2 ×15 и 💳${tankCost}${tankUpgradeDiscount(p.faction) ? ' (со скидкой Кузницы)' : ''}.`;
+    const tankLine = `\n🛢️ Расширение бака: +20 к ёмкости за Сплавы T2 ×15 и 💳${tankCost}${tankUpgradeDiscount(currentStation(p)) ? ' (со скидкой Кузницы)' : ''}.`;
 
     p.ship.systems = p.ship.systems || freshShipSystems();
     const damagedSystems = SHIP_SYSTEMS.filter((sys) => p.ship.systems[sys] < 100);
@@ -76,7 +76,7 @@ async function resolveStationAction(input, state, deps, rng, playerId) {
     const buttons = [];
     if (items) buttons.push('🧹 Продать лишнее', '💰 Продать всё');
     if (missingHp > 0) buttons.push(`🔧 Ремонт (💳${repairCost})`);
-    if (missingFuel > 0 && p.faction !== 'Вуаль') buttons.push(`⛽ Заправка (💳${fuelCost})`);
+    if (missingFuel > 0 && currentStation(p) !== 'Вуаль') buttons.push(`⛽ Заправка (💳${fuelCost})`);
     buttons.push('🛢️ Расширить бак');
     for (const sys of damagedSystems) {
       buttons.push(`⚙️ Чинить: ${SYSTEM_NAMES[sys]}`);
@@ -93,24 +93,34 @@ async function resolveStationAction(input, state, deps, rng, playerId) {
     }
     buttons.push('⬅️ Назад');
     return {
-      reply: { text: `🔧 РЕМОНТНЫЙ ОТСЕК\n\n${items ? `В трюме: ${items}` : 'Трюм пуст.'}${shipLine}${fuelLine}${systemsLine}${tankLine}${skinsLine}${toolLines}`, buttons, imageKey: imageForLocation('repair', p.faction) },
+      reply: { text: `🔧 РЕМОНТНЫЙ ОТСЕК\n\n${items ? `В трюме: ${items}` : 'Трюм пуст.'}${shipLine}${fuelLine}${systemsLine}${tankLine}${skinsLine}${toolLines}`, buttons, imageKey: imageForLocation('repair', currentStation(p)) },
       nextState: { scene: 'loc_repair', player: state.player }
     };
   }
   if (input === 'Декон-камера') {
     const p = state.player;
-    const fee = deconFee(p.faction);
+    const fee = deconFee(currentStation(p));
     const feeLabel = fee === 0 ? '☢️ Снять облучение (бесплатно)' : `☢️ Снять облучение (💳${fee})`;
     return {
-      reply: { text: `☢️ ДЕКОН-КАМЕРА\n\nТекущее облучение: ${p.radiation || 0}%${p.radiation ? `\nСтоимость очистки: ${fee === 0 ? 'бесплатно' : `💳${fee}`}` : ''}`, buttons: p.radiation ? [feeLabel, '⬅️ Назад'] : ['⬅️ Назад'], imageKey: imageForLocation('decon', p.faction) },
+      reply: { text: `☢️ ДЕКОН-КАМЕРА\n\nТекущее облучение: ${p.radiation || 0}%${p.radiation ? `\nСтоимость очистки: ${fee === 0 ? 'бесплатно' : `💳${fee}`}` : ''}`, buttons: p.radiation ? [feeLabel, '⬅️ Назад'] : ['⬅️ Назад'], imageKey: imageForLocation('decon', currentStation(p)) },
       nextState: { scene: 'loc_decon', player: state.player }
     };
   }
   if (input === 'Бар') {
+    if (state.player.visitingStation) {
+      return { reply: { text: `Куратор ${state.player.visitingStation} не станет говорить с чужаком. Чтобы попасть в бар, нужно вступить во фракцию (Мостик → Станция приписки).`, buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
+    }
     return cantinaBoard(state.player);
   }
   if (input === 'Контракты') {
+    if (state.player.visitingStation) {
+      return { reply: { text: 'Доска контрактов доступна только участникам фракции.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
+    }
     return contractsBoard({ ...state.player });
+  }
+  if (input === '🏠 Домой') {
+    const player = { ...state.player, visitingStation: null };
+    return { reply: { text: hubMessage(player), buttons: stationButtons(deps, player), imageKey: imageForLocation('station', currentStation(player)) }, nextState: { scene: 'station', player } };
   }
   if (input === 'Гильдия') {
     return guildHub(deps, state.player, playerId);
@@ -138,7 +148,7 @@ async function resolveStationAction(input, state, deps, rng, playerId) {
     const lockedNote = locked.length
       ? `\n\nЕщё закрыто: ${locked.map((f) => `${f} (ур. ${CITY_UNLOCK_LEVEL[f]})`).join(', ')}.`
       : '';
-    return { reply: { text: `🌀 ВРАТА ТРАКТА\n\nКуда проложить курс?${lockedNote}`, buttons: [...unlocked, '⬅️ Назад'], imageKey: imageForLocation('gates', state.player.faction) }, nextState: { scene: 'loc_gates', player: state.player } };
+    return { reply: { text: `🌀 ВРАТА ТРАКТА\n\nКуда проложить курс?${lockedNote}`, buttons: [...unlocked, '⬅️ Назад'], imageKey: imageForLocation('gates', currentStation(state.player)) }, nextState: { scene: 'loc_gates', player: state.player } };
   }
   if (input === 'Исследовать') {
     return { reply: { text: 'Разведка теперь начинается с полёта — набери «Полёт» на хабе, долети до планеты и высадись там.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
@@ -213,7 +223,7 @@ function stationDefaultView(deps, player, rng) {
     dailyNote = `🗓️ Серия входов: ${loginResult.streak} д. подряд — 💳+${loginResult.reward.credits}${resourceNote}.\n\n`;
   }
   return {
-    reply: { text: `${dailyNote}${card.text}`, buttons: stationButtons(deps, nextPlayer), imageKey: imageForLocation('station', nextPlayer.faction) },
+    reply: { text: `${dailyNote}${card.text}`, buttons: stationButtons(deps, nextPlayer), imageKey: imageForLocation('station', currentStation(nextPlayer)) },
     nextState: { scene: 'station', player: nextPlayer }
   };
 }
