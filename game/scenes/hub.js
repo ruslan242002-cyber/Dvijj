@@ -10,6 +10,7 @@
 const { workshopScreen } = require('./locations/workshop.js');
 const { bridgeScreen } = require('./locations/bridge.js');
 const { addFactionReputation } = require('../../engine/reputation.js');
+const { checkDailyLogin } = require('../../lib/daily-streak.js');
 const { DISTRICTS } = require('../../city/districts-data.js');
 const { rollStationEvent } = require('../../city/station-events.js');
 const { imageForLocation } = require('../location-images.js');
@@ -19,6 +20,8 @@ const { housingHub } = require('./housing.js');
 const { cantinaBoard, contractsBoard } = require('./locations/cantina.js');
 const { repairDiscount, tankUpgradeDiscount, importMarkup, TANK_UPGRADE_CREDITS, TOOL_COSTS } = require('./locations/repair.js');
 const { SHIP_SYSTEMS, SYSTEM_NAMES, freshShipSystems, shipSystemsText, repairSystem, repairCostForSystem } = require('../../engine/ship-systems.js');
+const { findSkin, skinsAvailableFor, ownedSkins, purchaseSkin, equipSkin } = require('../../engine/ship-skins.js');
+const { guildHub } = require('./guild.js');
 const {
   hubMessage, statusText, stationButtons, startJourney, districtGroupsFor, FACTIONS, CITY_UNLOCK_LEVEL, stationArrivalCard, deconFee, addToInventory,
 } = require('./common.js');
@@ -64,6 +67,12 @@ async function resolveStationAction(input, state, deps, rng, playerId) {
     const toolLines = Object.entries(TOOL_COSTS)
       .map(([id, cost]) => `\n🔩 ${cost.name}: ${ownedTools.includes(id) ? 'уже есть' : `${cost.resource} T${cost.tier} ×${cost.qty} + 💳${cost.credits}`}`)
       .join('');
+
+    const mySkins = ownedSkins(p);
+    const equippedSkinId = p.ship.equippedSkin || 'skin_default';
+    const availableSkins = skinsAvailableFor(p);
+    const skinsLine = `\n\n🎨 Окраска корабля (${findSkin(equippedSkinId)?.name || 'Стандартный корпус'}):\n${availableSkins.map((s) => `${mySkins.includes(s.id) ? (s.id === equippedSkinId ? '✅' : '◻️') : '🔒'} ${s.name}${s.cost ? ` — 💳${s.cost}` : ''}`).join('\n')}`;
+
     const buttons = [];
     if (items) buttons.push('🧹 Продать лишнее', '💰 Продать всё');
     if (missingHp > 0) buttons.push(`🔧 Ремонт (💳${repairCost})`);
@@ -72,12 +81,19 @@ async function resolveStationAction(input, state, deps, rng, playerId) {
     for (const sys of damagedSystems) {
       buttons.push(`⚙️ Чинить: ${SYSTEM_NAMES[sys]}`);
     }
+    for (const s of availableSkins) {
+      if (mySkins.includes(s.id)) {
+        if (s.id !== equippedSkinId) buttons.push(`🎨 Надеть: ${s.name}`);
+      } else {
+        buttons.push(`💳 Купить окраску: ${s.name}`);
+      }
+    }
     for (const [id, cost] of Object.entries(TOOL_COSTS)) {
       if (!ownedTools.includes(id)) buttons.push(`Купить: ${cost.name}`);
     }
     buttons.push('⬅️ Назад');
     return {
-      reply: { text: `🔧 РЕМОНТНЫЙ ОТСЕК\n\n${items ? `В трюме: ${items}` : 'Трюм пуст.'}${shipLine}${fuelLine}${systemsLine}${tankLine}${toolLines}`, buttons, imageKey: imageForLocation('repair', p.faction) },
+      reply: { text: `🔧 РЕМОНТНЫЙ ОТСЕК\n\n${items ? `В трюме: ${items}` : 'Трюм пуст.'}${shipLine}${fuelLine}${systemsLine}${tankLine}${skinsLine}${toolLines}`, buttons, imageKey: imageForLocation('repair', p.faction) },
       nextState: { scene: 'loc_repair', player: state.player }
     };
   }
@@ -95,6 +111,9 @@ async function resolveStationAction(input, state, deps, rng, playerId) {
   }
   if (input === 'Контракты') {
     return contractsBoard({ ...state.player });
+  }
+  if (input === 'Гильдия') {
+    return guildHub(deps, state.player, playerId);
   }
   if (input === 'Биржа') {
     return marketHub(deps, state.player, playerId);
@@ -186,8 +205,15 @@ function stationDefaultView(deps, player, rng) {
     if (card.reward.credits) nextPlayer.credits = (nextPlayer.credits || 0) + card.reward.credits;
     if (card.reward.reputation) addFactionReputation(nextPlayer, nextPlayer.faction, card.reward.reputation);
   }
+  nextPlayer = { ...nextPlayer };
+  const loginResult = checkDailyLogin(nextPlayer);
+  let dailyNote = '';
+  if (loginResult.rewarded) {
+    const resourceNote = loginResult.reward.resource ? ` + ${loginResult.reward.resource.qty}× ${loginResult.reward.resource.resource} T${loginResult.reward.resource.tier}` : '';
+    dailyNote = `🗓️ Серия входов: ${loginResult.streak} д. подряд — 💳+${loginResult.reward.credits}${resourceNote}.\n\n`;
+  }
   return {
-    reply: { text: card.text, buttons: stationButtons(deps, nextPlayer), imageKey: imageForLocation('station', nextPlayer.faction) },
+    reply: { text: `${dailyNote}${card.text}`, buttons: stationButtons(deps, nextPlayer), imageKey: imageForLocation('station', nextPlayer.faction) },
     nextState: { scene: 'station', player: nextPlayer }
   };
 }
