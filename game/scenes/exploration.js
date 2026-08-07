@@ -562,10 +562,14 @@ function handleExploration(state, input, rng, deps) {
       if (state.kind === 'explore') {
         return explore(state.player, state.payload.zone, rng, deps, !!state.payload.stealthMode, state.payload.depth || 0);
       }
-      const player = { ...state.player, faction: state.payload.targetFaction };
-      const curator = CURATORS[player.faction] || '';
+      // Посещение чужой станции — раньше здесь мутировался player.faction
+      // напрямую (тот же эффект, что и полноценная смена фракции, но без
+      // отката бонуса статов/пересчёта умений/проверки уровня). Теперь
+      // временная отметка "гость", родная фракция не трогается — см.
+      // common.js: currentStation().
+      const player = { ...state.player, visitingStation: state.payload.targetFaction };
       return {
-        reply: { text: `Стыковка завершена. Станция «${player.faction}» приветствует тебя — куратор ${curator} на связи.`, buttons: stationButtons(deps, player) },
+        reply: { text: `Стыковка завершена. Станция «${player.visitingStation}» пускает тебя как гостя — доступны общие услуги (мастерская, ремонт, рынок), но не куратор. Чтобы говорить с куратором, нужно вступить во фракцию (Мостик → Станция приписки).`, buttons: stationButtons(deps, player) },
         nextState: { scene: 'station', player }
       };
     }
