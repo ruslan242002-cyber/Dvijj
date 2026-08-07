@@ -182,6 +182,25 @@ function switchFaction(player, newFaction) {
   return player;
 }
 
+/**
+ * ТЕКУЩАЯ СТАНЦИЯ vs РОДНАЯ ФРАКЦИЯ — раньше "Врата Тракта" (посещение
+ * другой станции) молча меняли player.faction той же мутацией, что и
+ * полноценная смена фракции (switchFaction), но БЕЗ отката бонуса
+ * статов, без пересчёта умений, без проверки 30 уровня. Заход в гости
+ * на Арсенал с 5 уровня превращал игрока в арсенальца навсегда.
+ *
+ * Теперь: player.faction — родной дом, меняется ТОЛЬКО через switchFaction
+ * (осознанно, с 30 уровня, через Мостик). player.visitingStation —
+ * временная отметка "сейчас гость на другой станции", даёт доступ к
+ * ОБЩИМ услугам (мастерская/ремонт/рынок/врата) на месте, но НЕ к бару/
+ * куратору — для куратора нужно реально вступить в фракцию.
+ * currentStation() — то, что должно определять контекст общих услуг
+ * (кнопки, картинки, скидки), не player.faction напрямую.
+ */
+function currentStation(player) {
+  return player.visitingStation || player.faction;
+}
+
 function freshPlayer(name, faction) {
   const bias = (FACTION_KIT[faction] || {}).statBias || {};
   const starterSkills = unlockedSkillsForPlayer(faction, 1).map((s) => s.id);
@@ -300,12 +319,18 @@ function sellUnprotectedInventory(player) {
 
 function stationButtons(deps, player) {
   const link = typeof deps.getProfileLink === 'function' ? deps.getProfileLink() : null;
-  const groups = (DISTRICT_GROUPS[player?.faction] || DISTRICT_GROUPS['Приют']).map((g) => {
+  const station = currentStation(player);
+  const visiting = !!player.visitingStation;
+  // В гостях недоступны куратор-завязанные разделы (Бар/Контракты — там
+  // живёт куратор и его доска заданий) — только общие услуги станции.
+  const rawGroups = DISTRICT_GROUPS[station] || DISTRICT_GROUPS['Приют'];
+  const filteredGroups = visiting ? rawGroups.filter((g) => g.label !== 'Бар' && g.label !== 'Контракты') : rawGroups;
+  const groups = filteredGroups.map((g) => {
     if (g.label === 'Контракты') return { label: 'Контракты', color: 'positive' };
     if (g.label === 'Полёт') return { label: 'Полёт', color: 'negative' };
     return g.label;
   });
-  const flatTail = ['Сброс'];
+  const flatTail = visiting ? ['🏠 Домой', 'Сброс'] : ['Сброс'];
   return link
     ? [{ label: 'Открыть профиль', url: link }, ...groups, ...flatTail]
     : [...groups, 'Профиль', ...flatTail];
@@ -313,11 +338,14 @@ function stationButtons(deps, player) {
 
 function hubMessage(player) {
   const next = xpToNext(player.level || 1);
-  const curator = CURATORS[player.faction] || 'куратор станции';
-  const atmosphere = getDistrictAtmosphere(player.faction);
+  const visiting = player.visitingStation;
+  const headerLine = visiting
+    ? `🛰️ СТАНЦИЯ «${visiting}» (ты здесь гость — доступны общие услуги, не куратор)`
+    : `🛰️ СТАНЦИЯ «${player.faction}»\n${CURATORS[player.faction] || 'куратор станции'} на связи.`;
+  const atmosphere = getDistrictAtmosphere(currentStation(player));
   const atmosphereLine = atmosphere ? `\n\n${atmosphere.time}` : '';
   const stormLine = `\n\n${stormStatusText()}`;
-  return `🛰️ СТАНЦИЯ «${player.faction}»\n${curator} на связи.${atmosphereLine}${stormLine}\n\n${player.name} · Ур. ${player.level || 1} (${player.xp || 0}/${next} XP)\n❤️ ${player.hp}/${player.hpMax}   💳 ${player.credits || 0}\n📍 ${ZONE_LABEL[player.zone] || 'Патрулируемый сектор'}${player.radiation ? `\n☢️ Облучение: ${player.radiation}%` : ''}${player.statPoints ? `\n✨ Нераспределённых очков: ${player.statPoints}` : ''}`;
+  return `${headerLine}${atmosphereLine}${stormLine}\n\n${player.name} · Ур. ${player.level || 1} (${player.xp || 0}/${next} XP)\n❤️ ${player.hp}/${player.hpMax}   💳 ${player.credits || 0}\n📍 ${ZONE_LABEL[player.zone] || 'Патрулируемый сектор'}${player.radiation ? `\n☢️ Облучение: ${player.radiation}%` : ''}${player.statPoints ? `\n✨ Нераспределённых очков: ${player.statPoints}` : ''}`;
 }
 
 function statusText(p) {
@@ -457,7 +485,7 @@ function districtGroupsFor(player) {
  * показать дальше (либо район, либо переспросить). */
 
 module.exports = {
-  FACTIONS, FACTION_KIT, CITY_UNLOCK_LEVEL, MIN_LEVEL_TO_JOIN_FACTION, canJoinFaction, switchFaction, MAX_EQUIPPED_SKILLS, RESET_COMMAND,
+  FACTIONS, FACTION_KIT, CITY_UNLOCK_LEVEL, MIN_LEVEL_TO_JOIN_FACTION, canJoinFaction, switchFaction, currentStation, MAX_EQUIPPED_SKILLS, RESET_COMMAND,
   ZONE_BUTTONS, ZONE_BY_LABEL, ZONE_LABEL, MIN_LEVEL_FOR_ZONE, CURATORS,
   ZONE_TRAVEL_PHRASES, STATION_TRAVEL_PHRASES, DISTRICT_GROUPS,
   trainerDrone, freshPlayer, equippedSkillIds, skillButtons, skillIdByName, skillCooldownNote,
