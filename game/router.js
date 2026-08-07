@@ -21,6 +21,7 @@ const { handleStart } = require('./scenes/start.js');
 const { handleHub } = require('./scenes/hub.js');
 const { handleCombat } = require('./scenes/combat.js');
 const { handleExploration } = require('./scenes/exploration.js');
+const { handleGuild } = require('./scenes/guild.js');
 const { handleBridge } = require('./scenes/locations/bridge.js');
 const { handleRepair } = require('./scenes/locations/repair.js');
 const { handleDecon } = require('./scenes/locations/decon.js');
@@ -105,6 +106,12 @@ const SCENE_HANDLERS = {
   [SCENES.ECHO_PLAYBACK_CHOICE]: handleExploration,
   [SCENES.REACTION_HAZARD_CHOICE]: handleExploration,
   [SCENES.CORRUPTED_AI_CHOICE]: handleExploration,
+  [SCENES.GUILD_HUB]: handleGuild,
+  [SCENES.GUILD_CREATE_NAME]: handleGuild,
+  [SCENES.GUILD_JOIN_NAME]: handleGuild,
+  [SCENES.GUILD_DONATE_CREDITS]: handleGuild,
+  [SCENES.GUILD_DONATE_RESOURCE]: handleGuild,
+  [SCENES.GUILD_WITHDRAW_RESOURCE]: handleGuild,
   [SCENES.SHIP_PRE_COMBAT]: handleTravel,
   [SCENES.SHIP_COMBAT]: handleTravel,
   [SCENES.SHIP_TRADER]: handleTravel,
