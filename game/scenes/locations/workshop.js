@@ -20,7 +20,7 @@ const { applyDerivedStats } = require('../../../engine/derived-stats.js');
 const { ARTIFACT_POOL, findArtifact, equipArtifact, unequipArtifact } = require('../../../lib/artifacts.js');
 const { COMPANIONS, equipCompanion, unequipCompanion } = require('../../../engine/companions.js');
 const { SHIP_RECIPES, findShipRecipe, craftShipModule, equipShipModule, unequipShipModule, shipModuleSlotsFor } = require('../../../engine/ship-crafting.js');
-const { hubMessage, stationButtons } = require('../common.js');
+const { hubMessage, stationButtons, currentStation } = require('../common.js');
 const { imageForLocation } = require('../../location-images.js');
 const { SCENES } = require('../ids.js');
 
@@ -82,7 +82,7 @@ function workshopScreen(player, prefixText = '') {
     const isEq = equippedShipModules.includes(id);
     return `${isEq ? '✅' : '◻️'} ${r.name} (+${r.bonus} ${r.stat})`;
   });
-  const craftableShipModules = SHIP_RECIPES.filter((r) => r.faction === player.faction && !ownedShipModules.includes(r.id));
+  const craftableShipModules = SHIP_RECIPES.filter((r) => r.faction === currentStation(player) && !ownedShipModules.includes(r.id));
   const craftableShipLines = craftableShipModules.map((r) => `🔧 ${r.name}: ${r.cost.map((c) => `${c.resource} T${c.tier} ×${c.qty}`).join(' + ')}`);
 
   const sections = [];
@@ -151,7 +151,7 @@ function workshopScreen(player, prefixText = '') {
   buttons.push('⬅️ Назад');
 
   return {
-    reply: { text: `${prefixText}🔧 МАСТЕРСКАЯ\n\n${sections.join('\n\n') || 'Пока пусто — скрафти первый предмет.'}`, buttons, imageKey: imageForLocation('repair', player.faction) },
+    reply: { text: `${prefixText}🔧 МАСТЕРСКАЯ\n\n${sections.join('\n\n') || 'Пока пусто — скрафти первый предмет.'}`, buttons, imageKey: imageForLocation('repair', currentStation(player)) },
     nextState: { scene: SCENES.WORKSHOP, player }
   };
 }
@@ -160,7 +160,7 @@ function handleWorkshop(state, input, rng, deps) {
   if (state.scene !== SCENES.WORKSHOP) return null;
 
   if (input === '⬅️ Назад') {
-    return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
+    return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', currentStation(state.player)) }, nextState: { scene: 'station', player: state.player } };
   }
 
   const findModuleByName = (name) => RECIPES.find((r) => r.name === name);
@@ -264,7 +264,7 @@ function handleWorkshop(state, input, rng, deps) {
     const recipe = SHIP_RECIPES.find((r) => r.name === craftShipMatch[1]);
     if (!recipe) return workshopScreen(state.player);
     const player = { ...state.player, ship: { ...state.player.ship } };
-    const result = craftShipModule(player, recipe.id);
+    const result = craftShipModule(player, recipe.id, currentStation(player));
     if (!result.success) return workshopScreen(state.player, `${result.reason}\n\n`);
     return workshopScreen(player, `Скрафчен модуль корабля: ${recipe.name}.\n\n`);
   }
