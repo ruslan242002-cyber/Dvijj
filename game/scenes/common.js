@@ -7,6 +7,9 @@
  */
 
 const { xpToNext } = require('../../engine/leveling.js');
+const { RECIPES } = require('../../crafting/crafting-engine.js');
+const { GEAR_RECIPES } = require('../../engine/gear-engine.js');
+const { SYSTEM_REPAIR_MATERIAL } = require('../../engine/ship-systems.js');
 const { explorationStatusCard } = require('../../lib/status-card.js');
 const { SKILLS } = require('../../engine/skills-data.js');
 const { getDailyContracts, getReputationTitle } = require('../../contracts/contracts-engine.js');
@@ -262,6 +265,39 @@ function sellInventory(player) {
   return total;
 }
 
+/** Раньше "Продать" сбрасывало ВЕСЬ трюм разом — не было способа
+ * избавиться от лишнего, не рискуя заодно продать то, что нужно для
+ * крафта. Теперь есть выбор: этот вариант защищает ресурс+тир, если он
+ * ещё нужен хоть для одного не скрафченного модуля/снаряжения, или для
+ * ремонта повреждённого узла корабля прямо сейчас. */
+function isResourceProtected(resource, tier, player) {
+  const owned = new Set(player.modules || []);
+  const neededForModule = RECIPES.some((r) => !owned.has(r.id) && r.cost.some((c) => c.resource === resource && c.tier === tier));
+
+  const ownedGear = new Set(player.gear || []);
+  const neededForGear = GEAR_RECIPES.some((r) => !ownedGear.has(r.id) && r.cost.some((c) => c.resource === resource && c.tier === tier));
+
+  const shipDamaged = player.ship?.systems && Object.values(player.ship.systems).some((v) => v < 100);
+  const neededForShipRepair = shipDamaged && Object.values(SYSTEM_REPAIR_MATERIAL).some((m) => m.resource === resource && m.tier === tier);
+
+  return neededForModule || neededForGear || neededForShipRepair;
+}
+
+function sellUnprotectedInventory(player) {
+  let total = 0;
+  const kept = [];
+  for (const item of player.inventory || []) {
+    if (isResourceProtected(item.resource, item.tier, player)) {
+      kept.push(item);
+    } else {
+      total += item.qty * item.tier * 8;
+    }
+  }
+  player.inventory = kept;
+  player.credits = (player.credits || 0) + total;
+  return { total, keptCount: kept.length };
+}
+
 function stationButtons(deps, player) {
   const link = typeof deps.getProfileLink === 'function' ? deps.getProfileLink() : null;
   const groups = (DISTRICT_GROUPS[player?.faction] || DISTRICT_GROUPS['Приют']).map((g) => {
@@ -354,6 +390,7 @@ const DISTRICT_GROUPS = {
     { label: 'Барак ожидания', buttons: ['Барак ожидания'] },
     { label: 'Дуэль', buttons: ['Дуэль'] },
     { label: 'Контракты', buttons: ['Контракты'] },
+    { label: 'Гильдия', buttons: ['Гильдия'] },
     { label: 'Полёт', buttons: ['Полёт'] },
     { label: 'Врата Тракта', buttons: ['Врата Тракта'] },
     { label: '⛏️ Жила', buttons: ['⛏️ Жила'] },
@@ -366,6 +403,7 @@ const DISTRICT_GROUPS = {
     { label: 'Рубеж', buttons: ['Архив теней'] },
     { label: 'Дуэль', buttons: ['Дуэль'] },
     { label: 'Контракты', buttons: ['Контракты'] },
+    { label: 'Гильдия', buttons: ['Гильдия'] },
     { label: 'Полёт', buttons: ['Полёт'] },
     { label: 'Врата Тракта', buttons: ['Врата Тракта'] },
     { label: '⛏️ Жила', buttons: ['⛏️ Жила'] },
@@ -377,6 +415,7 @@ const DISTRICT_GROUPS = {
     { label: 'Склад', buttons: ['Бар', 'Биржа', 'Жильё'] },
     { label: 'Дуэль', buttons: ['Дуэль'] },
     { label: 'Контракты', buttons: ['Контракты'] },
+    { label: 'Гильдия', buttons: ['Гильдия'] },
     { label: 'Полёт', buttons: ['Полёт'] },
     { label: 'Врата Тракта', buttons: ['Врата Тракта'] },
     { label: '⛏️ Жила', buttons: ['⛏️ Жила'] },
@@ -388,6 +427,7 @@ const DISTRICT_GROUPS = {
     { label: 'Модуль', buttons: ['Бар', 'Биржа', 'Жильё'] },
     { label: 'Дуэль', buttons: ['Дуэль'] },
     { label: 'Контракты', buttons: ['Контракты'] },
+    { label: 'Гильдия', buttons: ['Гильдия'] },
     { label: 'Полёт', buttons: ['Полёт'] },
     { label: 'Врата Тракта', buttons: ['Врата Тракта'] },
     { label: '⛏️ Жила', buttons: ['⛏️ Жила'] },
@@ -399,6 +439,7 @@ const DISTRICT_GROUPS = {
     { label: 'Слобода', buttons: ['Бар', 'Биржа', 'Жильё'] },
     { label: 'Дуэль', buttons: ['Дуэль'] },
     { label: 'Контракты', buttons: ['Контракты'] },
+    { label: 'Гильдия', buttons: ['Гильдия'] },
     { label: 'Полёт', buttons: ['Полёт'] },
     { label: 'Врата Тракта', buttons: ['Врата Тракта'] },
     { label: '⛏️ Жила', buttons: ['⛏️ Жила'] },
@@ -420,7 +461,7 @@ module.exports = {
   ZONE_BUTTONS, ZONE_BY_LABEL, ZONE_LABEL, MIN_LEVEL_FOR_ZONE, CURATORS,
   ZONE_TRAVEL_PHRASES, STATION_TRAVEL_PHRASES, DISTRICT_GROUPS,
   trainerDrone, freshPlayer, equippedSkillIds, skillButtons, skillIdByName, skillCooldownNote,
-  addToInventory, sellInventory, stationButtons, hubMessage, statusText,
+  addToInventory, sellInventory, sellUnprotectedInventory, isResourceProtected, stationButtons, hubMessage, statusText,
   startJourney, buildGuardianEnemy, journeyContinueButtons, safeReturnChoice,
   stormRewardMult, districtGroupsFor, stationArrivalCard, deconFee,
 };
