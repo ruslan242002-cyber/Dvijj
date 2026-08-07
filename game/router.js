@@ -75,6 +75,7 @@ const SCENE_HANDLERS = {
 
   [SCENES.LOC_CANTINA]: handleCantina,
   [SCENES.CONTRACTS]: handleCantina,
+  [SCENES.DICE_GAME]: handleCantina,
 
   [SCENES.LOC_GATES]: handleGates,
   [SCENES.LOC_GATES_TRAVEL]: handleGates,
