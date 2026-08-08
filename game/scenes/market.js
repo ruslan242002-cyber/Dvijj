@@ -9,6 +9,7 @@ const { SCENES } = require('./ids.js');
 const { routesFrom, findRoute, acceptRoute, completeRoute } = require('../../engine/trade-routes.js');
 const { addFactionReputation } = require('../../engine/reputation.js');
 const { checkAchievements } = require('../../lib/achievements.js');
+const { logEconomyEvent, EVENT_TYPES } = require('../../lib/economy-audit.js');
 
 function marketItemId(resource, tier) { return `${resource}__T${tier}`; }
 function marketItemName(resource, tier) { return `${resource} T${tier}`; }
@@ -44,6 +45,7 @@ async function buyFromMarket(deps, player, playerId, listing, qty = listing.qty)
   const nextPlayer = { ...player, credits: proxyBuyer.credits };
   const parsed = parseMarketItemId(listing.itemId);
   if (parsed) addToInventory(nextPlayer, parsed.resource, parsed.tier, purchase.qtyBought);
+  logEconomyEvent(deps, { type: EVENT_TYPES.MARKET_BUY, playerId, credits: -(listing.price * qty), resource: parsed?.resource, tier: parsed?.tier, qty: purchase.qtyBought }).catch(() => {});
   return nextPlayer;
 }
 
@@ -58,6 +60,7 @@ async function sellToMarket(deps, player, playerId, resource, tier, qty, price) 
     item.qty -= qty;
     player.inventory = item.qty > 0 ? inv : inv.filter((i) => i !== item);
   }
+  logEconomyEvent(deps, { type: EVENT_TYPES.MARKET_SELL, playerId, resource, tier, qty: -qty, note: `listed_at_${price}` }).catch(() => {});
   return listing;
 }
 
