@@ -41,7 +41,7 @@ async function totalMarketFeeDiscount(deps, player) {
 async function buyFromMarket(deps, player, playerId, listing, qty = listing.qty) {
   const feeDiscount = await totalMarketFeeDiscount(deps, player);
   const proxyBuyer = { id: playerId, credits: player.credits || 0, inventory: [] };
-  const { purchase } = await purchaseListing({ store: deps.marketStore }, proxyBuyer, listing.id, qty, feeDiscount);
+  const { purchase } = await purchaseListing({ store: deps.marketStore, redis: deps.redis }, proxyBuyer, listing.id, qty, feeDiscount);
   const nextPlayer = { ...player, credits: proxyBuyer.credits };
   const parsed = parseMarketItemId(listing.itemId);
   if (parsed) addToInventory(nextPlayer, parsed.resource, parsed.tier, purchase.qtyBought);
