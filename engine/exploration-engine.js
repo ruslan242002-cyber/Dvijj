@@ -2,6 +2,21 @@
 const { maxTierForLevel } = require('./tier-bands.js');
 const { pickResourceForTheme, pickEnemyNameForTheme } = require('../lib/named-locations.js');
 const { generatePack } = require('./pack-combat.js');
+const { BESTIARY, buildBestiaryFighter } = require('./bestiary.js');
+
+/** Именные монстры, эксклюзивные конкретному месту — из тех 10, что
+ * прислали с полными статами/способностями. Тема уникальна на локацию
+ * (см. lib/named-locations.js), поэтому можно смело использовать её как
+ * идентификатор места без отдельного поля location.id на игроке. */
+const THEME_EXCLUSIVE_MONSTER = {
+  smuggle: 'tenevoy_golovorez_rynka',   // Ярмарка Теней
+  anomaly: 'rezonant',                  // Разлом Кайлара
+  abyss: 'pustotnik',                   // Бездна Оррин
+  industrial: 'plazmoid_tkach',         // Кузня Забытых
+  border: 'shipastiy_svyaznik',         // Периметр Танвир
+  wreckage: 'bezmolvniy_zhnets',        // Кладбище флота
+};
+const EXCLUSIVE_MONSTER_CHANCE = 0.4; // высокий, но не гарантированный шанс — место узнаваемо, не однообразно
 
 const RESOURCES = ['Сплавы', 'Изотопы', 'Полимеры', 'Биомасса', 'Реголит'];
 const ENEMY_NAMES = {
@@ -145,6 +160,17 @@ function rollEvent(zone, rng = Math.random, playerLevel = null, weightsOverride 
       return { type, loot, text: `Внутри: ${loot.qty}x ${loot.resource} T${loot.tier}, ${loot.credits} кредитов.` };
     }
     case 'ambush': {
+      // Эксклюзивный именной монстр места — проверяется первым, до стаи
+      // и до обычного процедурного врага. Не каждый раз (место не должно
+      // ощущаться однообразно), но заметно чаще, чем случайно.
+      const exclusiveId = theme && THEME_EXCLUSIVE_MONSTER[theme];
+      if (exclusiveId && rng() < EXCLUSIVE_MONSTER_CHANCE) {
+        const entry = BESTIARY[exclusiveId];
+        if (entry) {
+          const enemy = buildBestiaryFighter(entry, playerLevel);
+          return { type, enemy, text: `${enemy.name} · HP: ${enemy.hp}` };
+        }
+      }
       // В патрулируемой зоне (слабые монстры) часть засад приходит стаей
       // 2-3 разом — не одиночный противник, реальное давление числом, а
       // не гарантированная последовательная зачистка.
