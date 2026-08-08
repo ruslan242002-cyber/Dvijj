@@ -25,6 +25,8 @@
  * просто получает полный профиль вместо одной строки.
  */
 
+const { DISTRICTS } = require('./districts-data.js');
+
 const NPC_ROSTER = {
   // ── Приют ──
   'iris_veyl': {
@@ -90,7 +92,7 @@ const NPC_ROSTER = {
 
   // ── Терминус ──
   'drogo_keyn': {
-    id: 'drogo_keyn', name: 'Дрого Кейн', shortName: 'Кейн', station: 'Терминус', role: 'куратор',
+    id: 'drogo_keyn', name: 'Дрого Кейн', shortName: 'Кейн', station: 'Вуаль', role: 'куратор',
     schedule: {
       morning: 'принимает доклад ночного патруля',
       day: 'лично проверяет рубеж',
@@ -214,7 +216,7 @@ const NPC_ROSTER = {
 
   // ── Вуаль ──
   'shyopot': {
-    id: 'shyopot', name: 'Шёпот', shortName: 'Шёпот', station: 'Вуаль', role: 'куратор',
+    id: 'shyopot', name: 'Шёпот', shortName: 'Шёпот', station: 'Терминус', role: 'куратор',
     schedule: {
       morning: 'слушает ночную сводку сигналов',
       day: 'редко покидает свой отсек',
@@ -289,7 +291,12 @@ function getNpc(npcId) {
 }
 
 function npcsForStation(station) {
-  return Object.values(NPC_ROSTER).filter((n) => n.station === station);
+  // Раньше читало устаревшее поле n.station у каждого NPC напрямую — оно
+  // разошлось с авторитетным списком в districts-data.js (Кес и Орен там
+  // помечены station:'Вуаль', хотя реально числятся в npcs-списке
+  // Терминуса, рядом с Шёпотом). Теперь источник истины один.
+  const ids = DISTRICTS[station]?.npcs || [];
+  return ids.map((id) => NPC_ROSTER[id]).filter(Boolean);
 }
 
 module.exports = { NPC_ROSTER, getNpcLine, getNpc, npcsForStation };
