@@ -22,6 +22,9 @@ const { repairDiscount, tankUpgradeDiscount, importMarkup, TANK_UPGRADE_CREDITS,
 const { SHIP_SYSTEMS, SYSTEM_NAMES, freshShipSystems, shipSystemsText, repairSystem, repairCostForSystem } = require('../../engine/ship-systems.js');
 const { findSkin, skinsAvailableFor, ownedSkins, purchaseSkin, equipSkin } = require('../../engine/ship-skins.js');
 const { guildHub } = require('./guild.js');
+const { npcPeopleScreen } = require('./quests/npc.js');
+const { bossHub } = require('./boss.js');
+const { raidLobbyScreen } = require('./raid.js');
 const {
   hubMessage, statusText, stationButtons, startJourney, districtGroupsFor, FACTIONS, CITY_UNLOCK_LEVEL, currentStation, stationArrivalCard, deconFee, addToInventory,
 } = require('./common.js');
@@ -124,6 +127,15 @@ async function resolveStationAction(input, state, deps, rng, playerId) {
   }
   if (input === 'Гильдия') {
     return guildHub(deps, state.player, playerId);
+  }
+  if (input === '👥 Люди станции') {
+    return npcPeopleScreen(state.player);
+  }
+  if (input === '⚔️ Мировой босс') {
+    return bossHub(deps, state.player, playerId);
+  }
+  if (input === '👥 Отряд против босса') {
+    return raidLobbyScreen(deps, state.player, playerId);
   }
   if (input === 'Биржа') {
     return marketHub(deps, state.player, playerId);
