@@ -70,6 +70,9 @@ function computeDerivedStats(stats) {
 
 const { aggregateModuleEffects } = require('../crafting/crafting-engine.js');
 const { aggregateGearEffects } = require('./gear-engine.js');
+const { aggregateArtifactEffects } = require('../lib/artifacts.js');
+const { activeClassEffects } = require('./mentor-classes.js');
+const { factionCombatBonus } = require('./faction-combat.js');
 
 /**
  * Применяет производные статы к игроку — пересчитывает accuracy/dodge/focus
@@ -95,13 +98,30 @@ function applyDerivedStats(player) {
 
   const moduleBonus = aggregateModuleEffects(player);
   const gearBonus = aggregateGearEffects(player);
+  const artifactBonus = aggregateArtifactEffects(player);
+  // Класс-наставник — теперь полноценный объект эффектов текущей ступени
+  // (engine/mentor-classes.js), не одно число. Firepower/shielding — тот
+  // же аддитивный принцип, что у модулей/снаряжения/артефактов. Остальные
+  // поля (crit/lifesteal/overcharge/reflect/...) не аддитивные статы —
+  // читаются напрямую из player.classEffects в combat-engine.js, где
+  // именно эти механики реально считаются.
+  const classEffects = activeClassEffects(player);
+  player.classEffects = classEffects; // кэш на этот пересчёт — combat-engine.js читает отсюда
+  // Боевой бонус родной фракции (engine/faction-combat.js) — отдельный
+  // ВСЕГДА включённый источник, складывается с классом-наставником, не
+  // конкурирует с ним (Вуаль + класс Инженера = защита из двух мест разом).
+  const factionBonus = factionCombatBonus(player.faction);
+  const mentorFirepowerBonus = (classEffects.firepowerBonus || 0) + (factionBonus.firepowerBonus || 0);
+  const mentorShieldingBonus = (classEffects.shieldingBonus || 0) + (factionBonus.shieldingBonus || 0);
+  player.critChanceBonus = (classEffects.critChanceBonus || 0) + (factionBonus.critChanceBonus || 0);
+  player.lifestealBonus = (classEffects.selfHealBonus || 0) + (factionBonus.selfHealBonus || 0);
   const combinedBonus = {
-    power: (moduleBonus.power || 0) + (gearBonus.power || 0),
-    mind: (moduleBonus.mind || 0) + (gearBonus.mind || 0),
-    reaction: (moduleBonus.reaction || 0) + (gearBonus.reaction || 0),
-    endurance: (moduleBonus.endurance || 0) + (gearBonus.endurance || 0),
-    firepower: (moduleBonus.firepower || 0) + (gearBonus.firepower || 0),
-    shielding: (moduleBonus.shielding || 0) + (gearBonus.shielding || 0),
+    power: (moduleBonus.power || 0) + (gearBonus.power || 0) + (artifactBonus.power || 0),
+    mind: (moduleBonus.mind || 0) + (gearBonus.mind || 0) + (artifactBonus.mind || 0),
+    reaction: (moduleBonus.reaction || 0) + (gearBonus.reaction || 0) + (artifactBonus.reaction || 0),
+    endurance: (moduleBonus.endurance || 0) + (gearBonus.endurance || 0) + (artifactBonus.endurance || 0),
+    firepower: (moduleBonus.firepower || 0) + (gearBonus.firepower || 0) + (artifactBonus.firepower || 0) + mentorFirepowerBonus,
+    shielding: (moduleBonus.shielding || 0) + (gearBonus.shielding || 0) + (artifactBonus.shielding || 0) + mentorShieldingBonus,
   };
   const effectiveStats = {
     power: (player.stats.power || 0) + combinedBonus.power,
@@ -118,7 +138,13 @@ function applyDerivedStats(player) {
   player.stats.firepower = player.baseFirepower + derived.firepowerBonus + combinedBonus.firepower;
   player.stats.shielding = player.baseShielding + derived.shieldingBonus + combinedBonus.shielding;
 
-  const newHpMax = player.baseHpMax + derived.hpBonus;
+  // +50 HP за каждый уровень сверх первого — раньше прокачка уровня
+  // ощутимо не меняла максимум HP вообще (только statPoints, которые
+  // ещё нужно было руками распределить в Выносливость, чтобы это
+  // сказалось на HP хоть как-то). Теперь level-up сам по себе всегда
+  // заметен, независимо от того, куда пошли очки характеристик.
+  const levelHpBonus = Math.max(0, (player.level || 1) - 1) * 50;
+  const newHpMax = player.baseHpMax + derived.hpBonus + levelHpBonus;
   const hpDelta = newHpMax - player.hpMax;
   player.hpMax = newHpMax;
   if (hpDelta > 0) player.hp = Math.min(player.hpMax, (player.hp || 0) + hpDelta);
