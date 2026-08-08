@@ -16,7 +16,7 @@ function housingHub(deps, player) {
   const buyButtons = Object.keys(HOUSING).filter((s) => !ownsHousing(player, s)).map((s) => `Купить дом: ${s}`);
   const itemButtons = Object.keys(HOUSING).filter((s) => ownsHousing(player, s)).map((s) => `Интерьер: ${s}`);
   return {
-    reply: { text: `🏠 ЖИЛЬЁ\n\n${lines.join('\n')}`, buttons: [...buyButtons, ...itemButtons, '⬅️ Назад'] },
+    reply: { text: `🏠 ЖИЛЬЁ\n\n${lines.join('\n')}`, buttons: [...buyButtons, ...itemButtons, '⬅️ Назад'], imageKey: imageForLocation('housing', player.faction) },
     nextState: { scene: 'housing_hub', player }
   };
 }
@@ -50,7 +50,7 @@ function handleHousing(state, input, rng, deps) {
         if (!available.length) {
           return { reply: { text: 'Всё уже куплено для этого дома.', buttons: ['⬅️ Назад'] }, nextState: { scene: 'housing_hub', player: state.player } };
         }
-        const buttons = available.map((i) => `Купить: ${i.name} (💳${i.price})`).concat('⬅️ Назад');
+        const buttons = available.map((i) => `💰 ${i.name} (💳${i.price})`).concat('⬅️ Назад');
         return { reply: { text: HOUSING[station].flavor, buttons }, nextState: { scene: 'housing_item_pick', player: state.player, station } };
       }
       return housingHub(deps, state.player);
@@ -58,7 +58,7 @@ function handleHousing(state, input, rng, deps) {
 
     case SCENES.HOUSING_ITEM_PICK: {
       if (input === '⬅️ Назад') return housingHub(deps, state.player);
-      const match = /^Купить: (.+?) \(/.exec(input);
+      const match = /^💰 (.+?) \(/.exec(input);
       const catalog = HOUSE_ITEMS[state.station] || [];
       const item = match ? catalog.find((i) => i.name === match[1]) : null;
       if (!item) return housingHub(deps, state.player);
