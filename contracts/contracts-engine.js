@@ -156,6 +156,7 @@ function claimContractRewards(player, contractId) {
   player.contracts.claimed.push(contractId);
   addFactionReputation(player, player.faction, c.reward.reputation);
   player.credits = (player.credits || 0) + c.reward.credits;
+  if (c.rarity === 'legendary') player.completedLegendaryContracts = (player.completedLegendaryContracts || 0) + 1;
   return { success: true, reward: c.reward, player };
 }
 
