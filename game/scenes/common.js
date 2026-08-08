@@ -64,12 +64,25 @@ const CITY_UNLOCK_LEVEL = {
 const { unlockedSkillsForPlayer } = require('../../engine/skills-data.js');
 const { freshShip } = require('../../engine/ship.js');
 
+/**
+ * КОМБАТ-БОНУСЫ ФРАКЦИЙ — теперь у каждой фракции есть свой всегда
+ * включённый пассивный боевой бонус, по тому же принципу ролей, что и
+ * классы-наставники (engine/mentor-classes.js), но слабее и без вложений
+ * — просто за то, что ты родом оттуда. Сами значения и подключение к
+ * бою — engine/faction-combat.js (не здесь, чтобы избежать обратной
+ * зависимости engine/ → game/scenes/, у common.js 16 своих требований).
+ * Вуаль — ЯВНО танк-фракция ("по мотивам Атраксиса, адаптировано под
+ * нашу игру"): её защита заметно больше боевого бонуса любой другой
+ * фракции. Классы-наставники дают ДОПОЛНИТЕЛЬНУЮ, более глубокую
+ * специализацию поверх этого, не обязательно совпадающую с родной
+ * фракцией.
+ */
 const FACTION_KIT = {
   'Приют':    { statBias: { mind: 6, endurance: 4 } },
   'Терминус': { statBias: { endurance: 8, power: 2 } },
   'Арсенал':  { statBias: { power: 6, firepowerBonus: 4 } },
   'Вуаль':    { statBias: { mind: 6, reaction: 4 } },
-  'Кузница':  { statBias: { endurance: 6, power: 6 } }
+  'Кузница':  { statBias: { endurance: 6, power: 6 } },
 };
 
 const MAX_EQUIPPED_SKILLS = 3;
@@ -419,6 +432,9 @@ const DISTRICT_GROUPS = {
     { label: 'Дуэль', buttons: ['Дуэль'] },
     { label: 'Контракты', buttons: ['Контракты'] },
     { label: 'Гильдия', buttons: ['Гильдия'] },
+    { label: '👥 Люди станции', buttons: ['👥 Люди станции'] },
+    { label: '⚔️ Мировой босс', buttons: ['⚔️ Мировой босс'] },
+    { label: '👥 Отряд против босса', buttons: ['👥 Отряд против босса'] },
     { label: 'Полёт', buttons: ['Полёт'] },
     { label: 'Врата Тракта', buttons: ['Врата Тракта'] },
     { label: '⛏️ Жила', buttons: ['⛏️ Жила'] },
@@ -432,6 +448,9 @@ const DISTRICT_GROUPS = {
     { label: 'Дуэль', buttons: ['Дуэль'] },
     { label: 'Контракты', buttons: ['Контракты'] },
     { label: 'Гильдия', buttons: ['Гильдия'] },
+    { label: '👥 Люди станции', buttons: ['👥 Люди станции'] },
+    { label: '⚔️ Мировой босс', buttons: ['⚔️ Мировой босс'] },
+    { label: '👥 Отряд против босса', buttons: ['👥 Отряд против босса'] },
     { label: 'Полёт', buttons: ['Полёт'] },
     { label: 'Врата Тракта', buttons: ['Врата Тракта'] },
     { label: '⛏️ Жила', buttons: ['⛏️ Жила'] },
@@ -444,6 +463,9 @@ const DISTRICT_GROUPS = {
     { label: 'Дуэль', buttons: ['Дуэль'] },
     { label: 'Контракты', buttons: ['Контракты'] },
     { label: 'Гильдия', buttons: ['Гильдия'] },
+    { label: '👥 Люди станции', buttons: ['👥 Люди станции'] },
+    { label: '⚔️ Мировой босс', buttons: ['⚔️ Мировой босс'] },
+    { label: '👥 Отряд против босса', buttons: ['👥 Отряд против босса'] },
     { label: 'Полёт', buttons: ['Полёт'] },
     { label: 'Врата Тракта', buttons: ['Врата Тракта'] },
     { label: '⛏️ Жила', buttons: ['⛏️ Жила'] },
@@ -456,6 +478,9 @@ const DISTRICT_GROUPS = {
     { label: 'Дуэль', buttons: ['Дуэль'] },
     { label: 'Контракты', buttons: ['Контракты'] },
     { label: 'Гильдия', buttons: ['Гильдия'] },
+    { label: '👥 Люди станции', buttons: ['👥 Люди станции'] },
+    { label: '⚔️ Мировой босс', buttons: ['⚔️ Мировой босс'] },
+    { label: '👥 Отряд против босса', buttons: ['👥 Отряд против босса'] },
     { label: 'Полёт', buttons: ['Полёт'] },
     { label: 'Врата Тракта', buttons: ['Врата Тракта'] },
     { label: '⛏️ Жила', buttons: ['⛏️ Жила'] },
@@ -468,6 +493,9 @@ const DISTRICT_GROUPS = {
     { label: 'Дуэль', buttons: ['Дуэль'] },
     { label: 'Контракты', buttons: ['Контракты'] },
     { label: 'Гильдия', buttons: ['Гильдия'] },
+    { label: '👥 Люди станции', buttons: ['👥 Люди станции'] },
+    { label: '⚔️ Мировой босс', buttons: ['⚔️ Мировой босс'] },
+    { label: '👥 Отряд против босса', buttons: ['👥 Отряд против босса'] },
     { label: 'Полёт', buttons: ['Полёт'] },
     { label: 'Врата Тракта', buttons: ['Врата Тракта'] },
     { label: '⛏️ Жила', buttons: ['⛏️ Жила'] },
