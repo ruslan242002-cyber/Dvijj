@@ -7,20 +7,33 @@ const { hubMessage, stationButtons, skillButtons, skillIdByName, skillCooldownNo
 const { startCooldown, tickCooldowns } = require('../../engine/cooldowns.js');
 const { checkAchievements } = require('../../lib/achievements.js');
 const { grantXp } = require('../../engine/leveling.js');
+const { activeGuildBonuses } = require('../../guilds/guild-levels.js');
+const { logWorldEvent } = require('../../lib/world-feed.js');
 const { SCENES } = require('./ids.js');
 
 const BOSS_SLOT = 'default';
-const ACTIVE_BOSS_ID = 'test_colossus'; // единственный существующий на сейчас — сменится/расширится, когда пришлёте реальных боссов
+const ACTIVE_BOSS_ID = 'test_colossus'; // единственный существующий на сейчас — сменится/расширится с реальными боссами
 
 function hpBar(current, max, width = 20) {
   const filled = Math.round((current / max) * width);
-  return `[${'■'.repeat(Math.max(0, filled))}${'□'.repeat(Math.max(0, width - filled))}] ${Math.round((current / max) * 100)}%`;
+  return `[${'■'.repeat(Math.max(0, filled))}${'□'.repeat(Math.max(0, width - filled))}] ${Math.max(0, current)}/${max}`;
+}
+
+/** Гильдейский бонус к урону по мировому боссу (3-й уровень гильд-
+ *  апгрейда) — читается здесь явно и передаётся в resolvePlayerVsBoss,
+ *  сам движок босса не знает о гильдиях (тот же принцип, что feeDiscount
+ *  в market-engine.js). Деградирует тихо, если гильдии/deps.guildStore
+ *  нет — 0% бонуса, бой всё равно работает. */
+async function guildDamageBonusFor(deps, player) {
+  if (!player.guildId || !deps.guildStore) return 0;
+  const guildLevel = await deps.guildStore.getGuildUpgradeLevel(player.guildId);
+  return activeGuildBonuses(guildLevel).worldBossDamagePct;
 }
 
 async function bossHub(deps, player, playerId, prefixText = '') {
   if (!deps.bossStore) {
     return {
-      reply: { text: `${prefixText}⚔️ МИРОВОЙ БОСС\n\nСистема групповых боссов пока не подключена к общему хранилищу — загляни позже.`, buttons: stationButtons(deps, player) },
+      reply: { text: `${prefixText}👹 МИРОВОЙ БОСС\n\nСистема групповых боссов пока не подключена.`, buttons: ['⬅️ Назад'] },
       nextState: { scene: 'station', player }
     };
   }
@@ -35,7 +48,7 @@ async function bossHub(deps, player, playerId, prefixText = '') {
       const boss = findBoss(ACTIVE_BOSS_ID);
       const hoursLeft = Math.max(0, Math.round(boss.respawnMinHours - (Date.now() - lastDefeated) / 3600000));
       return {
-        reply: { text: `${prefixText}⚔️ МИРОВОЙ БОСС\n\nСейчас никто не потревожил Периферию. ${boss.name} появится не раньше, чем через ~${hoursLeft} ч. — точное время держится в секрете, чтобы не превращать охоту в расписание.`, buttons: ['⬅️ Назад'] },
+        reply: { text: `${prefixText}👹 МИРОВОЙ БОСС\n\nСейчас никто не потревожил Периферию. Ожидаемое появление — не раньше чем через ~${hoursLeft} ч.`, buttons: ['⬅️ Назад'] },
         nextState: { scene: 'station', player }
       };
     }
@@ -44,7 +57,7 @@ async function bossHub(deps, player, playerId, prefixText = '') {
   const boss = findBoss(instance.bossId);
   if (instance.defeated) {
     return {
-      reply: { text: `${prefixText}⚔️ ${boss.name} уже повержен — награды разошлись участникам. Ждите следующего появления.`, buttons: ['⬅️ Назад'] },
+      reply: { text: `${prefixText}💀 ${boss.name} уже повержен — награды разошлись участникам. Загляни позже, когда появится новый.`, buttons: ['⬅️ Назад'] },
       nextState: { scene: 'station', player }
     };
   }
@@ -54,9 +67,9 @@ async function bossHub(deps, player, playerId, prefixText = '') {
     .map((p) => `${p.name}: ${p.damageDealt} урона`);
   const uniqueCount = Object.keys(instance.participants).length;
   const floorNote = uniqueCount < boss.minParticipants
-    ? `\n\n⚠️ Нужно минимум ${boss.minParticipants} разных участников, чтобы добить босса (сейчас ${uniqueCount}) — ниже 15% HP в одиночку не опустится.`
+    ? `\n\n⚠️ Нужно минимум ${boss.minParticipants} разных участников, чтобы добить босса (сейчас ${uniqueCount}).`
     : '';
-  const text = `${prefixText}⚔️ ${boss.name}\n${boss.lore}\n\n❤️ ${hpBar(instance.hp, instance.hpMax)} (${instance.hp}/${instance.hpMax})\n\n👥 Участники:\n${participantLines.length ? participantLines.join('\n') : 'пока никого — будь первым'}${floorNote}`;
+  const text = `${prefixText}👹 ${boss.name}\n${boss.lore}\n\n${hpBar(instance.hp, instance.hpMax)}${floorNote}\n\n${participantLines.length ? 'Участники:\n' + participantLines.join('\n') : 'Пока никто не атаковал.'}`;
   return {
     reply: { text, buttons: ['⚔️ Атаковать', '⬅️ Назад'] },
     nextState: { scene: SCENES.BOSS_HUB, player }
@@ -71,27 +84,28 @@ async function handleBoss(state, input, rng, deps, playerId) {
     if (input === '⚔️ Атаковать') {
       const instance = await deps.bossStore.getActiveBoss(BOSS_SLOT);
       if (!instance || instance.defeated) return bossHub(deps, state.player, playerId, 'Босс уже недоступен.\n\n');
-      const buttons = ['🗡️ Обычная атака', ...skillButtons(state.player, state.bossCooldowns || {})];
+      const buttons = ['⚔️ Обычная атака', ...skillButtons(state.player, state.bossCooldowns || {})];
       return { reply: { text: 'Выбери действие:', buttons }, nextState: { scene: SCENES.BOSS_COMBAT, player: state.player, bossCooldowns: state.bossCooldowns || {} } };
     }
     return bossHub(deps, state.player, playerId);
   }
 
   if (state.scene === SCENES.BOSS_COMBAT) {
-    const skillId = input === '🗡️ Обычная атака' ? null : skillIdByName(input);
+    const skillId = input === '⚔️ Обычная атака' ? null : skillIdByName(input);
     const skill = skillId ? SKILLS[skillId] : null;
-    if (input !== '🗡️ Обычная атака' && !skill) {
-      const buttons = ['🗡️ Обычная атака', ...skillButtons(state.player, state.bossCooldowns || {})];
+    if (input !== '⚔️ Обычная атака' && !skill) {
+      const buttons = ['⚔️ Обычная атака', ...skillButtons(state.player, state.bossCooldowns || {})];
       return { reply: { text: 'Выбери действие кнопкой ниже.', buttons }, nextState: state };
     }
 
     const instance = await deps.bossStore.getActiveBoss(BOSS_SLOT);
     if (!instance || instance.defeated) return bossHub(deps, state.player, playerId, 'Босс уже недоступен.\n\n');
 
-    const result = resolvePlayerVsBoss(instance, state.player, playerId, skill, rng);
+    const guildBonusPct = await guildDamageBonusFor(deps, state.player);
+    const result = resolvePlayerVsBoss(instance, state.player, playerId, skill, rng, guildBonusPct);
     if (result.error) return bossHub(deps, state.player, playerId);
 
-    const cooldownsAfterUse = skillId ? startCooldown(state.bossCooldowns || {}, skillId, skill, state.player.cooldownReductionPct || 0) : (state.bossCooldowns || {});
+    const cooldownsAfterUse = skillId ? startCooldown(state.bossCooldowns || {}, skillId, skill) : (state.bossCooldowns || {});
     const tickedCooldowns = tickCooldowns(cooldownsAfterUse);
     let player = result.player;
 
@@ -115,8 +129,15 @@ async function handleBoss(state, input, rng, deps, playerId) {
       const myReward = rewards[playerId];
       const newAchievements = checkAchievements(player);
       const achNote = newAchievements.length ? `\n\n${newAchievements.map((a) => `🏆 Достижение: «${a.title}»`).join('\n')}` : '';
+
+      // Лента мира — победа над мировым боссом видна всем, не только
+      // участникам боя (см. lib/world-feed.js). Не блокирует ответ
+      // игроку (fire-and-forget), не падает, если Redis недоступен.
+      const boss = findBoss(instance.bossId);
+      logWorldEvent(deps, { type: 'world_boss_defeated', text: `Отряд из ${Object.keys(instance.participants).length} игроков повергает ${boss.name}!` }).catch(() => {});
+
       return {
-        reply: { text: `💥 ${result.log.join(' ')}\n\n🏆 БОСС ПОВЕРЖЕН!\nТвоя доля (по вкладу ${myReward.damageDealt} урона): 💳+${myReward.credits}, ✨+${myReward.xp} XP.\nНаграда разошлась всем ${Object.keys(rewards).length} участникам.${achNote}`, buttons: ['⬅️ Назад'] },
+        reply: { text: `⚔️ ${result.log.join(' ')}\n\n🎉 БОСС ПОВЕРЖЕН!\nТвоя доля (по вкладу в урон): 💳+${myReward ? myReward.credits : 0}, опыт +${myReward ? myReward.xp : 0}.${achNote}`, buttons: stationButtons(deps, player) },
         nextState: { scene: 'station', player }
       };
     }
@@ -126,16 +147,16 @@ async function handleBoss(state, input, rng, deps, playerId) {
     if (result.playerDefeated) {
       const defeatedPlayer = { ...player, hp: Math.round(player.hpMax * 0.3) };
       return {
-        reply: { text: `💥 ${result.log.join(' ')}\n\n💀 Ты не выдержал удара босса. Эвакуация — можешь вернуться и бить снова, общий пул урона никуда не делся.`, buttons: stationButtons(deps, defeatedPlayer) },
+        reply: { text: `⚔️ ${result.log.join(' ')}\n\n💀 Ты не выдержал удара босса. Эвакуация на станцию, часть HP восстановлена.`, buttons: stationButtons(deps, defeatedPlayer) },
         nextState: { scene: 'station', player: defeatedPlayer }
       };
     }
 
-    const buttons = ['🗡️ Обычная атака', ...skillButtons(player, tickedCooldowns)];
+    const buttons = ['⚔️ Обычная атака', ...skillButtons(player, tickedCooldowns)];
     const cdNote = skillCooldownNote(player, tickedCooldowns);
     const cdLine = cdNote ? `\n\n${cdNote}` : '';
     return {
-      reply: { text: `💥 ${result.log.join(' ')} (нанёс ${result.dmgDealt})\n\n❤️ Общий пул: ${hpBar(instance.hp, instance.hpMax)} (${instance.hp}/${instance.hpMax})\n❤️ Ты: ${player.hp}/${player.hpMax}${cdLine}`, buttons },
+      reply: { text: `⚔️ ${result.log.join(' ')} (нанёс ${result.dmgDealt})\n\n${hpBar(instance.hp, findBoss(instance.bossId).hpMax)}${cdLine}`, buttons },
       nextState: { scene: SCENES.BOSS_COMBAT, player, bossCooldowns: tickedCooldowns }
     };
   }
