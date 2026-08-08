@@ -106,11 +106,13 @@ function submitAction(raid, playerId, skillId) {
  *  босса: раз в raidAoeCadence раундов — АУЕ по всем живым; иначе —
  *  обычная атака по случайной живой цели из переднего ряда.
  *
- *  guildDamageBonusPct (в процентных пунктах, по умолчанию 0) — бонус от
- *  3-го уровня гильд-апгрейда (guilds/guild-levels.js: worldBossDamagePct),
- *  передаётся явно вызывающим кодом (game/scenes/raid.js), применяется
- *  ТОЛЬКО к урону игроков по боссу, не трогает урон босса по игрокам. */
-function resolveRound(raid, skillLookup, rng = Math.random, guildDamageBonusPct = 0) {
+ *  guildDamageBonusByPlayerId (по умолчанию {}) — карта playerId ->
+ *  процент бонуса от 3-го уровня гильд-апгрейда (guild-levels.js:
+ *  worldBossDamagePct). Карта, а не одно число — 5 участников рейда
+ *  вполне могут быть из разных гильдий (или без гильдии вовсе), общий
+ *  бонус на всех был бы нечестным упрощением. Применяется ТОЛЬКО к
+ *  урону игроков по боссу, не трогает урон босса по игрокам. */
+function resolveRound(raid, skillLookup, rng = Math.random, guildDamageBonusByPlayerId = {}) {
   const boss = findBoss(raid.bossId);
   if (!boss || raid.finished) return raid;
   const roundLog = [];
@@ -121,7 +123,7 @@ function resolveRound(raid, skillLookup, rng = Math.random, guildDamageBonusPct 
     resistances: boss.resistances, periodic: [], bestiaryId: raid.bossId,
   });
 
-  for (const member of Object.values(raid.members)) {
+  for (const [memberId, member] of Object.entries(raid.members)) {
     if (member.hp <= 0) continue;
     if (member.actionThisRound === null) {
       roundLog.push(`${member.name} не успел(а) среагировать — раунд прошёл мимо.`);
@@ -135,8 +137,9 @@ function resolveRound(raid, skillLookup, rng = Math.random, guildDamageBonusPct 
 
     if (result.hit) {
       let actualDmg = result.dmg || 0;
-      if (guildDamageBonusPct > 0 && actualDmg > 0) {
-        actualDmg = Math.round(actualDmg * (1 + guildDamageBonusPct / 100));
+      const memberBonusPct = guildDamageBonusByPlayerId[memberId] || 0;
+      if (memberBonusPct > 0 && actualDmg > 0) {
+        actualDmg = Math.round(actualDmg * (1 + memberBonusPct / 100));
       }
       raid.bossHp = Math.max(0, raid.bossHp - actualDmg);
       member.damageDealt += actualDmg;
