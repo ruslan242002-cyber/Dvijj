@@ -2,9 +2,10 @@
 
 const { step } = require('../game/router.js');
 const { broadcastToAllPlayers } = require('../lib/broadcast.js');
+const { backupPlayerState } = require('../lib/player-backup.js');
 
 async function handleVkEvent(body, deps) {
-  const { store, vk, rng = Math.random, confirmationCode, secret, getProfileLink, resolveEnemyImage, marketStore, pvpStore, ambushStore, knownPlayersStore, veinStore } = deps;
+  const { store, vk, rng = Math.random, confirmationCode, secret, getProfileLink, resolveEnemyImage, marketStore, pvpStore, ambushStore, knownPlayersStore, veinStore, redis } = deps;
 
   if (body.type === 'confirmation') {
     return confirmationCode || '';
@@ -86,6 +87,15 @@ async function handleVkEvent(body, deps) {
     } finally {
       if (hasLock) await store.unlockPlayer(peerId).catch(() => {});
     }
+
+    // БЭКАП ПЕРЕД ПЕРЕЗАПИСЬЮ (lib/player-backup.js) — сохраняет prevState
+    // (то, что было ДО этого шага), не nextState. Не блокирует и не может
+    // сорвать реальное сохранение — тихо не падает, если deps.redis не
+    // подключён (см. пояснение в самом player-backup.js). Именно баги
+    // вроде перепутанных lib/housing.js ↔ game/scenes/housing.js — тот
+    // случай, где такой откат на один шаг назад спас бы конкретного
+    // игрока, если бы баг проявился уже после деплоя на реальных данных.
+    if (redis) backupPlayerState({ redis }, peerId, prevState).catch(() => {});
 
     await store.set(peerId, nextState);
 
