@@ -3,8 +3,11 @@
 const { createListing, cancelListing, purchaseListing, listActiveListings, MarketError } = require('../../market/market-engine.js');
 const { getMarketFeeDiscount } = require('../../lib/housing.js');
 const { imageForLocation } = require('../location-images.js');
-const { hubMessage, stationButtons, addToInventory } = require('./common.js');
+const { hubMessage, stationButtons, addToInventory, currentStation } = require('./common.js');
 const { SCENES } = require('./ids.js');
+const { routesFrom, findRoute, acceptRoute, completeRoute } = require('../../engine/trade-routes.js');
+const { addFactionReputation } = require('../../engine/reputation.js');
+const { checkAchievements } = require('../../lib/achievements.js');
 
 function marketItemId(resource, tier) { return `${resource}__T${tier}`; }
 function marketItemName(resource, tier) { return `${resource} T${tier}`; }
@@ -68,7 +71,7 @@ async function myListingsScreen(deps, player, playerId) {
 
 async function marketHub(deps, player, playerId) {
   if (!deps.marketStore || !playerId) {
-    return { reply: { text: '📈 Биржа сейчас недоступна.', buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
+    return { reply: { text: '📈 Биржа сейчас недоступна.', buttons: ['🚚 Маршруты', ...stationButtons(deps, player)] }, nextState: { scene: 'market_hub', player, allListings: [] } };
   }
   const listings = await listActiveListings({ store: deps.marketStore }, { limit: 30 });
   const buyable = listings.filter((l) => l.sellerId !== playerId);
@@ -89,7 +92,7 @@ async function marketHub(deps, player, playerId) {
   const lines = items.length
     ? items.map((it) => `${it.itemName} — от 💳${it.bestPrice}/шт, доступно ×${it.totalQty}`)
     : ['Пока пусто.'];
-  const buttons = [...items.map((it) => `Купить: ${it.itemName}`), 'Выставить из трюма', 'Мои лоты', '⬅️ Назад'];
+  const buttons = [...items.map((it) => `Купить: ${it.itemName}`), 'Выставить из трюма', 'Мои лоты', '🚚 Маршруты', '⬅️ Назад'];
   return {
     reply: { text: `📈 БИРЖА\n\n${lines.join('\n')}`, buttons },
     nextState: { scene: 'market_hub', player, allListings: listings }
@@ -100,7 +103,10 @@ async function handleMarket(state, input, rng, deps, playerId) {
   switch (state.scene) {
     case SCENES.MARKET_HUB: {
       if (input === '⬅️ Назад') {
-        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
+        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', currentStation(state.player)) }, nextState: { scene: 'station', player: state.player } };
+      }
+      if (input === '🚚 Маршруты') {
+        return tradeRoutesScreen(state.player);
       }
       if (input === 'Выставить из трюма') {
         const inv = state.player.inventory || [];
@@ -212,9 +218,67 @@ async function handleMarket(state, input, rng, deps, playerId) {
       }
     }
 
+    case SCENES.TRADE_ROUTES: {
+      if (input === '⬅️ Назад') {
+        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', currentStation(state.player)) }, nextState: { scene: 'station', player: state.player } };
+      }
+      if (input === '✅ Сдать маршрут') {
+        const player = { ...state.player };
+        const result = completeRoute(player, currentStation(player));
+        if (!result.success) {
+          const reasonText = result.reason === 'WRONG_DESTINATION' ? 'ты ещё не долетел до места назначения.' : 'не получилось сдать маршрут.';
+          return tradeRoutesScreen(state.player, `Не вышло: ${reasonText}\n\n`);
+        }
+        const newAchievements = checkAchievements(player);
+        const achievementsNote = newAchievements.length ? `\n\n${newAchievements.map((a) => `🏆 Достижение: «${a.title}»`).join('\n')}` : '';
+        addFactionReputation(player, player.faction, result.reward.reputation);
+        return tradeRoutesScreen(player, `🚚 Маршрут сдан! 💳+${result.reward.credits}, ⭐+${result.reward.reputation}.${achievementsNote}\n\n`);
+      }
+      const takeMatch = /^Взять: → (.+)$/.exec(input);
+      if (takeMatch) {
+        const station = currentStation(state.player);
+        const route = routesFrom(station).find((r) => r.to === takeMatch[1]);
+        if (!route) return tradeRoutesScreen(state.player);
+        const player = { ...state.player, inventory: (state.player.inventory || []).map((i) => ({ ...i })) };
+        const result = acceptRoute(player, route.id, station);
+        if (!result.success) {
+          const reasonText = result.reason === 'NOT_ENOUGH_CARGO' ? `не хватает груза (нужно ${route.qty}× ${route.resource} T${route.tier}).` : 'не получилось взять маршрут.';
+          return tradeRoutesScreen(state.player, `Не вышло: ${reasonText}\n\n`);
+        }
+        return tradeRoutesScreen(player, `🚚 Маршрут принят — груз погружен. Лети в «${route.to}» и сдай его там.\n\n`);
+      }
+      return tradeRoutesScreen(state.player);
+    }
+
     default:
       return null;
   }
 }
 
-module.exports = { handleMarket, marketHub, MarketError };
+/** Экран торговых маршрутов — либо статус активного маршрута (со
+ * сдачей, если игрок уже на месте назначения), либо список доступных
+ * маршрутов ОТСЮДА (currentStation, не обязательно родная фракция —
+ * можно набрать груз и в гостях, если стоишь на нужной станции). */
+function tradeRoutesScreen(player, prefixText = '') {
+  const station = currentStation(player);
+  if (player.activeRoute) {
+    const route = findRoute(player.activeRoute.routeId);
+    if (!route) {
+      const cleanPlayer = { ...player, activeRoute: null };
+      return tradeRoutesScreen(cleanPlayer, 'Маршрут больше не существует — сброшен.\n\n');
+    }
+    const canComplete = station === route.to;
+    const text = `🚚 АКТИВНЫЙ МАРШРУТ\n\nВезёшь: ${route.qty}× ${route.resource} T${route.tier}\nИз «${route.from}» в «${route.to}»\nНаграда: 💳${route.reward.credits}, ⭐${route.reward.reputation}\n\n${canComplete ? '✅ Ты на месте — можно сдать!' : `Нужно долететь до «${route.to}» (Врата Тракта).`}`;
+    const buttons = canComplete ? ['✅ Сдать маршрут', '⬅️ Назад'] : ['⬅️ Назад'];
+    return { reply: { text: `${prefixText}${text}`, buttons }, nextState: { scene: SCENES.TRADE_ROUTES, player } };
+  }
+  const available = routesFrom(station);
+  if (!available.length) {
+    return { reply: { text: `${prefixText}🚚 МАРШРУТЫ\n\nОтсюда сейчас нет доступных маршрутов.`, buttons: ['⬅️ Назад'] }, nextState: { scene: SCENES.TRADE_ROUTES, player } };
+  }
+  const lines = available.map((r) => `→ «${r.to}»: ${r.qty}× ${r.resource} T${r.tier} — награда 💳${r.reward.credits}, ⭐${r.reward.reputation}`);
+  const buttons = [...available.map((r) => `Взять: → ${r.to}`), '⬅️ Назад'];
+  return { reply: { text: `${prefixText}🚚 МАРШРУТЫ ИЗ «${station}»\n\n${lines.join('\n')}`, buttons }, nextState: { scene: SCENES.TRADE_ROUTES, player } };
+}
+
+module.exports = { handleMarket, marketHub, tradeRoutesScreen, MarketError };
