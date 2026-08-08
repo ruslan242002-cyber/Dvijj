@@ -179,7 +179,7 @@ async function submitTurn(deps, playerId, duelId, { skillId = null, stimId = nul
     if (skillId && !skill) throw new PvpError(PVP_ERRORS.UNKNOWN_SKILL);
     const stim = stimId ? STIMS[stimId] : null;
 
-    const result = resolveTurn({ attacker, defender, skill, stim, rng });
+    const result = resolveTurn({ attacker, defender, skill, stim, rng, pvpMode: true });
     duel.log.push(...result.log);
 
     if (result.finished) {
