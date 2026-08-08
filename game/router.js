@@ -29,6 +29,9 @@ const { handleCantina, contractsBoard } = require('./scenes/locations/cantina.js
 const { handleGates } = require('./scenes/locations/gates.js');
 const { handleWorkshop } = require('./scenes/locations/workshop.js');
 const { handleCuratorQuest } = require('./scenes/quests/curator.js');
+const { handleNpc } = require('./scenes/quests/npc.js');
+const { handleBoss } = require('./scenes/boss.js');
+const { handleRaid } = require('./scenes/raid.js');
 const { handleMarket } = require('./scenes/market.js');
 const { handlePvp } = require('./scenes/pvp.js');
 const { handleHousing } = require('./scenes/housing.js');
@@ -68,6 +71,7 @@ const SCENE_HANDLERS = {
   [SCENES.LORE_MYTHOS]: handleBridge,
   [SCENES.PASSIVE_MANAGEMENT]: handleBridge,
   [SCENES.FACTION_TRANSFER]: handleBridge,
+  [SCENES.MENTOR_CLASS]: handleBridge,
   [SCENES.QUEST_SHYOPOT]: handleBridge,
 
   [SCENES.LOC_REPAIR]: handleRepair,
@@ -81,12 +85,21 @@ const SCENE_HANDLERS = {
   [SCENES.LOC_GATES_TRAVEL]: handleGates,
 
   [SCENES.WORKSHOP]: handleWorkshop,
+  [SCENES.REFORGE_PICK]: handleWorkshop,
+  [SCENES.REFORGE_TARGET]: handleWorkshop,
   [SCENES.CURATOR_QUEST]: handleCuratorQuest,
+  [SCENES.NPC_PEOPLE]: handleNpc,
+  [SCENES.NPC_QUEST]: handleNpc,
+  [SCENES.BOSS_HUB]: handleBoss,
+  [SCENES.BOSS_COMBAT]: handleBoss,
+  [SCENES.RAID_LOBBY]: handleRaid,
+  [SCENES.RAID_BATTLE]: handleRaid,
 
   [SCENES.MARKET_HUB]: handleMarket,
   [SCENES.MARKET_SELL_PICK]: handleMarket,
   [SCENES.MARKET_SELL_PRICE]: handleMarket,
   [SCENES.MARKET_MY_LISTINGS]: handleMarket,
+  [SCENES.TRADE_ROUTES]: handleMarket,
   [SCENES.MARKET_ITEM_BOOK]: handleMarket,
   [SCENES.MARKET_BUY_QTY]: handleMarket,
 
