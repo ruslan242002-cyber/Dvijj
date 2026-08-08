@@ -61,11 +61,23 @@ const SHIP_SKILL_BY_FACTION = {
   'Кузница': 'forge_cannon',
 };
 
-function shipSkillButtons(equippedShipSkillIds = []) {
-  return equippedShipSkillIds.map((id) => SHIP_SKILLS[id]?.name).filter(Boolean);
+/** Раньше поле cd существовало у каждого умения корабля, но нигде не
+ * проверялось — можно было жать одно и то же умение каждый ход без
+ * ограничений. Теперь честная перезарядка через engine/cooldowns.js,
+ * тот же самый движок, что уже работает для умений персонажа. */
+function shipSkillButtons(equippedShipSkillIds = [], cooldowns = {}) {
+  return equippedShipSkillIds
+    .filter((id) => !(cooldowns[id] > 0))
+    .map((id) => SHIP_SKILLS[id]?.name)
+    .filter(Boolean);
+}
+function shipSkillCooldownNote(equippedShipSkillIds = [], cooldowns = {}) {
+  return equippedShipSkillIds
+    .filter((id) => cooldowns[id] > 0)
+    .map((id) => `⏳ ${SHIP_SKILLS[id]?.name}: ещё ${cooldowns[id]} х.`);
 }
 function shipSkillIdByName(name) {
   return Object.values(SHIP_SKILLS).find((s) => s.name === name)?.id || null;
 }
 
-module.exports = { SHIP_SKILLS, SHIP_SKILL_BY_FACTION, shipSkillButtons, shipSkillIdByName };
+module.exports = { SHIP_SKILLS, SHIP_SKILL_BY_FACTION, shipSkillButtons, shipSkillCooldownNote, shipSkillIdByName };
