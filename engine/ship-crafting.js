@@ -16,6 +16,14 @@
  * отображение бака, автозаправка), переписывать их все под "агрегируй
  * заново" было бы намного рискованнее, чем один раз честно прибавить/
  * отнять при (де)экипировке.
+ *
+ * ФРАКЦИОННАЯ ЗАВИСИМОСТЬ (добавлено) — ступень II каждого модуля теперь
+ * требует ещё и ЧУЖОЙ эксклюзивный ресурс (engine/faction-resources.js),
+ * поверх уже существующего faction-гейтинга по месту крафта. Раньше
+ * "крафтится только на станции X" уже требовало путешествия один раз;
+ * теперь топовая версия модуля дополнительно требует привезти материал
+ * с ДРУГОЙ станции на эту — station-gate и resource-gate работают вместе,
+ * не дублируют друг друга.
  */
 function res(resource, tier, qty) { return { resource, tier, qty }; }
 
@@ -25,10 +33,10 @@ const SHIP_RECIPES = [
   { id: 'ship_firepower_1', name: 'Модуль вооружения I', stat: 'firepower', bonus: 5, faction: 'Арсенал', cost: [res('Изотопы', 1, 6), res('Сплавы', 1, 4)] },
   { id: 'ship_fuel_1', name: 'Модуль топливных баков I', stat: 'fuelMax', bonus: 15, faction: 'Терминус', cost: [res('Полимеры', 1, 6), res('Реголит', 1, 4)] },
   { id: 'ship_hull_1', name: 'Модуль корпуса I', stat: 'hpMax', bonus: 40, faction: 'Приют', cost: [res('Биомасса', 1, 6), res('Сплавы', 1, 4)] },
-  { id: 'ship_armor_2', name: 'Модуль брони II', stat: 'armor', bonus: 8, faction: 'Вуаль', cost: [res('Сплавы', 3, 6), res('Реголит', 3, 4)] },
-  { id: 'ship_firepower_2', name: 'Модуль вооружения II', stat: 'firepower', bonus: 8, faction: 'Арсенал', cost: [res('Изотопы', 3, 6), res('Сплавы', 3, 4)] },
-  { id: 'ship_fuel_2', name: 'Модуль топливных баков II', stat: 'fuelMax', bonus: 25, faction: 'Терминус', cost: [res('Полимеры', 3, 6), res('Реголит', 3, 4)] },
-  { id: 'ship_hull_2', name: 'Модуль корпуса II', stat: 'hpMax', bonus: 70, faction: 'Приют', cost: [res('Биомасса', 3, 6), res('Сплавы', 3, 4)] },
+  { id: 'ship_armor_2', name: 'Модуль брони II', stat: 'armor', bonus: 8, faction: 'Вуаль', cost: [res('Сплавы', 3, 6), res('Реголит', 3, 4), res('Ядро жилы', 0, 3)] },
+  { id: 'ship_firepower_2', name: 'Модуль вооружения II', stat: 'firepower', bonus: 8, faction: 'Арсенал', cost: [res('Изотопы', 3, 6), res('Сплавы', 3, 4), res('Резонансный контур', 0, 3)] },
+  { id: 'ship_fuel_2', name: 'Модуль топливных баков II', stat: 'fuelMax', bonus: 25, faction: 'Терминус', cost: [res('Полимеры', 3, 6), res('Реголит', 3, 4), res('Био-катализатор', 0, 3)] },
+  { id: 'ship_hull_2', name: 'Модуль корпуса II', stat: 'hpMax', bonus: 70, faction: 'Приют', cost: [res('Биомасса', 3, 6), res('Сплавы', 3, 4), res('Отголосок Тракта', 0, 3)] },
 ];
 
 function findShipRecipe(recipeId) {
