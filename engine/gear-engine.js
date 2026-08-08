@@ -61,12 +61,12 @@ const WEAPON_RECIPES = [
     materials: [item('Железы пульсарида', 3)], cost: [res('Изотопы', 4, 8)] },
 
   { id: 'weapon_legendary_kinetic', slot: 'weapon', rarity: 'legendary', name: 'Клинок Пустоты', archetype: 'Кинетическое', stats: { firepower: 62 }, credits: 7000,
-    materials: [item('Тёмная энергия', 2)], cost: [res('Полимеры', 5, 6)] },
+    materials: [item('Тёмная энергия', 2)], cost: [res('Полимеры', 5, 6), res('Боевой сплав', 0, 4)] },
   { id: 'weapon_legendary_resonant', slot: 'weapon', rarity: 'legendary', name: 'Протокол-разрушитель', archetype: 'Резонансное', stats: { firepower: 42, mind: 28 }, credits: 7200,
-    materials: [item('Фрагмент протокола', 2)], cost: [res('Полимеры', 5, 6)] },
+    materials: [item('Фрагмент протокола', 2)], cost: [res('Полимеры', 5, 6), res('Резонансный контур', 0, 4)] },
 
   { id: 'weapon_mythic', slot: 'weapon', rarity: 'mythic', name: 'Нихрон-резонатор', archetype: 'Кинетическое', stats: { firepower: 100 }, credits: 18000,
-    materials: [item('Сплав «Нихрон»', 1)], cost: [res('Изотопы', 6, 10)] },
+    materials: [item('Сплав «Нихрон»', 1)], cost: [res('Изотопы', 6, 10), res('Ядро жилы', 0, 8), res('Резонансный контур', 0, 8)] },
 
   // ── Новые монстры (Ярмарка Теней/Разлом Кайлара/Кузня Забытых/Бездна
   // Оррин/Периметр Танвир/Кладбище флота) — заполняют архетип "Точное" и
@@ -78,7 +78,7 @@ const WEAPON_RECIPES = [
   { id: 'weapon_epic_precise', slot: 'weapon', rarity: 'epic', name: 'Плазменная игла', archetype: 'Точное', stats: { firepower: 30, reaction: 12 }, credits: 3250,
     materials: [item('Плазменная нить', 3)], cost: [res('Изотопы', 4, 8)] },
   { id: 'weapon_legendary_precise', slot: 'weapon', rarity: 'legendary', name: 'Тракт-игла', archetype: 'Точное', stats: { firepower: 50, reaction: 20 }, credits: 7100,
-    materials: [item('Чистый осколок Тракта', 2)], cost: [res('Полимеры', 5, 6)] },
+    materials: [item('Чистый осколок Тракта', 2)], cost: [res('Полимеры', 5, 6), res('Отголосок Тракта', 0, 4)] },
 ];
 
 const ARMOR_RECIPES = [
@@ -103,12 +103,12 @@ const ARMOR_RECIPES = [
     materials: [item('Нейронный узел', 3)], cost: [res('Реголит', 4, 8)] },
 
   { id: 'armor_legendary_heavy', slot: 'armor', rarity: 'legendary', name: 'Реликтовая броня Стража', archetype: 'Тяжёлая', stats: { shielding: 48 }, credits: 7000,
-    materials: [item('Реликтовый сплав', 2)], cost: [res('Сплавы', 5, 6)] },
+    materials: [item('Реликтовый сплав', 2)], cost: [res('Сплавы', 5, 6), res('Ядро жилы', 0, 4)] },
   { id: 'armor_legendary_adaptive', slot: 'armor', rarity: 'legendary', name: 'Икра-панцирь эхо-матки', archetype: 'Адаптивная', stats: { shielding: 32, endurance: 22 }, credits: 7200,
-    materials: [item('Эхо-икра', 2)], cost: [res('Сплавы', 5, 6)] },
+    materials: [item('Эхо-икра', 2)], cost: [res('Сплавы', 5, 6), res('Био-катализатор', 0, 4)] },
 
   { id: 'armor_mythic', slot: 'armor', rarity: 'mythic', name: 'Ядро-панцирь Жнеца', archetype: 'Тяжёлая', stats: { shielding: 78 }, credits: 18000,
-    materials: [item('Энергоядро', 1)], cost: [res('Реголит', 6, 10)] },
+    materials: [item('Энергоядро', 1)], cost: [res('Реголит', 6, 10), res('Отголосок Тракта', 0, 8), res('Био-катализатор', 0, 8)] },
 
   { id: 'armor_uncommon_adaptive', slot: 'armor', rarity: 'uncommon', name: 'Плащ теневого рынка', archetype: 'Адаптивная', stats: { shielding: 6, mind: 4 }, credits: 720,
     materials: [item('Обломки лёгкой брони', 5)], cost: [res('Полимеры', 2, 7)] },
@@ -117,7 +117,7 @@ const ARMOR_RECIPES = [
   { id: 'armor_epic_light', slot: 'armor', rarity: 'epic', name: 'Резонансная мембрана', archetype: 'Лёгкая', stats: { shielding: 22, reaction: 16 }, credits: 3250,
     materials: [item('Застывший резонанс', 3)], cost: [res('Биомасса', 4, 8)] },
   { id: 'armor_legendary_light', slot: 'armor', rarity: 'legendary', name: 'Пустотный плащ', archetype: 'Лёгкая', stats: { shielding: 36, reaction: 26 }, credits: 7100,
-    materials: [item('Фрагмент пустоты', 2)], cost: [res('Биомасса', 5, 6)] },
+    materials: [item('Фрагмент пустоты', 2)], cost: [res('Биомасса', 5, 6), res('Боевой сплав', 0, 4)] },
 ];
 
 const GEAR_RECIPES = [...WEAPON_RECIPES, ...ARMOR_RECIPES];
@@ -295,11 +295,6 @@ function statsAtLevel(recipe, level) {
 function aggregateGearEffects(player) {
   const bonuses = {};
   const equipped = player.equippedGear || {};
-  // Мастерство Кузнеца (ступень 3+) — не "запечённый" в момент крафта
-  // бонус (снаряжение в этой системе — просто id рецепта, без отдельного
-  // состояния экземпляра, как и уровень апгрейда — тоже читается per-
-  // player динамически, не хранится в самом предмете), а живой множитель,
-  // применяется здесь же, где уже читается upgrade level.
   const smithBonusPct = activeClassEffects(player).gearStatBonusPct || 0;
   for (const slot of Object.keys(equipped)) {
     const recipeId = equipped[slot];
