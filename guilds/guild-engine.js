@@ -1,6 +1,7 @@
 'use strict';
 
 const { GUILD_LIMITS, GUILD_ROLES, GUILD_ERRORS } = require('./guild-data.js');
+const { nextUpgradeCost, levelDef } = require('./guild-levels.js');
 
 /**
  * ДВИЖОК ГИЛЬДИЙ — архитектурно повторяет market-engine.js: любое действие,
@@ -27,9 +28,9 @@ function assertValidName(name) {
 }
 
 /** Создать гильдию. Списывает CREATE_COST_CREDITS с игрока-основателя
- * (обычная мутация player — деньги его). Уникальность имени и запись
- * гильдии — атомарно в сторе (store.createGuildAtomic), чтобы два игрока
- * не смогли одновременно застолбить одно и то же имя. */
+ *  (обычная мутация player — деньги его). Уникальность имени и запись
+ *  гильдии — атомарно в сторе (store.createGuildAtomic), чтобы два игрока
+ *  не смогли одновременно застолбить одно и то же имя. */
 async function createGuild(deps, player, name) {
   const { store } = deps;
   if (player.guildId) throw new GuildError(GUILD_ERRORS.ALREADY_IN_GUILD);
@@ -55,8 +56,8 @@ async function createGuild(deps, player, name) {
 }
 
 /** Вступить в существующую гильдию. Атомарно добавляет игрока в set
- * участников (проверка лимита MAX_MEMBERS происходит в самом сторе,
- * внутри той же атомарной операции — иначе гонка "последнее место"). */
+ *  участников (проверка лимита MAX_MEMBERS происходит в самом сторе,
+ *  внутри той же атомарной операции — иначе гонка "последнее место"). */
 async function joinGuild(deps, player, guildId) {
   const { store } = deps;
   if (player.guildId) throw new GuildError(GUILD_ERRORS.ALREADY_IN_GUILD);
@@ -72,8 +73,8 @@ async function joinGuild(deps, player, guildId) {
 }
 
 /** Выйти из гильдии. Лидер не может просто выйти, если в гильдии есть
- * кто-то ещё — сначала должен передать лидерство (transferLeadership),
- * иначе гильдия осиротеет без возможности что-либо в ней поменять. */
+ *  кто-то ещё — сначала должен передать лидерство (transferLeadership),
+ *  иначе гильдия осиротеет без возможности что-либо в ней поменять. */
 async function leaveGuild(deps, player) {
   const { store } = deps;
   if (!player.guildId) throw new GuildError(GUILD_ERRORS.NOT_IN_GUILD);
@@ -89,7 +90,7 @@ async function leaveGuild(deps, player) {
 }
 
 /** Передать лидерство другому участнику (тоже в гильдии). Только текущий
- * лидер может это сделать. */
+ *  лидер может это сделать. */
 async function transferLeadership(deps, player, targetPlayerId) {
   const { store } = deps;
   if (!player.guildId) throw new GuildError(GUILD_ERRORS.NOT_IN_GUILD);
@@ -101,7 +102,7 @@ async function transferLeadership(deps, player, targetPlayerId) {
 }
 
 /** Исключить участника — офицер или лидер могут кикать обычных
- * участников; кикнуть себя нельзя (для этого leaveGuild). */
+ *  участников; кикнуть себя нельзя (для этого leaveGuild). */
 async function kickMember(deps, player, targetPlayerId) {
   const { store } = deps;
   if (targetPlayerId === player.id) throw new GuildError(GUILD_ERRORS.CANNOT_KICK_SELF);
@@ -112,8 +113,8 @@ async function kickMember(deps, player, targetPlayerId) {
 }
 
 /** Пожертвовать кредиты в банк гильдии. Списание у игрока — обычной
- * мутацией (его деньги), зачисление в банк — атомарно в сторе (банк не
- * принадлежит никому в памяти прямо сейчас). */
+ *  мутацией (его деньги), зачисление в банк — атомарно в сторе (банк не
+ *  принадлежит никому в памяти прямо сейчас). */
 async function donateCredits(deps, player, amount) {
   const { store } = deps;
   if (!player.guildId) throw new GuildError(GUILD_ERRORS.NOT_IN_GUILD);
@@ -124,10 +125,10 @@ async function donateCredits(deps, player, amount) {
 }
 
 /** Пожертвовать РЕСУРСЫ в банк гильдии — гильдия существует в первую
- * очередь ради совместного крафта, для которого нужны именно ресурсы, не
- * только кредиты. Снятие из инвентаря — обычная мутация игрока (это его
- * стак), запись в общий банк — атомарная операция в сторе (тот же
- * паттерн, что кредиты). */
+ *  очередь ради совместного крафта, для которого нужны именно ресурсы, не
+ *  только кредиты. Снятие из инвентаря — обычная мутация игрока (это его
+ *  стак), запись в общий банк — атомарная операция в сторе (тот же
+ *  паттерн, что кредиты). */
 async function donateResource(deps, player, resource, tier, qty) {
   const { store } = deps;
   if (!player.guildId) throw new GuildError(GUILD_ERRORS.NOT_IN_GUILD);
@@ -140,7 +141,7 @@ async function donateResource(deps, player, resource, tier, qty) {
 }
 
 /** Забрать ресурсы из банка гильдии — только офицер/лидер (простая
- * защита от того, что любой рядовой участник вынесет весь банк). */
+ *  защита от того, что любой рядовой участник вынесет весь банк). */
 async function withdrawResource(deps, player, resource, tier, qty) {
   const { store } = deps;
   if (!player.guildId) throw new GuildError(GUILD_ERRORS.NOT_IN_GUILD);
@@ -155,7 +156,39 @@ async function withdrawResource(deps, player, resource, tier, qty) {
   return { player };
 }
 
+/** Текущий уровень гильд-апгрейда (0, если ещё не куплен ни один). */
+async function getGuildUpgradeLevel(deps, guildId) {
+  const { store } = deps;
+  return store.getGuildUpgradeLevel(guildId);
+}
+
+/**
+ * Купить следующий уровень гильд-апгрейда (guild-levels.js) за ресурсы
+ * банка. Только офицер/лидер — тот же принцип доступа, что и у
+ * withdrawResource. Списание ресурсов + повышение уровня — одна
+ * атомарная Lua-операция в сторе (store.purchaseGuildUpgradeAtomic),
+ * иначе два офицера могли бы одновременно купить один и тот же уровень
+ * дважды или увести банк в минус.
+ */
+async function purchaseGuildUpgrade(deps, player) {
+  const { store } = deps;
+  if (!player.guildId) throw new GuildError(GUILD_ERRORS.NOT_IN_GUILD);
+  const role = await store.getGuildMemberRole(player.guildId, player.id);
+  if (role !== GUILD_ROLES.LEADER && role !== GUILD_ROLES.OFFICER) throw new GuildError(GUILD_ERRORS.NOT_OFFICER_OR_LEADER);
+
+  const currentLevel = await store.getGuildUpgradeLevel(player.guildId);
+  const cost = nextUpgradeCost(currentLevel);
+  if (!cost) throw new GuildError('MAX_LEVEL_REACHED');
+
+  const result = await store.purchaseGuildUpgradeAtomic(player.guildId, cost, currentLevel, currentLevel + 1);
+  if (!result.success) {
+    throw new GuildError(result.reason === 'LEVEL_MISMATCH' ? 'LEVEL_MISMATCH' : 'INSUFFICIENT_RESOURCES');
+  }
+  return { newLevel: currentLevel + 1, levelDef: levelDef(currentLevel + 1) };
+}
+
 module.exports = {
   GuildError, createGuild, joinGuild, leaveGuild, transferLeadership, kickMember,
   donateCredits, donateResource, withdrawResource,
+  getGuildUpgradeLevel, purchaseGuildUpgrade,
 };
