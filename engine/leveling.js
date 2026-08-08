@@ -79,6 +79,7 @@ function xpForKill(enemyTier, playerLevel) {
 // потому что все они в итоге проходят через эту функцию. Не забыть
 // выключить (TESTING_MODE = false) после тестирования.
 const TESTING_MODE = true;
+require('../lib/testing-mode-guard.js').assertNotProductionTesting(TESTING_MODE, 'leveling.js');
 const TESTING_XP_MULTIPLIER = 500;
 
 function grantXp(player, amount) {
