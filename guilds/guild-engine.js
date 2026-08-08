@@ -2,6 +2,8 @@
 
 const { GUILD_LIMITS, GUILD_ROLES, GUILD_ERRORS } = require('./guild-data.js');
 const { nextUpgradeCost, levelDef } = require('./guild-levels.js');
+const { logWorldEvent } = require('../lib/world-feed.js');
+const { logEconomyEvent, EVENT_TYPES } = require('../lib/economy-audit.js');
 
 /**
  * ДВИЖОК ГИЛЬДИЙ — архитектурно повторяет market-engine.js: любое действие,
@@ -121,6 +123,7 @@ async function donateCredits(deps, player, amount) {
   if (amount < GUILD_LIMITS.DONATION_MIN || (player.credits || 0) < amount) throw new GuildError(GUILD_ERRORS.INSUFFICIENT_CREDITS);
   player.credits -= amount;
   await store.addToGuildBankAtomic(player.guildId, amount);
+  logEconomyEvent(deps, { type: EVENT_TYPES.GUILD_DONATE, playerId: player.id, credits: -amount }).catch(() => {});
   return { player };
 }
 
@@ -137,6 +140,7 @@ async function donateResource(deps, player, resource, tier, qty) {
   stack.qty -= qty;
   player.inventory = player.inventory.filter((i) => i.qty > 0);
   await store.addToGuildBankResourceAtomic(player.guildId, resource, tier, qty);
+  logEconomyEvent(deps, { type: EVENT_TYPES.GUILD_DONATE, playerId: player.id, resource, tier, qty: -qty }).catch(() => {});
   return { player };
 }
 
@@ -153,6 +157,7 @@ async function withdrawResource(deps, player, resource, tier, qty) {
   const stack = player.inventory.find((i) => i.resource === resource && i.tier === tier);
   if (stack) stack.qty += qty;
   else player.inventory.push({ resource, tier, qty });
+  logEconomyEvent(deps, { type: EVENT_TYPES.GUILD_WITHDRAW, playerId: player.id, resource, tier, qty }).catch(() => {});
   return { player };
 }
 
@@ -184,7 +189,21 @@ async function purchaseGuildUpgrade(deps, player) {
   if (!result.success) {
     throw new GuildError(result.reason === 'LEVEL_MISMATCH' ? 'LEVEL_MISMATCH' : 'INSUFFICIENT_RESOURCES');
   }
-  return { newLevel: currentLevel + 1, levelDef: levelDef(currentLevel + 1) };
+  const newLevel = currentLevel + 1;
+  const purchasedLevelDef = levelDef(newLevel);
+  for (const need of cost) {
+    logEconomyEvent(deps, { type: EVENT_TYPES.GUILD_UPGRADE_SPEND, playerId: player.id, resource: need.resource, tier: need.tier, qty: -need.qty, note: `guild_level_${newLevel}` }).catch(() => {});
+  }
+
+  // Лента мира — рост гильдии видно всем, не только участникам (см.
+  // lib/world-feed.js). Fire-and-forget, не блокирует ответ игроку и не
+  // может сорвать уже совершённую покупку, если запись в ленту упадёт.
+  const guild = await store.getGuild(player.guildId).catch(() => null);
+  if (guild) {
+    logWorldEvent(deps, { type: 'guild_upgrade', text: `Гильдия «${guild.name}» достигла уровня «${purchasedLevelDef.name}».` }).catch(() => {});
+  }
+
+  return { newLevel, levelDef: purchasedLevelDef };
 }
 
 module.exports = {
