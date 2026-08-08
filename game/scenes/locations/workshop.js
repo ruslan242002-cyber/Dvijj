@@ -20,6 +20,7 @@ const { applyDerivedStats } = require('../../../engine/derived-stats.js');
 const { ARTIFACT_POOL, findArtifact, equipArtifact, unequipArtifact } = require('../../../lib/artifacts.js');
 const { COMPANIONS, equipCompanion, unequipCompanion } = require('../../../engine/companions.js');
 const { SHIP_RECIPES, findShipRecipe, craftShipModule, equipShipModule, unequipShipModule, shipModuleSlotsFor } = require('../../../engine/ship-crafting.js');
+const { canReforgeToday, reforgeableAlternatives, reforgeGear } = require('../../../engine/gear-engine.js');
 const { hubMessage, stationButtons, currentStation } = require('../common.js');
 const { imageForLocation } = require('../../location-images.js');
 const { SCENES } = require('../ids.js');
@@ -146,6 +147,7 @@ function workshopScreen(player, prefixText = '') {
     else buttons.push(`🔵 ${r.name}`);
   }
   for (const r of craftableShipModules) buttons.push(`🔧 ${r.name}`);
+  if (canReforgeToday(player) && (player.gear || []).length) buttons.push('⚒️ Перековать (бесплатно, раз в день)');
   for (const r of craftable) buttons.push(`🔩 ${r.name}`);
   for (const r of craftableGear) buttons.push(`⚔️ ${r.name}`);
   buttons.push('⬅️ Назад');
@@ -157,10 +159,39 @@ function workshopScreen(player, prefixText = '') {
 }
 
 function handleWorkshop(state, input, rng, deps) {
+  if (state.scene === SCENES.REFORGE_PICK) {
+    if (input === '⬅️ Назад') return workshopScreen(state.player);
+    const match = /^⚒️ (.+)$/.exec(input);
+    const recipe = match && GEAR_RECIPES.find((r) => r.name === match[1]);
+    if (!recipe || !(state.player.gear || []).includes(recipe.id)) return workshopScreen(state.player);
+    const alternatives = reforgeableAlternatives(recipe.id);
+    if (!alternatives.length) return workshopScreen(state.player, `Для «${recipe.name}» нет других архетипов той же редкости.\n\n`);
+    const buttons = [...alternatives.map((r) => `⚒️ ${r.name}`), '⬅️ Назад'];
+    return { reply: { text: `⚒️ Перековать «${recipe.name}» во что?\n\n${alternatives.map((r) => `${r.name} (${r.archetype}) — ${statsText(r.stats)}`).join('\n')}`, buttons }, nextState: { scene: SCENES.REFORGE_TARGET, player: state.player, reforgeFrom: recipe.id } };
+  }
+
+  if (state.scene === SCENES.REFORGE_TARGET) {
+    if (input === '⬅️ Назад') return workshopScreen(state.player);
+    const match = /^⚒️ (.+)$/.exec(input);
+    const targetRecipe = match && GEAR_RECIPES.find((r) => r.name === match[1]);
+    if (!targetRecipe) return workshopScreen(state.player);
+    const player = { ...state.player, gear: [...(state.player.gear || [])], equippedGear: { ...(state.player.equippedGear || {}) } };
+    const result = reforgeGear(player, state.reforgeFrom, targetRecipe.id);
+    if (!result.success) return workshopScreen(state.player, 'Перековка не удалась — попробуй ещё раз позже.\n\n');
+    return workshopScreen(player, `⚒️ Перековано в «${result.newRecipe.name}» (${result.newRecipe.archetype}).\n\n`);
+  }
+
   if (state.scene !== SCENES.WORKSHOP) return null;
 
   if (input === '⬅️ Назад') {
     return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', currentStation(state.player)) }, nextState: { scene: 'station', player: state.player } };
+  }
+
+  if (input === '⚒️ Перековать (бесплатно, раз в день)') {
+    const ownedList = (state.player.gear || []).map((id) => findGearRecipe(id)).filter(Boolean);
+    if (!ownedList.length) return workshopScreen(state.player);
+    const buttons = [...ownedList.map((r) => `⚒️ ${r.name}`), '⬅️ Назад'];
+    return { reply: { text: '⚒️ ПЕРЕКОВКА\n\nКакой предмет перековать на другой архетип той же редкости?', buttons }, nextState: { scene: SCENES.REFORGE_PICK, player: state.player } };
   }
 
   const findModuleByName = (name) => RECIPES.find((r) => r.name === name);
