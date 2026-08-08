@@ -39,9 +39,14 @@ function joinBoss(instance, playerId, playerName) {
 }
 
 /** Резолвит ОДИН ход одного участника — использует ту же resolveTurn,
- * что и обычный бой, поэтому все умения/классы-наставники/сопротивления
- * типов урона работают без переделки. */
-function resolvePlayerVsBoss(instance, player, playerId, skill, rng = Math.random) {
+ *  что и обычный бой, поэтому все умения/классы-наставники/сопротивления
+ *  типов урона работают без переделки.
+ *
+ *  guildDamageBonusPct (в процентных пунктах, по умолчанию 0) — бонус от
+ *  3-го уровня гильд-апгрейда (guilds/guild-levels.js: worldBossDamagePct),
+ *  передаётся явно вызывающим кодом (та же схема, что feeDiscount в
+ *  market-engine.js), чтобы движок босса не знал о гильдиях напрямую. */
+function resolvePlayerVsBoss(instance, player, playerId, skill, rng = Math.random, guildDamageBonusPct = 0) {
   const boss = findBoss(instance.bossId);
   if (!boss) return { error: 'BOSS_NOT_FOUND' };
   if (instance.defeated) return { error: 'ALREADY_DEFEATED' };
@@ -54,7 +59,10 @@ function resolvePlayerVsBoss(instance, player, playerId, skill, rng = Math.rando
   };
 
   const result = resolveTurn({ attacker: player, defender: bossFighter, skill, rng });
-  const dmgDealt = instance.hp - Math.max(0, result.defender.hp);
+  let dmgDealt = instance.hp - Math.max(0, result.defender.hp);
+  if (guildDamageBonusPct > 0 && dmgDealt > 0) {
+    dmgDealt = Math.round(dmgDealt * (1 + guildDamageBonusPct / 100));
+  }
   instance.participants[playerId].damageDealt += Math.max(0, dmgDealt);
 
   // Пока не набралось минимум разных участников (boss.minParticipants) —
@@ -97,10 +105,10 @@ function distributeRewards(instance) {
 }
 
 /** Спавн раз в 30-120 часов (случайно внутри диапазона, не фиксировано
- * — иначе игроки быстро подстроятся под расписание вместо честного
- * ожидания). Детерминировано по дню+bossId, чтобы не пересчитывать
- * заново на каждый вызов — тот же принцип, что у shtorm/isStormActive
- * в city-engine.js. */
+ *  — иначе игроки быстро подстроятся под расписание вместо честного
+ *  ожидания). Детерминировано по дню+bossId, чтобы не пересчитывать
+ *  заново на каждый вызов — тот же принцип, что у shtorm/isStormActive
+ *  в city-engine.js. */
 function shouldSpawnBoss(bossId, lastDefeatedAt, now = Date.now()) {
   const boss = findBoss(bossId);
   if (!boss) return false;
@@ -115,4 +123,4 @@ function shouldSpawnBoss(bossId, lastDefeatedAt, now = Date.now()) {
   return hoursSince >= threshold;
 }
 
-module.exports = { spawnBossInstance, joinBoss, resolvePlayerVsBoss, distributeRewards, shouldSpawnBoss, MIN_REWARD_SHARE };
+module.exports = { spawnBossInstance, joinBoss, resolvePlayerVsBoss, distributeRewards, shouldSpawnBoss };
