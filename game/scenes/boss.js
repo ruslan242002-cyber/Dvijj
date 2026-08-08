@@ -9,6 +9,7 @@ const { checkAchievements } = require('../../lib/achievements.js');
 const { grantXp } = require('../../engine/leveling.js');
 const { activeGuildBonuses } = require('../../guilds/guild-levels.js');
 const { logWorldEvent } = require('../../lib/world-feed.js');
+const { logEconomyEvent, EVENT_TYPES } = require('../../lib/economy-audit.js');
 const { SCENES } = require('./ids.js');
 
 const BOSS_SLOT = 'default';
@@ -114,6 +115,7 @@ async function handleBoss(state, input, rng, deps, playerId) {
       await deps.bossStore.setLastDefeatedAt(BOSS_SLOT, Date.now());
       const rewards = distributeRewards(instance);
       for (const [pid, reward] of Object.entries(rewards)) {
+        logEconomyEvent(deps, { type: EVENT_TYPES.BOSS_REWARD, playerId: pid, credits: reward.credits, note: 'world_boss_victory' }).catch(() => {});
         if (pid === playerId) {
           player.credits = (player.credits || 0) + reward.credits;
           grantXp(player, reward.xp);
