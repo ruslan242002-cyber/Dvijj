@@ -1,4 +1,6 @@
 'use strict';
+const { activeClassEffects } = require('./mentor-classes.js');
+const { factionCombatBonus } = require('./faction-combat.js');
 
 /**
  * СНАРЯЖЕНИЕ — оружие и броня шести ступеней редкости (E/D/C/B/A/S,
@@ -65,6 +67,18 @@ const WEAPON_RECIPES = [
 
   { id: 'weapon_mythic', slot: 'weapon', rarity: 'mythic', name: 'Нихрон-резонатор', archetype: 'Кинетическое', stats: { firepower: 100 }, credits: 18000,
     materials: [item('Сплав «Нихрон»', 1)], cost: [res('Изотопы', 6, 10)] },
+
+  // ── Новые монстры (Ярмарка Теней/Разлом Кайлара/Кузня Забытых/Бездна
+  // Оррин/Периметр Танвир/Кладбище флота) — заполняют архетип "Точное" и
+  // "Кинетическое" на ступенях, где раньше их не было вообще. ──
+  { id: 'weapon_uncommon_precise', slot: 'weapon', rarity: 'uncommon', name: 'Нервный клинок', archetype: 'Точное', stats: { firepower: 10, reaction: 6 }, credits: 720,
+    materials: [item('Нервный шип', 5)], cost: [res('Изотопы', 2, 7)] },
+  { id: 'weapon_rare_kinetic', slot: 'weapon', rarity: 'rare', name: 'Импульсный молот', archetype: 'Кинетическое', stats: { firepower: 18 }, credits: 1520,
+    materials: [item('Импульсный сгусток', 4)], cost: [res('Реголит', 3, 6)] },
+  { id: 'weapon_epic_precise', slot: 'weapon', rarity: 'epic', name: 'Плазменная игла', archetype: 'Точное', stats: { firepower: 30, reaction: 12 }, credits: 3250,
+    materials: [item('Плазменная нить', 3)], cost: [res('Изотопы', 4, 8)] },
+  { id: 'weapon_legendary_precise', slot: 'weapon', rarity: 'legendary', name: 'Тракт-игла', archetype: 'Точное', stats: { firepower: 50, reaction: 20 }, credits: 7100,
+    materials: [item('Чистый осколок Тракта', 2)], cost: [res('Полимеры', 5, 6)] },
 ];
 
 const ARMOR_RECIPES = [
@@ -95,6 +109,15 @@ const ARMOR_RECIPES = [
 
   { id: 'armor_mythic', slot: 'armor', rarity: 'mythic', name: 'Ядро-панцирь Жнеца', archetype: 'Тяжёлая', stats: { shielding: 78 }, credits: 18000,
     materials: [item('Энергоядро', 1)], cost: [res('Реголит', 6, 10)] },
+
+  { id: 'armor_uncommon_adaptive', slot: 'armor', rarity: 'uncommon', name: 'Плащ теневого рынка', archetype: 'Адаптивная', stats: { shielding: 6, mind: 4 }, credits: 720,
+    materials: [item('Обломки лёгкой брони', 5)], cost: [res('Полимеры', 2, 7)] },
+  { id: 'armor_rare_adaptive', slot: 'armor', rarity: 'rare', name: 'Архивный экзоскелет', archetype: 'Адаптивная', stats: { shielding: 11, mind: 9 }, credits: 1520,
+    materials: [item('Архивный диск', 4)], cost: [res('Полимеры', 3, 6)] },
+  { id: 'armor_epic_light', slot: 'armor', rarity: 'epic', name: 'Резонансная мембрана', archetype: 'Лёгкая', stats: { shielding: 22, reaction: 16 }, credits: 3250,
+    materials: [item('Застывший резонанс', 3)], cost: [res('Биомасса', 4, 8)] },
+  { id: 'armor_legendary_light', slot: 'armor', rarity: 'legendary', name: 'Пустотный плащ', archetype: 'Лёгкая', stats: { shielding: 36, reaction: 26 }, credits: 7100,
+    materials: [item('Фрагмент пустоты', 2)], cost: [res('Биомасса', 5, 6)] },
 ];
 
 const GEAR_RECIPES = [...WEAPON_RECIPES, ...ARMOR_RECIPES];
@@ -127,10 +150,19 @@ function hasResourcesFor(player, recipeId) {
   });
 }
 
+/** Скидка Кузнеца (класс-наставник) на кредитную стоимость крафта —
+ * читается прямо из эффектов текущей ступени, применяется ЗДЕСЬ, а не
+ * в derived-stats.js (это не боевой стат, а модификатор цены,
+ * применимый только в момент самого крафта). */
+function effectiveCraftCost(player, baseCredits) {
+  const discount = (activeClassEffects(player).craftDiscount || 0) + (factionCombatBonus(player.faction).craftDiscount || 0);
+  return Math.round(baseCredits * (1 - discount));
+}
+
 function canAffordGear(player, recipeId) {
   const recipe = findGearRecipe(recipeId);
   if (!recipe) return false;
-  return hasMaterialsFor(player, recipeId) && hasResourcesFor(player, recipeId) && (player.credits || 0) >= recipe.credits;
+  return hasMaterialsFor(player, recipeId) && hasResourcesFor(player, recipeId) && (player.credits || 0) >= effectiveCraftCost(player, recipe.credits);
 }
 
 function statsText(stats) {
@@ -169,7 +201,7 @@ function craftGear(player, recipeId) {
   }
   player.inventory = player.inventory.filter((i) => i.qty > 0);
 
-  player.credits -= recipe.credits;
+  player.credits -= effectiveCraftCost(player, recipe.credits);
   player.gear.push(recipe.id);
 
   return { success: true, recipe };
@@ -263,6 +295,12 @@ function statsAtLevel(recipe, level) {
 function aggregateGearEffects(player) {
   const bonuses = {};
   const equipped = player.equippedGear || {};
+  // Мастерство Кузнеца (ступень 3+) — не "запечённый" в момент крафта
+  // бонус (снаряжение в этой системе — просто id рецепта, без отдельного
+  // состояния экземпляра, как и уровень апгрейда — тоже читается per-
+  // player динамически, не хранится в самом предмете), а живой множитель,
+  // применяется здесь же, где уже читается upgrade level.
+  const smithBonusPct = activeClassEffects(player).gearStatBonusPct || 0;
   for (const slot of Object.keys(equipped)) {
     const recipeId = equipped[slot];
     const recipe = findGearRecipe(recipeId);
@@ -270,15 +308,48 @@ function aggregateGearEffects(player) {
     const level = upgradeLevelOf(player, recipeId);
     const stats = statsAtLevel(recipe, level);
     for (const [stat, value] of Object.entries(stats)) {
-      bonuses[stat] = (bonuses[stat] || 0) + value;
+      bonuses[stat] = (bonuses[stat] || 0) + Math.round(value * (1 + smithBonusPct));
     }
   }
   return bonuses;
+}
+
+/** Легенда кузни (Кузнец, 5 ступень) — раз в день бесплатно перековать
+ * владеемый предмет на другой архетип ТОЙ ЖЕ редкости и слота. День
+ * считается тем же способом, что и остальные daily-механики в проекте
+ * (contracts-engine.js/daily-streak.js) — тот же DAY_MS подход. */
+function canReforgeToday(player) {
+  if (!activeClassEffects(player).freeReforge) return false;
+  const today = Math.floor(Date.now() / 86400000);
+  return player.lastReforgeDay !== today;
+}
+
+function reforgeableAlternatives(recipeId) {
+  const recipe = findGearRecipe(recipeId);
+  if (!recipe) return [];
+  return GEAR_RECIPES.filter((r) => r.slot === recipe.slot && r.rarity === recipe.rarity && r.id !== recipe.id);
+}
+
+function reforgeGear(player, oldRecipeId, newRecipeId) {
+  if (!canReforgeToday(player)) return { success: false, reason: 'NOT_AVAILABLE' };
+  const oldRecipe = findGearRecipe(oldRecipeId);
+  const newRecipe = findGearRecipe(newRecipeId);
+  if (!oldRecipe || !newRecipe) return { success: false, reason: 'UNKNOWN_RECIPE' };
+  if (!(player.gear || []).includes(oldRecipeId)) return { success: false, reason: 'NOT_OWNED' };
+  if (oldRecipe.slot !== newRecipe.slot || oldRecipe.rarity !== newRecipe.rarity) return { success: false, reason: 'MISMATCHED_TIER' };
+  player.gear = player.gear.map((id) => (id === oldRecipeId ? newRecipeId : id));
+  player.equippedGear = player.equippedGear || {};
+  for (const slot of Object.keys(player.equippedGear)) {
+    if (player.equippedGear[slot] === oldRecipeId) player.equippedGear[slot] = newRecipeId;
+  }
+  player.lastReforgeDay = Math.floor(Date.now() / 86400000);
+  return { success: true, newRecipe };
 }
 
 module.exports = {
   RARITY_TIERS, WEAPON_RECIPES, ARMOR_RECIPES, GEAR_RECIPES, MAX_UPGRADE_LEVEL, UPGRADE_BONUS_PER_LEVEL,
   findGearRecipe, rarityName, hasMaterialsFor, hasResourcesFor, canAffordGear, describeGearRecipe, statsText,
   craftGear, equipGear, unequipGear, aggregateGearEffects,
+  canReforgeToday, reforgeableAlternatives, reforgeGear,
   upgradeLevelOf, upgradeCost, canUpgradeGear, upgradeGear, statsAtLevel,
 };
