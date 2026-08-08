@@ -2,6 +2,7 @@
 
 const { createListing, cancelListing, purchaseListing, listActiveListings, MarketError } = require('../../market/market-engine.js');
 const { getMarketFeeDiscount } = require('../../lib/housing.js');
+const { activeGuildBonuses } = require('../../guilds/guild-levels.js');
 const { imageForLocation } = require('../location-images.js');
 const { hubMessage, stationButtons, addToInventory, currentStation } = require('./common.js');
 const { SCENES } = require('./ids.js');
@@ -23,8 +24,21 @@ function suggestedListingPrice(tier) {
   return Math.max(1, Math.round(tier * 8 * 1.5));
 }
 
+/** Скидка на комиссию биржи — жильё Приюта (lib/housing.js) + гильд-
+ *  апгрейд 1-го уровня (guilds/guild-levels.js: marketDiscountPct),
+ *  складываются. Гильдейская часть читается через deps.guildStore, если
+ *  он подключён (тот же паттерн деградации, что у остальных мировых
+ *  систем — при отсутствии стора просто не добавляет бонус, не падает). */
+async function totalMarketFeeDiscount(deps, player) {
+  const housingDiscount = getMarketFeeDiscount(player);
+  if (!player.guildId || !deps.guildStore) return housingDiscount;
+  const guildLevel = await deps.guildStore.getGuildUpgradeLevel(player.guildId);
+  const guildDiscount = activeGuildBonuses(guildLevel).marketDiscountPct;
+  return housingDiscount + guildDiscount;
+}
+
 async function buyFromMarket(deps, player, playerId, listing, qty = listing.qty) {
-  const feeDiscount = getMarketFeeDiscount(player);
+  const feeDiscount = await totalMarketFeeDiscount(deps, player);
   const proxyBuyer = { id: playerId, credits: player.credits || 0, inventory: [] };
   const { purchase } = await purchaseListing({ store: deps.marketStore }, proxyBuyer, listing.id, qty, feeDiscount);
   const nextPlayer = { ...player, credits: proxyBuyer.credits };
