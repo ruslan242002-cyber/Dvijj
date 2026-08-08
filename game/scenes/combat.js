@@ -15,6 +15,7 @@ const { rollLoot } = require('../../engine/exploration-engine.js');
 const { trackCombatAction } = require('../../engine/combat-training.js');
 const { checkAchievements } = require('../../lib/achievements.js');
 const { rollCompanionDrop, activeCompanionEffect } = require('../../engine/companions.js');
+const { trySurvivalMechanic } = require('../../engine/mentor-classes.js');
 const { applyDerivedStats } = require('../../engine/derived-stats.js');
 const { returnFromPlanet } = require('./exploration.js');
 const { rollLootByEnemyName } = require('../../engine/bestiary.js');
@@ -106,7 +107,22 @@ function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prev
         calmedNote = `\n🌌 ${state.enemy.name} наконец умолкла. Отголоски в этом секторе поутихнут.`;
       }
 
-      let victoryText = `💥 ${result.log.join(' ')}\n\n🏆 ${state.enemy.name} уничтожен.\n💳 +${loot.credits} кредитов, +${loot.qty}× ${loot.resource} T${loot.tier}\n✨ +${xpGain} XP${fragmentNote}${trophyNote}${calmedNote}${companionNote}`;
+      // Целитель (2+ ступень) — доп. лечение сразу после победы, поверх
+      // обычного восстановления от левел-апа (если он тоже случился).
+      let postCombatHealNote = '';
+      const classFx = player.classEffects || {};
+      if (classFx.postCombatHealPct && player.hp < player.hpMax) {
+        const healAmount = Math.round(player.hpMax * classFx.postCombatHealPct);
+        const before = player.hp;
+        player.hp = Math.min(player.hpMax, player.hp + healAmount);
+        if (player.hp > before) postCombatHealNote = `\n💚 Восстановлено ${player.hp - before} HP после боя.`;
+      }
+      // Штурмовик (5 ступень) — гарантированный крит на СЛЕДУЮЩЕЙ атаке
+      // (следующий бой, раз этот уже закончен победой) — читается в
+      // engine/combat-engine.js как attacker.guaranteedCritNextAttack.
+      if (classFx.guaranteedCritAfterKill) player.guaranteedCritNextAttack = true;
+
+      let victoryText = `💥 ${result.log.join(' ')}\n\n🏆 ${state.enemy.name} уничтожен.\n💳 +${loot.credits} кредитов, +${loot.qty}× ${loot.resource} T${loot.tier}\n✨ +${xpGain} XP${fragmentNote}${trophyNote}${calmedNote}${companionNote}${postCombatHealNote}`;
       if (bestiaryDrops.length) victoryText += `\n🎖️ Особая добыча: ${bestiaryDrops.map((d) => d.name).join(', ')}`;
       if (leveledUp) victoryText += `\n🆙 Новый уровень: ${level}! (+2 очка, +20 HP, полное исцеление)`;
 
@@ -132,6 +148,14 @@ function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prev
       return curatorQuestScreen(deps, { ...result.attacker, hp: Math.round(result.attacker.hpMax * 0.5) }, state.curatorQuest.questId, state.curatorQuest.loseNext);
     }
     {
+      const survival = trySurvivalMechanic(result.attacker, state.survivalUsedThisFight);
+      if (survival) {
+        const survivedPlayer = { ...result.attacker, hp: Math.round(result.attacker.hpMax * survival.hpPct) };
+        return {
+          reply: { text: `💥 ${result.log.join(' ')}\n\n${survival.note}`, buttons: ['🗡️ Обычная атака', ...skillButtons(survivedPlayer, state.skillCooldowns || {})] },
+          nextState: { scene: state.scene, player: survivedPlayer, enemy: result.defender, zone: state.zone, depth: state.depth, skillCooldowns: state.skillCooldowns, survivalUsedThisFight: true }
+        };
+      }
       const defeatedPlayer = { ...result.attacker, hp: Math.round(result.attacker.hpMax * 0.5) };
       const toShip = returnFromPlanet(defeatedPlayer, '');
       if (toShip) {
@@ -155,6 +179,14 @@ function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prev
       return curatorQuestScreen(deps, { ...enemyTurn.defender, hp: Math.round(enemyTurn.defender.hpMax * 0.5) }, state.curatorQuest.questId, state.curatorQuest.loseNext);
     }
     {
+      const survival = trySurvivalMechanic(enemyTurn.defender, state.survivalUsedThisFight);
+      if (survival) {
+        const survivedPlayer = { ...enemyTurn.defender, hp: Math.round(enemyTurn.defender.hpMax * survival.hpPct) };
+        return {
+          reply: { text: `💥 ${log}\n\n${survival.note}`, buttons: ['🗡️ Обычная атака', ...skillButtons(survivedPlayer, state.skillCooldowns || {})] },
+          nextState: { scene: state.scene, player: survivedPlayer, enemy: enemyTurn.attacker, zone: state.zone, depth: state.depth, skillCooldowns: state.skillCooldowns, survivalUsedThisFight: true }
+        };
+      }
       const defeatedPlayer = { ...enemyTurn.defender, hp: Math.round(enemyTurn.defender.hpMax * 0.5) };
       const toShip = returnFromPlanet(defeatedPlayer, '');
       if (toShip) {
