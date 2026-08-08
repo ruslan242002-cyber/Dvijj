@@ -13,6 +13,7 @@ const { startCooldown, tickCooldowns } = require('../../engine/cooldowns.js');
 const { resolveTurn } = require('../../engine/combat-engine.js');
 const { buyFromTrader } = require('../../engine/trader-encounter.js');
 const { addToTripCargo, bankTripCargo, loseFullCargo, tripCargoUnits } = require('../../lib/trip-cargo.js');
+const { shouldDropWreckage } = require('../../lib/wreckage-store.js');
 const { combatFullCard } = require('../../lib/combat-card.js');
 const { rollMicroDiscovery, SPACE_DISCOVERIES } = require('../../lib/micro-discovery.js');
 const { createAmbush, AMBUSH_DURATION_MS, pickAmbusher } = require('../../lib/ambush-registry.js');
@@ -337,7 +338,7 @@ async function creditLootToAmbusher(deps, ambusherPlayerId, lostItems) {
 }
 
 async function resolveShipCombatTurn(deps, state, playerFighter, enemyFighter, rng) {
-  const enemyTurn = resolveTurn({ attacker: enemyFighter, defender: playerFighter, rng });
+  const enemyTurn = resolveTurn({ attacker: enemyFighter, defender: playerFighter, rng, pvpMode: !!state.ambusherPlayerId });
   applyFighterResultToShip(state.player.ship, enemyTurn.defender, rng);
 
   if (enemyTurn.defender.hp <= 0) {
@@ -352,6 +353,16 @@ async function resolveShipCombatTurn(deps, state, playerFighter, enemyFighter, r
     if (state.ambusherPlayerId) {
       const credited = await creditLootToAmbusher(deps, state.ambusherPlayerId, allLost);
       if (credited) ambushNote = '\n\n💀 Это была не случайность — твой груз забрал тот, кто устроил здесь засаду.';
+    } else if (deps.wreckageStore && allLost.length) {
+      // Не PvP-засада — обычный монстр. В красной зоне груз не просто
+      // исчезает, а высыпается в космос и может быть найден кем-то ещё
+      // (lib/wreckage-store.js) — мягкая деградация, если стор не
+      // подключён к реальному Redis.
+      const zone = zoneForDistance(state.distance || 0);
+      if (shouldDropWreckage(zone, { tripCargo: allLost })) {
+        await deps.wreckageStore.dropWreckage(zone, state.distance, allLost, state.player.name).catch(() => {});
+        ambushNote = '\n\n📡 Груз высыпался в открытый космос — кто-то ещё может его подобрать.';
+      }
     }
 
     return {
@@ -409,6 +420,7 @@ async function handleTravel(state, input, rng, deps, playerId) {
         }
         player.ship.fuel -= fuelCostForStep(rng);
         const newDistance = distance + 1;
+        player.maxDistanceReached = Math.max(player.maxDistanceReached || 0, newDistance);
 
         if (deps.veinStore) {
           const activeVein = await deps.veinStore.getActiveVein();
@@ -417,6 +429,17 @@ async function handleTravel(state, input, rng, deps, playerId) {
               reply: { text: `⛏️ Прямо по курсу — жила ресурса (Т${activeVein.tier}, ${activeVein.resource})! Уже видно чужие корабли на месте добычи.`, buttons: ['⛏️ Пристыковаться', '🚀 Лететь мимо'] },
               nextState: { scene: SCENES.SHIP_TRAVEL, player, distance: newDistance, veinSighted: true }
             };
+          }
+        }
+
+        let wreckageNote = '';
+        if (deps.wreckageStore) {
+          const zone = zoneForDistance(newDistance);
+          const wreckage = await deps.wreckageStore.claimWreckage(zone, newDistance).catch(() => null);
+          if (wreckage) {
+            for (const item of wreckage.cargo) addToInventory(player, item.resource, item.tier, item.qty);
+            const items = wreckage.cargo.map((i) => `${i.resource} T${i.tier} ×${i.qty}`).join(', ');
+            wreckageNote = `📡 Обломки чужого корабля — груз ${wreckage.victimName || 'неизвестного пилота'}: ${items}.\n\n`;
           }
         }
 
@@ -432,9 +455,13 @@ async function handleTravel(state, input, rng, deps, playerId) {
 
         const event = rollSpaceEvent(player, newDistance, rng, ambushContext);
         if (event.type === 'ambush_pvp' && deps.ambushStore) {
-          return resolveRealAmbush(deps, player, event, ambushContext.activeAmbushes, newDistance);
+          const ambushResult = resolveRealAmbush(deps, player, event, ambushContext.activeAmbushes, newDistance);
+          ambushResult.reply.text = `${wreckageNote}${ambushResult.reply.text}`;
+          return ambushResult;
         }
-        return withSpaceMicroDiscovery(resolveSpaceEvent(deps, player, event, newDistance, rng), rng);
+        const resolved = withSpaceMicroDiscovery(resolveSpaceEvent(deps, player, event, newDistance, rng), rng);
+        resolved.reply.text = `${wreckageNote}${resolved.reply.text}`;
+        return resolved;
       }
 
       if (input === '⛏️ Пристыковаться' && state.veinSighted) {
@@ -533,7 +560,7 @@ async function handleTravel(state, input, rng, deps, playerId) {
 
       const playerFighter = shipToFighter(state.player.ship, 'Твой корабль');
       const enemyFighter = state.enemy;
-      const result = resolveTurn({ attacker: playerFighter, defender: enemyFighter, skill, rng });
+      const result = resolveTurn({ attacker: playerFighter, defender: enemyFighter, skill, rng, pvpMode: !!state.ambusherPlayerId });
       applyFighterResultToShip(state.player.ship, result.attacker, rng);
       const cooldownsAfterUse = skillId ? startCooldown(state.shipSkillCooldowns || {}, skillId, skill, 0) : (state.shipSkillCooldowns || {});
 
