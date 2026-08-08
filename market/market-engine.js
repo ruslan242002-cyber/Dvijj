@@ -1,5 +1,6 @@
 'use strict';
 const { MARKET_LIMITS, MARKET_ERRORS, feePercentForTotal } = require('./market-data');
+const { logEconomyEvent, EVENT_TYPES } = require('../lib/economy-audit.js');
 /*
 * Архитектурная заметĸа (важно при подĸлючении ĸ router.js):
 *
@@ -22,6 +23,15 @@ const { MARKET_LIMITS, MARKET_ERRORS, feePercentForTotal } = require('./market-d
 * поле внутри чужого JSON-блоба без Lua/WATCH — источник гонĸи и потери
 * ĸредитов при одновременных поĸупĸах одного лота. Это одна из немногих
 * правоĸ, ĸоторая заденет существующий формат хранения игроĸа.
+*
+* АУДИТ ЭКОНОМИКИ (добавлено) — logEconomyEvent() вызывается здесь, а не
+* только в game/scenes/market.js, потому что именно здесь — и только
+* здесь — известна сторона ПРОДАВЦА (его id и реально зачисленная сумма
+* после комиссии). game/scenes/market.js логирует покупателя (у него
+* есть player-объект), этот файл логирует продавца (у него его нет).
+* Deps должен содержать redis (тот же клиент, что store использует
+* внутри себя) — если его нет, логирование просто тихо не происходит,
+* сама покупка/продажа не блокируется (см. lib/economy-audit.js).
 */class MarketError extends Error {
 constructor(code) {
 super(code);
@@ -137,12 +147,13 @@ throw new MarketError(MARKET_ERRORS.INSUFFICIENT_CREDITS);
 }
 buyer.credits -= totalCost;
 let result;
+const feePercent = Math.max(feePercentForTotal(totalCost) - feeDiscount, 0);
 try {result = await store.purchaseListingAtomic({
 listingId,
 buyerId: buyer.id,
 qty,
 expectedPrice: listing.price,
-feePercent: Math.max(feePercentForTotal(totalCost) - feeDiscount, 0),
+feePercent,
 });
 } catch (err) {
 // Атомарная операция провалилась (лот изменился/раскупили/цена другая) —
@@ -155,6 +166,12 @@ if (result.remainingQty <= 0) {
 await store.indexRemoveListing(listingId);
 await store.removePlayerListing(listing.sellerId, listingId);
 }
+// Продавец получает totalCost за вычетом комиссии — именно эта сумма
+// реально зачислена ему атомарной операцией в сторе (не totalCost
+// целиком), логируем то, что фактически произошло, а не то, что
+// заплатил покупатель.
+const fee = Math.round((totalCost * feePercent) / 100);
+logEconomyEvent(deps, { type: EVENT_TYPES.MARKET_SELL, playerId: listing.sellerId, credits: totalCost - fee, resource: listing.itemName, note: 'listing_sold' }).catch(() => {});
 return { buyer, purchase: result };
 }
 /**
@@ -269,6 +286,7 @@ if (result.remainingQty <= 0) {
 await store.indexRemoveBuyOrder(orderId);
 await store.removePlayerBuyOrder(order.buyerId, orderId);
 }
+logEconomyEvent(deps, { type: EVENT_TYPES.MARKET_SELL, playerId: seller.id, credits: totalRevenue - fee, resource: order.itemName, note: 'sold_into_buy_order' }).catch(() => {});
 return { seller, sale: result };
 }
 /**
