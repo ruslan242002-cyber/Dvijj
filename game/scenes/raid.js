@@ -9,6 +9,9 @@ const { SKILLS } = require('../../engine/skills-data.js');
 const { hubMessage, stationButtons, skillButtons, skillIdByName } = require('./common.js');
 const { checkAchievements } = require('../../lib/achievements.js');
 const { grantXp } = require('../../engine/leveling.js');
+const { activeGuildBonuses } = require('../../guilds/guild-levels.js');
+const { logWorldEvent } = require('../../lib/world-feed.js');
+const { logEconomyEvent, EVENT_TYPES } = require('../../lib/economy-audit.js');
 const { SCENES } = require('./ids.js');
 
 const RAID_SLOT = 'default';
@@ -17,6 +20,15 @@ const RAID_BOSS_ID = 'test_colossus';
 function hpBar(current, max, width = 16) {
   const filled = Math.round((current / max) * width);
   return `[${'■'.repeat(Math.max(0, filled))}${'□'.repeat(Math.max(0, width - filled))}] ${Math.max(0, current)}/${max}`;
+}
+
+/** Тот же принцип, что в game/scenes/boss.js — гильдейский бонус
+ *  урона по мировому боссу применяется и к синхронному рейду (одна и
+ *  та же цифра guild-levels.js: worldBossDamagePct для обоих режимов). */
+async function guildDamageBonusFor(deps, player) {
+  if (!player.guildId || !deps.guildStore) return 0;
+  const guildLevel = await deps.guildStore.getGuildUpgradeLevel(player.guildId);
+  return activeGuildBonuses(guildLevel).worldBossDamagePct;
 }
 
 /** Экран лобби — кто уже собрался, свободные места, выбор ряда для
@@ -77,6 +89,25 @@ async function raidBattleScreen(deps, player, playerId, raid, prefixText = '') {
     },
     nextState: { scene: SCENES.RAID_BATTLE, player },
   };
+}
+
+/** Строит карту playerId -> % гильдейского бонуса урона по боссу для
+ *  ВСЕХ участников рейда разом (не только текущего) — гильдия читается
+ *  из player.guildId, который дублируется в fighterSnapshot при старте
+ *  рейда (startRaidFromLobby спредит весь player). Игроки без гильдии
+ *  или без deps.guildStore просто не попадают в карту — resolveRound
+ *  трактует отсутствие записи как 0%, деградация тихая. */
+async function buildGuildDamageBonusMap(deps, raid) {
+  if (!deps.guildStore) return {};
+  const map = {};
+  for (const [pid, member] of Object.entries(raid.members)) {
+    const guildId = member.fighterSnapshot?.guildId;
+    if (!guildId) continue;
+    const guildLevel = await deps.guildStore.getGuildUpgradeLevel(guildId).catch(() => 0);
+    const pct = activeGuildBonuses(guildLevel).worldBossDamagePct;
+    if (pct > 0) map[pid] = pct;
+  }
+  return map;
 }
 
 async function handleRaid(state, input, rng, deps, playerId) {
@@ -147,19 +178,25 @@ async function handleRaid(state, input, rng, deps, playerId) {
     // "разбудить" резолв раунда своим действием, включая "Проверить раунд"
     // тех, кто уже походил и просто ждёт остальных).
     if (allActed(raid) || isTimedOut(raid)) {
-      resolveRound(raid, (id) => SKILLS[id], rng);
+      const guildBonusMap = await buildGuildDamageBonusMap(deps, raid);
+      resolveRound(raid, (id) => SKILLS[id], rng, guildBonusMap);
       await deps.raidStore.saveRaid(raid, RAID_SLOT);
 
       if (raid.finished) {
         await deps.raidStore.clearRaid(RAID_SLOT);
         if (raid.victory) {
+          const boss = findBoss(raid.bossId);
+          // Лента мира — победа синхронного отряда видна всем, тот же
+          // принцип, что и у мирового босса в game/scenes/boss.js.
+          logWorldEvent(deps, { type: 'raid_boss_defeated', text: `Отряд из ${Object.keys(raid.members).length} игроков разбивает ${boss.name} в синхронном бою!` }).catch(() => {});
+
           const totalDmg = Object.values(raid.members).reduce((s, m) => s + m.damageDealt, 0);
           let myResultText = null;
           for (const [pid, member] of Object.entries(raid.members)) {
-            const boss = findBoss(raid.bossId);
             const share = member.damageDealt / totalDmg;
             const credits = Math.round(boss.reward.credits * Math.max(share, 0.15));
             const xp = Math.round(boss.reward.xp * Math.max(share, 0.15));
+            logEconomyEvent(deps, { type: EVENT_TYPES.BOSS_REWARD, playerId: pid, credits, note: 'raid_victory' }).catch(() => {});
             if (pid === playerId) {
               const player = { ...state.player, credits: (state.player.credits || 0) + credits };
               grantXp(player, xp);
