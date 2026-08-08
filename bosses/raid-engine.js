@@ -49,10 +49,10 @@ function leaveLobby(lobby, playerId) {
 }
 
 /** Превращает заполненное лобби (5/5) в реальную боевую сессию — снимок
- * полного боевого профиля каждого участника на старте (fighterSnapshot —
- * статы/крит/лайфстил/классы-наставники уже посчитаны через
- * applyDerivedStats ДО вызова этой функции, снимок просто фиксирует
- * состояние на момент старта рейда, не пересчитывает на лету). */
+ *  полного боевого профиля каждого участника на старте (fighterSnapshot —
+ *  статы/крит/лайфстил/классы-наставники уже посчитаны через
+ *  applyDerivedStats ДО вызова этой функции, снимок просто фиксирует
+ *  состояние на момент старта рейда, не пересчитывает на лету). */
 function startRaidFromLobby(lobby, playersById) {
   const boss = findBoss(lobby.bossId);
   if (!boss) return null;
@@ -90,7 +90,7 @@ function allActed(raid) {
 }
 
 /** Записывает выбор действия игрока на этот раунд — не резолвит сразу,
- * просто фиксирует намерение. skill=null означает обычную атаку. */
+ *  просто фиксирует намерение. skill=null означает обычную атаку. */
 function submitAction(raid, playerId, skillId) {
   const member = raid.members[playerId];
   if (!member || member.hp <= 0) return { success: false, reason: 'NOT_IN_RAID_OR_DOWN' };
@@ -100,12 +100,17 @@ function submitAction(raid, playerId, skillId) {
 }
 
 /** Резолвит раунд целиком — вызывать, когда submitAction сообщил
- * allActed=true ИЛИ timedOut=true. Каждый живой участник с заполненным
- * actionThisRound бьёт босса. Молчащие — тихо пропускают, без
- * последствий лично для них и без провала всего рейда. Затем ход
- * босса: раз в raidAoeCadence раундов — АУЕ по всем живым; иначе —
- * обычная атака по случайной живой цели из переднего ряда. */
-function resolveRound(raid, skillLookup, rng = Math.random) {
+ *  allActed=true ИЛИ timedOut=true. Каждый живой участник с заполненным
+ *  actionThisRound бьёт босса. Молчащие — тихо пропускают, без
+ *  последствий лично для них и без провала всего рейда. Затем ход
+ *  босса: раз в raidAoeCadence раундов — АУЕ по всем живым; иначе —
+ *  обычная атака по случайной живой цели из переднего ряда.
+ *
+ *  guildDamageBonusPct (в процентных пунктах, по умолчанию 0) — бонус от
+ *  3-го уровня гильд-апгрейда (guilds/guild-levels.js: worldBossDamagePct),
+ *  передаётся явно вызывающим кодом (game/scenes/raid.js), применяется
+ *  ТОЛЬКО к урону игроков по боссу, не трогает урон босса по игрокам. */
+function resolveRound(raid, skillLookup, rng = Math.random, guildDamageBonusPct = 0) {
   const boss = findBoss(raid.bossId);
   if (!boss || raid.finished) return raid;
   const roundLog = [];
@@ -127,8 +132,12 @@ function resolveRound(raid, skillLookup, rng = Math.random) {
     const attackerFighter = member.fighterSnapshot;
     const bossFighter = bossFighterTemplate();
     const result = skill ? useSkill(attackerFighter, bossFighter, skill, rng) : basicAttack(attackerFighter, bossFighter, rng);
+
     if (result.hit) {
-      const actualDmg = result.dmg || 0;
+      let actualDmg = result.dmg || 0;
+      if (guildDamageBonusPct > 0 && actualDmg > 0) {
+        actualDmg = Math.round(actualDmg * (1 + guildDamageBonusPct / 100));
+      }
       raid.bossHp = Math.max(0, raid.bossHp - actualDmg);
       member.damageDealt += actualDmg;
       roundLog.push(`${member.name} наносит боссу ${actualDmg}${result.crit ? ' (крит!)' : ''}.`);
@@ -136,9 +145,9 @@ function resolveRound(raid, skillLookup, rng = Math.random) {
         // Самолечение (result.heal) раньше нигде не применялось в
         // отрядном режиме вообще — считалось useSkill, но результат
         // просто отбрасывался. Теперь честно лечит себя, а с 3+
-        // ступенью Целителя ("Забота о ближнем") ещё и долю — живым
-        // союзникам вокруг, впервые есть реальный групповой контекст,
-        // где это имеет смысл проверять.
+        // ступенью Целителя ("Забота о ближнем") ещё и долю —
+        // живым союзникам вокруг, впервые есть реальный групповой
+        // контекст, где это имеет смысл проверять.
         member.hp = Math.min(member.hpMax, member.hp + result.heal);
         roundLog.push(`${member.name} восстанавливает себе ${result.heal} HP.`);
         const allyShare = member.fighterSnapshot.classEffects?.allyHealSharePct;
@@ -148,7 +157,7 @@ function resolveRound(raid, skillLookup, rng = Math.random) {
             if (other === member || other.hp <= 0) continue;
             const before = other.hp;
             other.hp = Math.min(other.hpMax, other.hp + shareAmount);
-            if (other.hp > before) roundLog.push(`${member.name} делится заботой — ${other.name} +${other.hp - before} HP.`);
+            if (other.hp > before) roundLog.push(`${member.name} делится заботой — ${other.name} восстанавливает ${other.hp - before} HP.`);
           }
         }
       }
@@ -161,7 +170,7 @@ function resolveRound(raid, skillLookup, rng = Math.random) {
   if (raid.bossHp <= 0) {
     raid.finished = true;
     raid.victory = true;
-    raid.log = [...roundLog, `🏆 ${boss.name} повержен всем отрядом!`];
+    raid.log = [...roundLog, `🎉 ${boss.name} повержен всем отрядом!`];
     return raid;
   }
 
@@ -203,11 +212,11 @@ function resolveRound(raid, skillLookup, rng = Math.random) {
             roundLog.push(`${target.name}: ${survival.note}`);
           } else {
             target.hp = Math.max(0, target.hp - result.dmg);
-            roundLog.push(`${boss.name} бьёт ${target.name} (${target.row === 'front' ? 'передний ряд' : 'тыл'}) на ${result.dmg}${result.crit ? ' (крит!)' : ''}.`);
+            roundLog.push(`${boss.name} бьёт ${target.name} (${target.row === 'front' ? 'передний' : 'тыл'} ряд) на ${result.dmg}.`);
           }
         } else {
           target.hp = Math.max(0, target.hp - result.dmg);
-          roundLog.push(`${boss.name} бьёт ${target.name} (${target.row === 'front' ? 'передний ряд' : 'тыл'}) на ${result.dmg}${result.crit ? ' (крит!)' : ''}.`);
+          roundLog.push(`${boss.name} бьёт ${target.name} (${target.row === 'front' ? 'передний' : 'тыл'} ряд) на ${result.dmg}.`);
         }
       } else {
         roundLog.push(`${boss.name} промахивается по ${target.name}.`);
@@ -217,12 +226,12 @@ function resolveRound(raid, skillLookup, rng = Math.random) {
 
   if (isTelegraphRound) {
     // Предупреждение ЗАРАНЕЕ, на раунд раньше самого удара — по мотивам
-    // обычных телеграфов боссов в популярных играх (Атраксис и не
-    // только): даёт отряду шанс приготовиться (стим на щит и т.п.),
-    // не бьёт совсем без предупреждения.
-    roundLog.push(`🔮 ${boss.name} начинает копить энергию — следующий удар придётся по всем сразу. Приготовьтесь!`);
+    // обычных телеграфов боссов в популярных играх: даёт отряду шанс
+    // приготовиться (стим на щит и т.п.), не бьёт совсем без
+    // предупреждения.
+    roundLog.push(`⚠️ ${boss.name} начинает копить энергию — следующий удар придётся по всему отряду!`);
   }
-  raid.aoeIncoming = isTelegraphRound; // читает UI (game/scenes/raid.js) для явного предупреждения на экране боя
+  raid.aoeIncoming = isTelegraphRound; // читает UI (game/scenes/raid.js) для явного предупреждения игроков.
 
   const allDown = Object.values(raid.members).every((m) => m.hp <= 0);
   if (allDown) {
