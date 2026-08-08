@@ -25,7 +25,7 @@ const STEAL_SHARE_PCT = 0.5; // победитель забирает полов
  * умение персонажа), меняется только КТО с кем дерётся и что происходит
  * после победы. */
 function resolveVeinAttack({ attacker, defender, skill, rng }) {
-  return resolveTurn({ attacker, defender, skill, rng });
+  return resolveTurn({ attacker, defender, skill, rng, pvpMode: true });
 }
 
 /**
