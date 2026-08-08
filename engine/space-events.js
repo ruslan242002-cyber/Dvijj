@@ -59,9 +59,15 @@ function pickWeighted(weights, rng) {
 // ⚠️ ТЕСТОВЫЙ РЕЖИМ — тот же множитель, что в engine/exploration-engine.js
 // (rollLoot), но для космической добычи. Убрать вместе с тем флагом.
 const TESTING_MODE = true;
+require('../lib/testing-mode-guard.js').assertNotProductionTesting(TESTING_MODE, 'space-events.js');
 const TESTING_LOOT_MULTIPLIER = 500;
 
-function rollSpaceLoot(distance, rng, preferShipParts = false) {
+/**
+ * guildYieldBonusPct — тот же гильд-бонус, что и в rollLoot()
+ * (exploration-engine.js), для космической добычи. Применяется только
+ * к qty, не к credits — см. пояснение там же.
+ */
+function rollSpaceLoot(distance, rng, preferShipParts = false, guildYieldBonusPct = 0) {
   const mult = distanceRewardMultiplier(distance);
   const pool = preferShipParts ? SHIP_PART_RESOURCES : SPACE_RESOURCES;
   const resource = pool[Math.floor(rng() * pool.length)];
@@ -69,6 +75,7 @@ function rollSpaceLoot(distance, rng, preferShipParts = false) {
   let qty = Math.max(1, Math.round((2 + Math.floor(rng() * 3)) * mult));
   let credits = Math.round((10 + tier * 8) * mult);
   if (TESTING_MODE) { qty *= TESTING_LOOT_MULTIPLIER; credits *= TESTING_LOOT_MULTIPLIER; }
+  if (guildYieldBonusPct > 0) { qty = Math.round(qty * (1 + guildYieldBonusPct / 100)); }
   return { resource, tier, qty, credits };
 }
 
@@ -147,7 +154,7 @@ const GRAVITY_ANOMALY_LINES = [
   'Приборы поздно замечают гравитационный карман — корабль ощутимо тянет в сторону, топливо уходит на компенсацию',
 ];
 
-function rollSpaceEvent(player, distance, rng = Math.random, ambushContext = null) {
+function rollSpaceEvent(player, distance, rng = Math.random, ambushContext = null, guildYieldBonusPct = 0) {
   if (ambushContext) {
     const { cellId, neighborCellIds, activeAmbushes } = ambushContext;
     const chance = ambushEncounterChance(cellId, neighborCellIds, activeAmbushes, player.id);
@@ -200,7 +207,7 @@ function rollSpaceEvent(player, distance, rng = Math.random, ambushContext = nul
     }
 
     case 'derelict_wreck': {
-      const loot = rollSpaceLoot(distance, rng, true);
+      const loot = rollSpaceLoot(distance, rng, true, guildYieldBonusPct);
       return { type: 'derelict_wreck', loot, text: `${pick(DERELICT_WRECK_LINES)} Забираешь ${loot.qty}× ${loot.resource} T${loot.tier}.` };
     }
 
@@ -210,7 +217,7 @@ function rollSpaceEvent(player, distance, rng = Math.random, ambushContext = nul
     }
 
     case 'asteroid_field': {
-      const loot = rollSpaceLoot(distance, rng);
+      const loot = rollSpaceLoot(distance, rng, false, guildYieldBonusPct);
       const hullRisk = 0.25; // шанс повредить корпус при добыче
       return { type: 'asteroid_field', loot, hullRisk, text: pick(ASTEROID_FIELD_LINES) };
     }
