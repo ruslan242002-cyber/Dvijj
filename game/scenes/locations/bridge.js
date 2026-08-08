@@ -16,6 +16,8 @@ const { SHYOPOT_HYPOTHESES_QUEST } = require('../../../quests/narrative/shyopot-
 const { imageForLocation } = require('../../location-images.js');
 const { imageForCurator } = require('../../curator-images.js');
 const { hubMessage, stationButtons, FACTIONS, CITY_UNLOCK_LEVEL, MIN_LEVEL_TO_JOIN_FACTION, canJoinFaction, switchFaction } = require('../common.js');
+const { MENTOR_CLASSES, mentorLevel, classStageForFaction, chooseMentorClass } = require('../../../engine/mentor-classes.js');
+const { applyDerivedStats } = require('../../../engine/derived-stats.js');
 const { SCENES } = require('../ids.js');
 const {
   PASSIVE_SKILLS, passiveSlotsFor, canEquipPassive, equipPassive, unequipPassive, learnPassive, knowsPassive, SLOTS_PER_LEVEL_MILESTONE, MAX_PASSIVE_SLOTS,
@@ -108,8 +110,26 @@ function passiveScreen(player, prefixText = '') {
  * дважды расходились из-за этого в прошлом. Один источник теперь. */
 function bridgeScreen(player, prefixText = '') {
   return {
-    reply: { text: `${prefixText}🎛️ МОСТИК\n\nЗдесь решают судьбу станции.`, buttons: ['Мифология Тракта', 'Пассивки', 'Станция приписки', '⬅️ Назад'], imageKey: imageForLocation('bridge', player.faction) },
+    reply: { text: `${prefixText}🎛️ МОСТИК\n\nЗдесь решают судьбу станции.`, buttons: ['Мифология Тракта', 'Пассивки', 'Станция приписки', 'Класс-наставник', '⬅️ Назад'], imageKey: imageForLocation('bridge', player.faction) },
     nextState: { scene: 'loc_bridge', player }
+  };
+}
+
+/** Класс-наставник — можно учиться у ЛЮБОГО куратора, не только своего
+ * (доказав ему доверие репутацией/квестами его арки), поэтому показывает
+ * все 5 школ разом, а не только родную. */
+function mentorClassScreen(player, prefixText = '') {
+  const lines = FACTIONS.map((faction) => {
+    const cls = MENTOR_CLASSES[faction];
+    const level = mentorLevel(player, faction);
+    const stage = classStageForFaction(player, faction);
+    const isCurrent = player.mentorClass === cls.id;
+    const currentStageData = cls.stages[stage - 1];
+    return `${isCurrent ? '✅' : '◻️'} ${cls.name} — ${cls.role} (${cls.curator})\nУровень наставника: ${level} · Ступень ${stage}/5: «${currentStageData.name}»\n${currentStageData.description}`;
+  });
+  return {
+    reply: { text: `${prefixText}🎓 КЛАСС-НАСТАВНИК\n\nУровень наставника = репутация с фракцией + пройденные квесты его арки. 5 ступеней, каждая — свой именной баф, 5-я — крупная специализация. Смена класса свободна.\n\n${lines.join('\n\n')}`, buttons: [...FACTIONS.map((f) => `Выбрать: ${MENTOR_CLASSES[f].name}`), '⬅️ Назад'] },
+    nextState: { scene: SCENES.MENTOR_CLASS, player }
   };
 }
 
@@ -176,6 +196,9 @@ function handleBridge(state, input, rng, deps) {
       if (input === 'Станция приписки') {
         return factionTransferScreen(state.player);
       }
+      if (input === 'Класс-наставник') {
+        return mentorClassScreen(state.player);
+      }
       return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
     }
 
@@ -199,6 +222,22 @@ function handleBridge(state, input, rng, deps) {
         };
       }
       return factionTransferScreen(state.player);
+    }
+
+    case SCENES.MENTOR_CLASS: {
+      if (input === '⬅️ Назад') {
+        return bridgeScreen(state.player);
+      }
+      const classMatch = /^Выбрать: (.+)$/.exec(input);
+      if (classMatch) {
+        const targetFaction = Object.keys(MENTOR_CLASSES).find((f) => MENTOR_CLASSES[f].name === classMatch[1]);
+        if (!targetFaction) return mentorClassScreen(state.player);
+        const player = { ...state.player };
+        chooseMentorClass(player, targetFaction);
+        applyDerivedStats(player);
+        return mentorClassScreen(player, `Класс сменён: ${MENTOR_CLASSES[targetFaction].name}.\n\n`);
+      }
+      return mentorClassScreen(state.player);
     }
 
     case SCENES.PASSIVE_MANAGEMENT: {
