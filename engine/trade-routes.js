@@ -21,14 +21,20 @@
  * реальный баланс, если оригинальные цифры были другие. Также: маршруты
  * пока покрывают только 4 из 5 фракций — Кузницы среди ROUTES нет вовсе,
  * это не обрезание архивом, а пробел в самой системе.
+ *
+ * ДОБАВЛЕНО reward.reputation — при сверке с реальным game/scenes/market.js
+ * оказалось, что сцена сдачи маршрута читает result.reward.reputation
+ * (addFactionReputation), которого в моей первой реконструкции не было
+ * вообще — обращение к undefined. Значения (6 для T2, 8 для T3) — тоже
+ * моя оценка, ПРОВЕРЬ так же, как qty/credits.
  */
 const ROUTES = [
-  { id: 'route_priyut_terminus', from: 'Приют', to: 'Терминус', resource: 'Биомасса', tier: 2, qty: 6, reward: { credits: 180 } },
-  { id: 'route_terminus_arsenal', from: 'Терминус', to: 'Арсенал', resource: 'Реголит', tier: 2, qty: 6, reward: { credits: 180 } },
-  { id: 'route_arsenal_vual', from: 'Арсенал', to: 'Вуаль', resource: 'Изотопы', tier: 2, qty: 6, reward: { credits: 180 } },
-  { id: 'route_vual_priyut', from: 'Вуаль', to: 'Приют', resource: 'Полимеры', tier: 2, qty: 6, reward: { credits: 180 } },
-  { id: 'route_terminus_priyut', from: 'Терминус', to: 'Приют', resource: 'Сплавы', tier: 2, qty: 6, reward: { credits: 180 } },
-  { id: 'route_vual_arsenal', from: 'Вуаль', to: 'Арсенал', resource: 'Изотопы', tier: 3, qty: 5, reward: { credits: 220 } },
+  { id: 'route_priyut_terminus', from: 'Приют', to: 'Терминус', resource: 'Биомасса', tier: 2, qty: 6, reward: { credits: 180, reputation: 6 } },
+  { id: 'route_terminus_arsenal', from: 'Терминус', to: 'Арсенал', resource: 'Реголит', tier: 2, qty: 6, reward: { credits: 180, reputation: 6 } },
+  { id: 'route_arsenal_vual', from: 'Арсенал', to: 'Вуаль', resource: 'Изотопы', tier: 2, qty: 6, reward: { credits: 180, reputation: 6 } },
+  { id: 'route_vual_priyut', from: 'Вуаль', to: 'Приют', resource: 'Полимеры', tier: 2, qty: 6, reward: { credits: 180, reputation: 6 } },
+  { id: 'route_terminus_priyut', from: 'Терминус', to: 'Приют', resource: 'Сплавы', tier: 2, qty: 6, reward: { credits: 180, reputation: 6 } },
+  { id: 'route_vual_arsenal', from: 'Вуаль', to: 'Арсенал', resource: 'Изотопы', tier: 3, qty: 5, reward: { credits: 220, reputation: 8 } },
 ];
 
 function routesFrom(station) {
