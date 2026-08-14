@@ -1,6 +1,6 @@
 'use strict';
 
-const { findBoss } = require('../../bosses/boss-data.js');
+const { findBoss, allBossIds } = require('../../bosses/boss-data.js');
 const { spawnBossInstance, resolvePlayerVsBoss, distributeRewards, shouldSpawnBoss } = require('../../bosses/boss-engine.js');
 const { SKILLS } = require('../../engine/skills-data.js');
 const { hubMessage, stationButtons, skillButtons, skillIdByName, skillCooldownNote } = require('./common.js');
@@ -10,10 +10,35 @@ const { grantXp } = require('../../engine/leveling.js');
 const { activeGuildBonuses } = require('../../guilds/guild-levels.js');
 const { logWorldEvent } = require('../../lib/world-feed.js');
 const { logEconomyEvent, EVENT_TYPES } = require('../../lib/economy-audit.js');
+const { notifyPlayer } = require('../../lib/notifications.js');
 const { SCENES } = require('./ids.js');
 
 const BOSS_SLOT = 'default';
-const ACTIVE_BOSS_ID = 'test_colossus'; // единственный существующий на сейчас — сменится/расширится с реальными боссами
+// Раньше — единственный ACTIVE_BOSS_ID='test_colossus'. Теперь 11 реальных
+// боссов (bosses/boss-data.js — адаптер над engine/world-bosses/), у
+// каждого СВОЙ таймер респавна (bossId используется как slot-ключ в
+// bossStore вместо общего 'default' — getLastDefeatedAt/setLastDefeatedAt
+// уже принимают произвольный slot, ничего менять в сторе не пришлось).
+
+/** Выбирает случайного среди боссов, чей персональный таймер респавна уже
+ *  истёк. Если ни один не готов — возвращает null и ближайшее время
+ *  ожидания (для текста "никто не потревожил Периферию"). */
+async function pickReadyBoss(deps) {
+  const ready = [];
+  let soonestHoursLeft = Infinity;
+  for (const bossId of allBossIds()) {
+    const boss = findBoss(bossId);
+    const lastDefeated = await deps.bossStore.getLastDefeatedAt(bossId);
+    if (shouldSpawnBoss(bossId, lastDefeated)) {
+      ready.push(bossId);
+    } else if (boss.respawnMinHours < 999999) {
+      const hoursLeft = Math.max(0, boss.respawnMinHours - (Date.now() - lastDefeated) / 3600000);
+      soonestHoursLeft = Math.min(soonestHoursLeft, hoursLeft);
+    }
+  }
+  if (!ready.length) return { bossId: null, soonestHoursLeft: soonestHoursLeft === Infinity ? null : Math.round(soonestHoursLeft) };
+  return { bossId: ready[Math.floor(Math.random() * ready.length)], soonestHoursLeft: null };
+}
 
 function hpBar(current, max, width = 20) {
   const filled = Math.round((current / max) * width);
@@ -41,15 +66,13 @@ async function bossHub(deps, player, playerId, prefixText = '') {
 
   let instance = await deps.bossStore.getActiveBoss(BOSS_SLOT);
   if (!instance) {
-    const lastDefeated = await deps.bossStore.getLastDefeatedAt(BOSS_SLOT);
-    if (shouldSpawnBoss(ACTIVE_BOSS_ID, lastDefeated)) {
-      instance = spawnBossInstance(ACTIVE_BOSS_ID);
+    const { bossId, soonestHoursLeft } = await pickReadyBoss(deps);
+    if (bossId) {
+      instance = spawnBossInstance(bossId);
       await deps.bossStore.saveBoss(instance, BOSS_SLOT);
     } else {
-      const boss = findBoss(ACTIVE_BOSS_ID);
-      const hoursLeft = Math.max(0, Math.round(boss.respawnMinHours - (Date.now() - lastDefeated) / 3600000));
       return {
-        reply: { text: `${prefixText}👹 МИРОВОЙ БОСС\n\nСейчас никто не потревожил Периферию. Ожидаемое появление — не раньше чем через ~${hoursLeft} ч.`, buttons: ['⬅️ Назад'] },
+        reply: { text: `${prefixText}👹 МИРОВОЙ БОСС\n\nСейчас никто не потревожил Периферию. Ожидаемое появление — не раньше чем через ~${soonestHoursLeft ?? '?'} ч.`, buttons: ['⬅️ Назад'] },
         nextState: { scene: 'station', player }
       };
     }
@@ -112,7 +135,7 @@ async function handleBoss(state, input, rng, deps, playerId) {
 
     if (result.bossDefeated) {
       await deps.bossStore.saveBoss(instance, BOSS_SLOT);
-      await deps.bossStore.setLastDefeatedAt(BOSS_SLOT, Date.now());
+      await deps.bossStore.setLastDefeatedAt(instance.bossId, Date.now());
       const rewards = distributeRewards(instance);
       for (const [pid, reward] of Object.entries(rewards)) {
         logEconomyEvent(deps, { type: EVENT_TYPES.BOSS_REWARD, playerId: pid, credits: reward.credits, note: 'world_boss_victory' }).catch(() => {});
@@ -126,6 +149,10 @@ async function handleBoss(state, input, rng, deps, playerId) {
           otherState.player.credits = (otherState.player.credits || 0) + reward.credits;
           grantXp(otherState.player, reward.xp);
           await deps.store.set(pid, otherState).catch(() => {});
+          // Уведомляем именно тех, кто не в игре прямо сейчас (текущий
+          // playerId уже видит результат в основном ответе ниже, дублировать
+          // ему push бессмысленно).
+          notifyPlayer(deps, pid, `🎉 Мировой босс повержен! Твоя доля: +${reward.credits} кредитов, +${reward.xp} опыта.`).catch(() => {});
         }
       }
       const myReward = rewards[playerId];
