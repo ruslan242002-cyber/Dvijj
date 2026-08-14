@@ -12,6 +12,7 @@ const { grantXp } = require('../../engine/leveling.js');
 const { activeGuildBonuses } = require('../../guilds/guild-levels.js');
 const { logWorldEvent } = require('../../lib/world-feed.js');
 const { logEconomyEvent, EVENT_TYPES } = require('../../lib/economy-audit.js');
+const { notifyPlayer } = require('../../lib/notifications.js');
 const { SCENES } = require('./ids.js');
 
 const RAID_SLOT = 'default';
@@ -213,6 +214,7 @@ async function handleRaid(state, input, rng, deps, playerId) {
               otherState.player.credits = (otherState.player.credits || 0) + credits;
               grantXp(otherState.player, xp);
               await deps.store.set(pid, otherState).catch(() => {});
+              notifyPlayer(deps, pid, `🎉 Отряд повержил ${boss.name}! Твоя доля: +${credits} кредитов, +${xp} опыта.`).catch(() => {});
             }
           }
           if (myResultText) return myResultText;
