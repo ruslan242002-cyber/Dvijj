@@ -63,24 +63,14 @@ function tierForZone(zone, rng, playerLevel = 1) {
 // вылазке (exploration.js: find/node/cache) — патч здесь покрывает всё
 // разом.
 const TESTING_MODE = true;
-require('../lib/testing-mode-guard.js').assertNotProductionTesting(TESTING_MODE, 'exploration-engine.js');
 const TESTING_LOOT_MULTIPLIER = 500;
 
-/**
- * guildYieldBonusPct (в процентных пунктах, по умолчанию 0) — бонус от
- * 2-го уровня гильд-апгрейда (guilds/guild-levels.js: explorationYieldPct),
- * передаётся явно вызывающим кодом (game/scenes/exploration.js), а не
- * читается отсюда — тот же принцип, что и feeDiscount в
- * market-engine.js: движок вылазки не должен знать о гильдиях напрямую.
- * Применяется ТОЛЬКО к qty ресурса (это бонус к добыче), не к credits.
- */
-function rollLoot(zone, rng = Math.random, playerLevel = 1, theme = null, guildYieldBonusPct = 0) {
+function rollLoot(zone, rng = Math.random, playerLevel = 1, theme = null) {
   const resource = theme ? pickResourceForTheme(RESOURCES, theme, rng) : RESOURCES[Math.floor(rng() * RESOURCES.length)];
   const tier = tierForZone(zone, rng, playerLevel);
   let qty = 1 + Math.floor(rng() * 4);
   let credits = Math.round((10 + rng() * 40) * tier);
   if (TESTING_MODE) { qty *= TESTING_LOOT_MULTIPLIER; credits *= TESTING_LOOT_MULTIPLIER; }
-  if (guildYieldBonusPct > 0) { qty = Math.round(qty * (1 + guildYieldBonusPct / 100)); }
   return { resource, tier, qty, credits };
 }
 
