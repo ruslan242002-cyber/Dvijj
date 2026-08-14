@@ -17,19 +17,19 @@
  * и риска".
  */
 
-const FUEL_PER_STEP_MIN = 2;           // топливо за один шаг вглубь — случайно 2-5
+const FUEL_PER_STEP_MIN = 2;                 // топливо за один шаг вглубь — случайно 2-5
 const FUEL_PER_STEP_MAX = 5;
-const FUEL_PRICE_PER_UNIT = 2;         // цена дозаправки — 2 кредита за единицу топлива
-const TANK_UPGRADE_FUEL_BONUS = 20;    // на сколько расширяет бак один апгрейд (см. game/scenes/locations/repair.js)
+const FUEL_PRICE_PER_UNIT = 2;               // цена дозаправки — 2 кредита за единицу топлива
+const TANK_UPGRADE_FUEL_BONUS = 20;          // на сколько расширяет бак один апгрейд (см. game/scenes/locations/repair.js)
 
-const REWARD_PER_STEP = 0.15;          // +15% к добыче рейса за шаг дальности
+const REWARD_PER_STEP = 0.15;                // +15% к добыче рейса за шаг дальности
 const MAX_REWARD_MULTIPLIER = 4;
 
-const TIER_BONUS_PER_STEPS = 2;        // +1 к потолку тира вражеского корабля за каждые 2 шага
+const TIER_BONUS_PER_STEPS = 2;              // +1 к потолку тира вражеского корабля за каждые 2 шага
 const MAX_TIER_BONUS = 6;
 
-const RETURN_PVP_CHANCE_PER_STEP = 0.04; // +4% шанс PvP-встречи на ОБРАТНОМ пути за шаг дальности
-const MAX_RETURN_PVP_CHANCE = 0.65;      // никогда не 100% — иначе дальние рейсы станут гарантированной смертью, не риском
+const RETURN_PVP_CHANCE_PER_STEP = 0.04;     // +4% шанс PvP-встречи на ОБРАТНОМ пути за шаг дальности
+const MAX_RETURN_PVP_CHANCE = 0.65;          // никогда не 100% — иначе дальние рейсы станут гарантированной ловушкой
 
 function safeDistance(distance) {
   return Math.max(0, distance);
@@ -151,6 +151,13 @@ module.exports = {
   FUEL_PER_STEP_MAX,
   FUEL_PRICE_PER_UNIT,
   TANK_UPGRADE_FUEL_BONUS,
+  REWARD_PER_STEP,
+  MAX_REWARD_MULTIPLIER,
+  TIER_BONUS_PER_STEPS,
+  MAX_TIER_BONUS,
+  RETURN_PVP_CHANCE_PER_STEP,
+  MAX_RETURN_PVP_CHANCE,
+  ZONE_DISTANCE_BANDS,
   fuelCostForStep,
   fuelNeededToReturn,
   actualReturnFuelCost,
@@ -160,7 +167,6 @@ module.exports = {
   distanceRewardMultiplier,
   distanceTierBonus,
   returnTripPvpChance,
-  ZONE_DISTANCE_BANDS,
   zoneForDistance,
   shipLevelRequiredForDistance,
   canFlyToDistance,
