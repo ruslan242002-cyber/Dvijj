@@ -1,7 +1,8 @@
 'use strict';
 
-const { resolveTurn } = require('../engine/combat-engine.js');
+const { resolveTurn, basicAttack } = require('../engine/combat-engine.js');
 const { findBoss } = require('./boss-data.js');
+const { pickBossAction, tickBossCooldowns } = require('../engine/world-bosses/boss-phase-engine.js');
 
 /**
  * ГРУППОВОЙ БОЙ С БОССОМ — общая HP-пуля (bossInstance.hp), не
@@ -65,20 +66,45 @@ function resolvePlayerVsBoss(instance, player, playerId, skill, rng = Math.rando
   }
   instance.participants[playerId].damageDealt += Math.max(0, dmgDealt);
 
-  // Пока не набралось минимум разных участников (boss.minParticipants) —
-  // HP не может упасть ниже "пола" (15% от максимума). Раньше это было
-  // только в комментарии данных, реально нигде не проверялось — один
-  // игрок мог не спеша соло-затащить всю пулю и забрать 100% награды.
-  // Пол не блокирует урон совсем (прогресс всё равно засчитывается и
-  // виден), просто не даёт добить в одиночку.
   const uniqueParticipants = Object.keys(instance.participants).length;
   const hpFloor = uniqueParticipants < boss.minParticipants ? Math.round(instance.hpMax * 0.15) : 0;
   instance.hp = Math.max(hpFloor, instance.hp - Math.max(0, dmgDealt));
   if (instance.hp <= 0) instance.defeated = true;
 
+  // ОТДАЧА БОССА — раньше бой был односторонним (игрок бил, босс молчал).
+  // Это были "обычные усиленные враги", а не безрисковая пуля HP — теперь
+  // босс реально бьёт в ответ и использует именные навыки/фазы (boss.skills,
+  // engine/world-bosses/boss-phase-engine.js), кулдауны хранятся прямо на
+  // instance (persist между вызовами через Redis, как и весь остальной
+  // инстанс). Только если игрок ещё жив и босс не добит — мёртвый босс не
+  // должен успевать ударить в ответ на добивающий удар.
+  let playerAfterCounter = result.attacker;
+  const bossLog = [];
+  if (!instance.defeated && playerAfterCounter.hp > 0 && boss.skills?.length) {
+    instance.bossCooldowns = instance.bossCooldowns || {};
+    instance.bossPhase = instance.bossPhase || 'normal';
+    const bossState = { hpShared: instance.hp, hpMax: instance.hpMax, phase: instance.bossPhase, cooldowns: instance.bossCooldowns };
+    const action = pickBossAction({ ...boss, skills: boss.skills }, bossState, rng);
+    instance.bossPhase = bossState.phase;
+    if (action.phaseEvent) bossLog.push(action.phaseEvent.text);
+
+    if (action.type === 'skill') {
+      const effect = action.skill.run(bossFighter, playerAfterCounter, rng);
+      if (effect?.logText) bossLog.push(effect.logText);
+      instance.bossCooldowns[action.skill.id] = action.skill.cooldown;
+    }
+    instance.bossCooldowns = tickBossCooldowns(instance.bossCooldowns);
+
+    const counter = basicAttack(bossFighter, playerAfterCounter, rng);
+    if (counter.hit && counter.dmg > 0) {
+      playerAfterCounter = { ...playerAfterCounter, hp: Math.max(0, playerAfterCounter.hp - counter.dmg) };
+      bossLog.push(`${boss.name} наносит тебе ${counter.dmg}${counter.crit ? ' (КРИТ)' : ''}.`);
+    }
+  }
+
   return {
-    instance, player: result.attacker, log: result.log,
-    dmgDealt: Math.max(0, dmgDealt), bossDefeated: instance.defeated, playerDefeated: result.attacker.hp <= 0,
+    instance, player: playerAfterCounter, log: [...result.log, ...bossLog],
+    dmgDealt: Math.max(0, dmgDealt), bossDefeated: instance.defeated, playerDefeated: playerAfterCounter.hp <= 0,
   };
 }
 
