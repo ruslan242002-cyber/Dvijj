@@ -341,6 +341,257 @@ loot: [
 { id: 'chip_rare_implant_4', name: 'Нейрочип: Редкий имплант IV', chance: 0.01 },
 ],
   },
+
+  // ── ДОБАВЛЕНО (из engine/enemy-skills/creature-skills.js) — были
+  // именные навыки, но самих существ в бестиарии не было вообще. Тир/
+  // лор/добыча — моя реконструкция под стиль уже существующих записей,
+  // ПРОВЕРЬ перед вводом в игру (навыки в creature-skills.js — реальные,
+  // присланные, эта часть — только лор-обвязка вокруг них).
+
+  incubation_node: {
+    id: 'incubation_node', name: 'Инкубационный узел', danger: 'B', zones: ['red'],
+    lore: 'Полуразумный нарост неясного происхождения, вживлённый в обшивку заброшенных станций. Не двигается сам, но защищает себя искажающим полем — задеть его случайно опаснее, чем напасть осознанно.',
+    tier: DANGER_TIER.B,
+    stats: statsForTier(DANGER_TIER.B, { shielding: 1.3, reaction: 0.5 }),
+    loot: [
+      { id: 'iskazhennaya_tkan', name: 'Искажённая ткань', chance: 0.07 },
+      { id: 'nariv_reagenta', name: 'Нарост реагента', chance: 0.05 },
+      { id: 'chip_shield_1', name: 'Нейрочип: Стойкость щита I', chance: 0.02 },
+    ],
+  },
+  dust_eater_scout: {
+    id: 'dust_eater_scout', name: 'Пылеед-Разведчик', danger: 'E', zones: ['blue'],
+    lore: 'Мелкая падальная форма, зарывается в пылевые наносы и бросается на добычу внезапно. Слабый противник поодиночке — опасен только тем, кто его не заметил вовремя.',
+    tier: DANGER_TIER.E,
+    stats: statsForTier(DANGER_TIER.E, { reaction: 1.3 }),
+    loot: [
+      { id: 'pylevoy_pancir', name: 'Пылевой панцирь', chance: 0.11 },
+      { id: 'peschanaya_zheleza', name: 'Песчаная железа', chance: 0.06 },
+    ],
+  },
+  devastator_mk7: {
+    id: 'devastator_mk7', name: 'Опустошитель МК-7', danger: 'B', zones: ['red'],
+    lore: 'Довоенная боевая платформа, давно потерявшая связь с командованием, но не переставшая выполнять последний приказ — зачистка сектора. Ракетный залп на разогреве слышно издалека.',
+    tier: DANGER_TIER.B,
+    stats: statsForTier(DANGER_TIER.B, { firepower: 1.3, endurance: 1.2 }),
+    loot: [
+      { id: 'raketniy_modul', name: 'Ракетный модуль', chance: 0.06 },
+      { id: 'plazm_rezak', name: 'Плазменный резак (компонент)', chance: 0.04 },
+      { id: 'chip_firepower_2', name: 'Нейрочип: Огневая мощь II', chance: 0.02 },
+    ],
+  },
+  perimeter_render: {
+    id: 'perimeter_render', name: 'Рватель Периметра', danger: 'B', zones: ['red'],
+    lore: 'Существо, живущее на границе искривлённых зон — само тело слегка не совпадает с окружающим пространством. Гравитационные искажения вокруг него мешают прицелиться.',
+    tier: DANGER_TIER.B,
+    stats: statsForTier(DANGER_TIER.B, { mind: 1.2, shielding: 0.9 }),
+    loot: [
+      { id: 'iskrivl_membrana', name: 'Искривлённая мембрана', chance: 0.07 },
+      { id: 'bioenerg_zheleza', name: 'Биоэнергетическая железа', chance: 0.05 },
+    ],
+  },
+  berth_listener: {
+    id: 'berth_listener', name: 'Причальный Слушатель', danger: 'C', zones: ['yellow'],
+    lore: 'Обитает у заброшенных причалов, улавливая отголоски старых переговоров и сигналов — некоторые пилоты клянутся, что слышали от него собственный голос.',
+    tier: DANGER_TIER.C,
+    stats: statsForTier(DANGER_TIER.C, { mind: 1.15 }),
+    loot: [
+      { id: 'rezonans_membrana', name: 'Резонансная мембрана', chance: 0.08 },
+      { id: 'echo_organ', name: 'Эхо-орган', chance: 0.05 },
+    ],
+  },
+  arsenal_scrap_crab: {
+    id: 'arsenal_scrap_crab', name: 'Мусорщик-Краб Арсенала', danger: 'D', zones: ['blue'],
+    lore: 'Промышленный утилизатор, переоборудованный из старого сборочного дрона — режущими клешнями разбирает всё, что найдёт, включая незваных гостей. Взрывной модуль — заводской дефект, не фича.',
+    tier: DANGER_TIER.D,
+    stats: statsForTier(DANGER_TIER.D, { power: 1.15, shielding: 1.1 }),
+    loot: [
+      { id: 'rezh_klesnya', name: 'Режущая клешня', chance: 0.09 },
+      { id: 'utiliz_modul', name: 'Утилизационный модуль', chance: 0.05 },
+    ],
+  },
+  arsenal_rusty_dummy: {
+    id: 'arsenal_rusty_dummy', name: 'Ржавый Манекен Арсенала', danger: 'C', zones: ['yellow'],
+    lore: 'Учебная мишень военных полигонов Арсенала, давно потерявшая протокол остановки — продолжает "тренировать" боевой протокол на всём, что движется в радиусе сенсоров.',
+    tier: DANGER_TIER.C,
+    stats: statsForTier(DANGER_TIER.C, { firepower: 1.1, shielding: 1.15 }),
+    loot: [
+      { id: 'ucheb_modul', name: 'Учебный модуль наведения', chance: 0.08 },
+      { id: 'poligon_bronya', name: 'Полигонная броня (лом)', chance: 0.06 },
+    ],
+  },
+  crystal_rupturer: {
+    id: 'crystal_rupturer', name: 'Кристаллический Разрывник', danger: 'B', zones: ['red'],
+    lore: 'Кристаллическая форма жизни, растущая прямо в корпусах разбитых кораблей — резкий фазовый удар способен пробить обшивку не хуже прямого попадания.',
+    tier: DANGER_TIER.B,
+    stats: statsForTier(DANGER_TIER.B, { power: 1.25, firepower: 1.15 }),
+    loot: [
+      { id: 'krist_oskolok', name: 'Кристаллический осколок', chance: 0.08 },
+      { id: 'razryv_yadro', name: 'Ядро разрыва', chance: 0.05 },
+    ],
+  },
+  burrower_render: {
+    id: 'burrower_render', name: 'Буресос-Разрыватель', danger: 'B', zones: ['red'],
+    lore: 'Роет тоннели прямо в астероидных полях, вылетая внезапно из-под обломков. Сейсмический удар при выходе на поверхность способен сбить с курса даже тяжёлый корабль.',
+    tier: DANGER_TIER.B,
+    stats: statsForTier(DANGER_TIER.B, { power: 1.3, endurance: 1.15 }),
+    loot: [
+      { id: 'buriln_koget', name: 'Бурильный коготь', chance: 0.08 },
+      { id: 'seysm_zheleza', name: 'Сейсмическая железа', chance: 0.05 },
+    ],
+  },
+  squat_mimoid: {
+    id: 'squat_mimoid', name: 'Сквот-Мимоид', danger: 'E', zones: ['blue'],
+    lore: 'Мимикрирует под обломки и мусор дрейфующих полей — большинство пилотов пролетают мимо, даже не заметив, что "мусор" только что моргнул.',
+    tier: DANGER_TIER.E,
+    stats: statsForTier(DANGER_TIER.E, { reaction: 1.2, shielding: 0.7 }),
+    loot: [
+      { id: 'mimikr_tkan', name: 'Мимикрирующая ткань', chance: 0.10 },
+      { id: 'oblomochniy_pancir', name: 'Обломочный панцирь', chance: 0.06 },
+    ],
+  },
+  joint_burser: {
+    id: 'joint_burser', name: 'Бурсер Стыков', danger: 'B', zones: ['red'],
+    lore: 'Гнездится в стыковочных узлах заброшенных станций — пульсирующие нарывы на теле выделяют структурно-разъедающее вещество, разрушающее даже бронированную обшивку.',
+    tier: DANGER_TIER.B,
+    stats: statsForTier(DANGER_TIER.B, { endurance: 1.25, shielding: 1.1 }),
+    loot: [
+      { id: 'stykov_nariv', name: 'Стыковочный нарыв', chance: 0.07 },
+      { id: 'razyed_veschestvo', name: 'Разъедающее вещество', chance: 0.05 },
+    ],
+  },
+  shadow_wailer: {
+    id: 'shadow_wailer', name: 'Теневой Плачун', danger: 'B', zones: ['red'],
+    lore: 'Издаёт крик, парализующий концентрацию ещё до самого удара — пилоты Кладбища флота называют его крик "последним, что слышишь перед тем, как перестаёшь целиться".',
+    tier: DANGER_TIER.B,
+    stats: statsForTier(DANGER_TIER.B, { reaction: 1.3, mind: 1.1 }),
+    loot: [
+      { id: 'plach_organ', name: 'Орган плача', chance: 0.07 },
+      { id: 'tenevoy_fragment', name: 'Теневой фрагмент', chance: 0.05 },
+    ],
+  },
+  tanvir_ashwalker: {
+    id: 'tanvir_ashwalker', name: 'Пеплоход Танвира', danger: 'C', zones: ['yellow'],
+    lore: 'Территориальный хищник спорного периметра Танвир — метит границы пепельными выбросами, яростно защищая застолблённый участок от любого, кто пересёк черту.',
+    tier: DANGER_TIER.C,
+    stats: statsForTier(DANGER_TIER.C, { power: 1.15, endurance: 1.1 }),
+    loot: [
+      { id: 'peplen_zheleza', name: 'Пепельная железа', chance: 0.08 },
+      { id: 'territor_marker', name: 'Территориальный маркер', chance: 0.05 },
+    ],
+  },
+  synapse_render: {
+    id: 'synapse_render', name: 'Разрыватель Синапсов', danger: 'A', zones: ['red'],
+    lore: 'Психонический хищник, бьющий напрямую по нервной системе пилота через корпус корабля — синаптическая дезинтеграция в его исполнении оставляет цель полностью беззащитной на несколько секунд.',
+    tier: DANGER_TIER.A,
+    stats: statsForTier(DANGER_TIER.A, { mind: 1.4, power: 1.1 }),
+    loot: [
+      { id: 'synaps_fragment', name: 'Синаптический фрагмент', chance: 0.06 },
+      { id: 'psiho_yadro', name: 'Психоническое ядро', chance: 0.04 },
+      { id: 'chip_rare_implant_5', name: 'Нейрочип: Редкий имплант V', chance: 0.01 },
+    ],
+  },
+  anchor_sucker: {
+    id: 'anchor_sucker', name: 'Якорный Присос', danger: 'C', zones: ['yellow'],
+    lore: 'Присасывается к корпусу проходящих кораблей у станционных якорных полей — парализующая хватка не даёт вырваться, пока не высосет достаточно энергии.',
+    tier: DANGER_TIER.C,
+    stats: statsForTier(DANGER_TIER.C, { endurance: 1.2, shielding: 1.05 }),
+    loot: [
+      { id: 'prisosn_organ', name: 'Присасывающий орган', chance: 0.08 },
+      { id: 'yakorn_zheleza', name: 'Якорная железа', chance: 0.05 },
+    ],
+  },
+  shadow_range_unit: {
+    id: 'shadow_range_unit', name: 'Теневой Полигонник', danger: 'B', zones: ['red'],
+    lore: 'Автоматизированная турельная платформа с полным боекомплектом и никаких ограничений на применение — дымовая завеса и самодеструкция говорят о том, что сдаваться она не умеет.',
+    tier: DANGER_TIER.B,
+    stats: statsForTier(DANGER_TIER.B, { firepower: 1.35, shielding: 0.9 }),
+    loot: [
+      { id: 'turel_modul', name: 'Турельный модуль', chance: 0.07 },
+      { id: 'boekomplekt', name: 'Боекомплект (лом)', chance: 0.06 },
+      { id: 'chip_firepower_3', name: 'Нейрочип: Огневая мощь III', chance: 0.01 },
+    ],
+  },
+  void_sentinel: {
+    id: 'void_sentinel', name: 'Пустотный Страж', danger: 'B', zones: ['red'],
+    lore: 'Древний конструкт, охраняющий границы искажённых зон — поле искажения вокруг него делает прицеливание почти бесполезным на средней дистанции.',
+    tier: DANGER_TIER.B,
+    stats: statsForTier(DANGER_TIER.B, { shielding: 1.25, mind: 1.15 }),
+    loot: [
+      { id: 'pustot_fragment_strazha', name: 'Фрагмент пустотного стража', chance: 0.07 },
+      { id: 'iskazhen_yadro', name: 'Искажённое ядро', chance: 0.05 },
+    ],
+  },
+  void_whisper: {
+    id: 'void_whisper', name: 'Шёпот Пустоты', danger: 'E', zones: ['blue'],
+    lore: 'Слабый, но навязчивый паразит акустических полей — его "шёпот" забивает связь помехами, пока не отобьёшь его подальше от корпуса.',
+    tier: DANGER_TIER.E,
+    stats: statsForTier(DANGER_TIER.E, { mind: 1.1 }),
+    loot: [
+      { id: 'akustich_zheleza', name: 'Акустическая железа', chance: 0.10 },
+      { id: 'shepot_fragment', name: 'Фрагмент шёпота', chance: 0.06 },
+    ],
+  },
+  sandgulper_scorcher: {
+    id: 'sandgulper_scorcher', name: 'Пескоглот-Выжигатель', danger: 'B', zones: ['red'],
+    lore: 'Роется в раскалённых песках красных зон, оставляя за собой оплавленный след — термальный рывок при атаке способен поджечь обшивку с одного соприкосновения.',
+    tier: DANGER_TIER.B,
+    stats: statsForTier(DANGER_TIER.B, { power: 1.3, firepower: 1.2 }),
+    loot: [
+      { id: 'oplavl_pancir', name: 'Оплавленный панцирь', chance: 0.07 },
+      { id: 'vyzhig_zheleza', name: 'Выжигающая железа', chance: 0.05 },
+    ],
+  },
+  arsenal_thrower_clicker: {
+    id: 'arsenal_thrower_clicker', name: 'Метатель-Щелкун Арсенала', danger: 'D', zones: ['blue'],
+    lore: 'Мелкий боевой дрон Арсенала, действующий стаями — по отдельности слаб, но синхронизация стаи заметно повышает боеспособность выживших особей.',
+    tier: DANGER_TIER.D,
+    stats: statsForTier(DANGER_TIER.D, { reaction: 1.25 }),
+    loot: [
+      { id: 'metat_modul', name: 'Метательный модуль', chance: 0.09 },
+      { id: 'stayn_chip', name: 'Стайный чип синхронизации', chance: 0.05 },
+    ],
+  },
+  sand_clicker: {
+    id: 'sand_clicker', name: 'Песчаный Щелкун', danger: 'E', zones: ['blue'],
+    lore: 'Самый распространённый обитатель патрулируемой зоны — пугливый и слабый, кусается только с испугу.',
+    tier: DANGER_TIER.E,
+    stats: statsForTier(DANGER_TIER.E, { reaction: 1.1 }),
+    loot: [
+      { id: 'peschan_pancir', name: 'Песчаный панцирь', chance: 0.12 },
+      { id: 'schelkun_zheleza', name: 'Железа щелкуна', chance: 0.06 },
+    ],
+  },
+  border_crawler: {
+    id: 'border_crawler', name: 'Граничный Ползун', danger: 'E', zones: ['blue'],
+    lore: 'Держится у границ безопасных секторов, готовый скрыться при первом же признаке серьёзного сопротивления — тревожный отход у него отработан до автоматизма.',
+    tier: DANGER_TIER.E,
+    stats: statsForTier(DANGER_TIER.E, { reaction: 1.25 }),
+    loot: [
+      { id: 'granich_pancir', name: 'Граничный панцирь', chance: 0.10 },
+      { id: 'polzun_zheleza', name: 'Железа ползуна', chance: 0.06 },
+    ],
+  },
+  sand_swivel: {
+    id: 'sand_swivel', name: 'Песчаный Вертлюг', danger: 'C', zones: ['yellow'],
+    lore: 'Крупная песчаная форма с вращающимся хвостовым сегментом — хвостовая волна сбивает с ног (и с курса) любого, кто подошёл слишком близко.',
+    tier: DANGER_TIER.C,
+    stats: statsForTier(DANGER_TIER.C, { power: 1.15, reaction: 1.1 }),
+    loot: [
+      { id: 'vertlyug_segment', name: 'Сегмент вертлюга', chance: 0.08 },
+      { id: 'hvost_zheleza', name: 'Хвостовая железа', chance: 0.05 },
+    ],
+  },
+  shard_shepherd: {
+    id: 'shard_shepherd', name: 'Осколочный Пастырь', danger: 'C', zones: ['yellow'],
+    lore: 'Собирает и удерживает вокруг себя рой мелких резонансных осколков, направляя их на цель резонансными ловушками — рой не опасен сам по себе, но координация роя делает пастыря живучим.',
+    tier: DANGER_TIER.C,
+    stats: statsForTier(DANGER_TIER.C, { mind: 1.15, shielding: 1.1 }),
+    loot: [
+      { id: 'rezonans_oskolok', name: 'Резонансный осколок', chance: 0.08 },
+      { id: 'pastyr_zheleza', name: 'Железа пастыря', chance: 0.05 },
+    ],
+  },
 };
 
 /** Особая добыча по имени врага — вызывается из resolveCombatTurn в
