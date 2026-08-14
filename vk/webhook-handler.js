@@ -3,9 +3,10 @@
 const { step } = require('../game/router.js');
 const { broadcastToAllPlayers } = require('../lib/broadcast.js');
 const { backupPlayerState } = require('../lib/player-backup.js');
+const { markEventProcessedOnce } = require('../lib/idempotency.js');
 
 async function handleVkEvent(body, deps) {
-  const { store, vk, rng = Math.random, confirmationCode, secret, getProfileLink, resolveEnemyImage, marketStore, pvpStore, ambushStore, knownPlayersStore, veinStore, redis } = deps;
+  const { store, vk, rng = Math.random, confirmationCode, secret, getProfileLink, resolveEnemyImage, marketStore, pvpStore, ambushStore, knownPlayersStore, veinStore, bossStore, raidStore, guildStore, redis } = deps;
 
   if (body.type === 'confirmation') {
     return confirmationCode || '';
@@ -20,6 +21,20 @@ async function handleVkEvent(body, deps) {
     const peerId = message.peer_id ?? message.from_id;
     const text = message.text || '';
 
+    // ИДЕМПОТЕНТНОСТЬ (lib/idempotency.js) — отдельно от player-lock.js
+    // ниже: тот не даёт двум запросам выполниться ОДНОВРЕМЕННО, это не
+    // даёт ОДНО И ТО ЖЕ событие VK обработать ДВАЖДЫ при повторной
+    // доставке (VK ретраит, если не получил 'ok' вовремя — может
+    // случиться уже после того, как первая попытка успешно завершилась
+    // и лок давно снят). message.id — то, что VK и так гарантирует
+    // уникальным и монотонным в рамках сообщества, отдельный event_id
+    // изобретать не нужно. Проверяем ДО store.get и вообще ДО любого
+    // побочного эффекта — если это повтор, просто тихо подтверждаем.
+    const isFirstDelivery = await markEventProcessedOnce({ redis }, message.id);
+    if (!isFirstDelivery) {
+      return 'ok';
+    }
+
     const prevState = await store.get(peerId);
     if (knownPlayersStore) {
       // Не блокируем основной ответ игроку, если трекинг вдруг подведёт —
@@ -32,6 +47,10 @@ async function handleVkEvent(body, deps) {
       pvpStore,
       ambushStore,
       veinStore,
+      bossStore,
+      raidStore,
+      guildStore,
+      redis,
       store,
     };
 
