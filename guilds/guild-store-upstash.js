@@ -76,6 +76,14 @@ return 'OK'
       return redis.hlen(`guild:${guildId}:members`);
     },
 
+    /** Список id всех участников гильдии — нужен для рассылки уведомлений
+     *  (lib/notifications.js: notifyGuildMembers), которую сам стор не
+     *  делает, только отдаёт данные. */
+    async getGuildMemberIds(guildId) {
+      const members = await redis.hgetall(`guild:${guildId}:members`) || {};
+      return Object.keys(members);
+    },
+
     async addToGuildBankAtomic(guildId, amount) {
       return redis.incrby(`guild:${guildId}:bank:credits`, amount);
     },
@@ -177,6 +185,74 @@ return 'OK'
         args
       );
       return { success: result === 'OK', reason: result === 'OK' ? null : result };
+    },
+
+    // ── Guild Projects ── коллективные разовые цели, отдельно от
+    // линейных гильд-апгрейдов выше — можно вести несколько параллельно.
+
+    /** Создаёт запись проекта (status: 'active') — SETNX, чтобы повторный
+     *  запуск того же проекта, пока он ещё активен, не сбросил прогресс. */
+    async startGuildProject(guildId, projectId, requirements) {
+      const statusKey = `guild:${guildId}:project:${projectId}:status`;
+      await redis.set(statusKey, 'active', { nx: true });
+      return { status: await redis.get(statusKey) };
+    },
+
+    async getGuildProject(guildId, projectId) {
+      const status = await redis.get(`guild:${guildId}:project:${projectId}:status`);
+      if (!status) return null;
+      const creditsRaw = await redis.get(`guild:${guildId}:project:${projectId}:credits`);
+      const resourcesRaw = await redis.hgetall(`guild:${guildId}:project:${projectId}:resources`) || {};
+      const resourcesContributed = Object.entries(resourcesRaw).map(([key, qty]) => {
+        const [resource, tier] = key.split(':');
+        return { resource, tier: Number(tier), qty: Number(qty) };
+      });
+      return { status, creditsContributed: Number(creditsRaw) || 0, resourcesContributed };
+    },
+
+    /** Вклад — простой атомарный INCRBY/HINCRBY (Redis сам по себе
+     *  атомарен для одной операции, Lua тут не нужна — гонка возможна
+     *  только на переходе в 'completed', см. completeGuildProjectAtomic). */
+    async contributeToProjectAtomic(guildId, projectId, contribution, playerId) {
+      const contributorsKey = `guild:${guildId}:project:${projectId}:contributors`;
+      if (contribution.type === 'credits') {
+        const total = await redis.incrby(`guild:${guildId}:project:${projectId}:credits`, contribution.amount);
+        await redis.hincrby(contributorsKey, playerId, contribution.amount);
+        return { creditsTotal: total };
+      }
+      const field = `${contribution.resource}:${contribution.tier}`;
+      const total = await redis.hincrby(`guild:${guildId}:project:${projectId}:resources`, field, contribution.qty);
+      await redis.hincrby(contributorsKey, playerId, contribution.qty);
+      return { resourceTotal: total };
+    },
+
+    /** Атомарный переход active -> completed — Lua только здесь, чтобы
+     *  два одновременных вызова tryCompleteProject (двое участников
+     *  проверяют прогресс в одну и ту же секунду) не завершили проект
+     *  дважды (двойная рассылка уведомлений/ленты мира). */
+    async completeGuildProjectAtomic(guildId, projectId) {
+      const script = `
+local statusKey = KEYS[1]
+local completedSetKey = KEYS[2]
+local projectId = ARGV[1]
+local current = redis.call('GET', statusKey)
+if current ~= 'active' then
+  return 0
+end
+redis.call('SET', statusKey, 'completed')
+redis.call('SADD', completedSetKey, projectId)
+return 1
+`;
+      const result = await redis.eval(
+        script,
+        [`guild:${guildId}:project:${projectId}:status`, `guild:${guildId}:completedProjects`],
+        [projectId]
+      );
+      return { success: result === 1 };
+    },
+
+    async getCompletedGuildProjectIds(guildId) {
+      return redis.smembers(`guild:${guildId}:completedProjects`);
     },
   };
 }
