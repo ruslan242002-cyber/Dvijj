@@ -28,6 +28,9 @@ const { getEvacChanceBonus, getRadiationDiscount } = require('../../lib/housing.
 const { pickAnomalyPuzzle, resolvePuzzleAttempt } = require('../../lib/anomaly-puzzles.js');
 const { pickRandomArtifact } = require('../../lib/artifacts.js');
 const { addFactionReputation } = require('../../engine/reputation.js');
+const { rollFactionExclusiveResource } = require('../../engine/faction-resources.js');
+const { activeGuildBonuses } = require('../../guilds/guild-levels.js');
+const { getActiveGuildProjectEffects } = require('../../guilds/guild-projects.js');
 const { discoverHypothesis } = require('../../lore/trakt-mythos.js');
 const { applyConsequence } = require('../../choices/consequence-engine.js');
 const { checkContractProgress } = require('../../contracts/contracts-engine.js');
@@ -37,7 +40,7 @@ const {
   hubMessage, stationButtons, addToInventory, startJourney, buildGuardianEnemy,
   journeyContinueButtons, safeReturnChoice, stormRewardMult,
   ZONE_TRAVEL_PHRASES, STATION_TRAVEL_PHRASES, CURATORS,
-  skillButtons, skillIdByName, skillCooldownNote,
+  skillButtons, skillIdByName, skillCooldownNote, currentStation,
 } = require('./common.js');
 const { SKILLS } = require('../../engine/skills-data.js');
 const { startCooldown, tickCooldowns } = require('../../engine/cooldowns.js');
@@ -53,12 +56,20 @@ const { SCENES } = require('./ids.js');
  * обратно на настоящий player. try/catch — на случай, если реальный файл
  * в будущем снова разъедется по форме с тем, что здесь ожидается.
  */
-function applyConsequenceToPlayer(player, consequenceId) {
+async function applyConsequenceToPlayer(deps, player, consequenceId) {
+  // worldState берётся из ОБЩЕГО стора (lib/world-state-store.js), не из
+  // player.worldState — раньше здесь был реальный баг: последствия вроде
+  // echoBehavior/stationTension писались в каждого игрока отдельно, то
+  // есть у каждого была своя личная "Периферия" вместо общего мира.
+  // Деградирует к пустому объекту без deps.worldStateStore — последствие
+  // всё равно применится (флаги/квесты/репутация — как раньше), просто
+  // мировая часть в этом случае некому будет сохранить.
+  const currentWorldState = deps.worldStateStore ? await deps.worldStateStore.getWorldState() : {};
   const proxyState = {
     player,
     flags: player.flags || {},
     quests: { locked: player.questLocks || [], unlockedEndings: player.unlockedEndings || [] },
-    worldState: player.worldState || {},
+    worldState: currentWorldState,
     factionStanding: player.factionStanding || {},
   };
   try {
@@ -70,8 +81,12 @@ function applyConsequenceToPlayer(player, consequenceId) {
   player.flags = proxyState.flags;
   player.questLocks = proxyState.quests.locked;
   player.unlockedEndings = proxyState.quests.unlockedEndings;
-  player.worldState = proxyState.worldState;
   player.factionStanding = proxyState.factionStanding;
+  if (deps.worldStateStore) {
+    await deps.worldStateStore.applyWorldChange(proxyState.worldState).catch((err) => {
+      console.error('не удалось сохранить глобальное состояние мира:', err.message);
+    });
+  }
   return true;
 }
 
@@ -95,7 +110,35 @@ function returnFromPlanet(player, prefixText = '') {
   return travelScreen(cleanPlayer, distance, prefixText);
 }
 
-function resolveExplorationEvent(player, event, zone, depth, deps, rng, prefixText = '', allowContinue = true) {
+/** Гильдейский бонус к добыче (2-й уровень гильд-апгрейда, guild-levels.js:
+ * explorationYieldPct) — применяется как множитель к уже свёрнутому qty,
+ * не как отдельный параметр rollLoot на каждом пути (event.loot приходит
+ * уже готовым из rollEventWithDepth/rollEvent, которые сами не знают о
+ * гильдиях — тот же принцип разделения, что и везде в проекте). */
+function applyYieldBonus(qty, guildYieldBonusPct) {
+  if (!guildYieldBonusPct || guildYieldBonusPct <= 0) return qty;
+  return Math.round(qty * (1 + guildYieldBonusPct / 100));
+}
+
+/** Читает бонус явно, деградирует тихо без гильдии/deps.guildStore — тот
+ * же паттерн, что guildDamageBonusFor в game/scenes/boss.js. */
+async function guildYieldBonusFor(deps, player) {
+  if (!player.guildId || !deps.guildStore) return 0;
+  const guildLevel = await deps.guildStore.getGuildUpgradeLevel(player.guildId);
+  return activeGuildBonuses(guildLevel).explorationYieldPct;
+}
+
+/** Бонус "Разведывательная сеть" (Guild Projects, не Guild Levels) — тот
+ * же принцип деградации. Отдельная функция, потому что источник другой
+ * (завершённые проекты, не уровень апгрейда) и они складываются, а не
+ * заменяют друг друга. */
+async function guildRareDiscoveryBonusFor(deps, player) {
+  if (!player.guildId || !deps.guildStore) return 0;
+  const effects = await getActiveGuildProjectEffects(deps, player.guildId);
+  return effects.rareDiscoveryBonusPct;
+}
+
+function resolveExplorationEvent(player, event, zone, depth, deps, rng, prefixText = '', allowContinue = true, guildYieldBonusPct = 0) {
   // Радиация теперь чисто временнáя — копится с каждым тиком вылазки
   // (2% за тик), а не от конкретных событий-аномалий. Раньше это было
   // источником "странного" облучения — почему у героя облучение растёт
@@ -136,9 +179,10 @@ function resolveExplorationEvent(player, event, zone, depth, deps, rng, prefixTe
       if (calmedFlag && player.flags?.[calmedFlag] && rng() < 0.5) {
         const loot = rollLoot(zone, rng, player.level || 1);
         const mult = stormRewardMult();
-        addToInventory(player, loot.resource, loot.tier, loot.qty);
+        const qty = applyYieldBonus(loot.qty, guildYieldBonusPct);
+        addToInventory(player, loot.resource, loot.tier, qty);
         player.credits = (player.credits || 0) + Math.round(loot.credits * mult);
-        return safe(`${prefixText}🔭 Здесь непривычно тихо после того, как что-то в этом секторе умолкло навсегда. ${loot.qty}× ${loot.resource} T${loot.tier} находится без сопротивления.`);
+        return safe(`${prefixText}🔭 Здесь непривычно тихо после того, как что-то в этом секторе умолкло навсегда. ${qty}× ${loot.resource} T${loot.tier} находится без сопротивления.`);
       }
 
       // Редкий шанс встретить ИМЕННОГО монстра бестиария вместо обычного
@@ -194,18 +238,20 @@ function resolveExplorationEvent(player, event, zone, depth, deps, rng, prefixTe
           nextState: { scene: 'pre_combat', player, enemy: event.guardEnemy, zone, depth, guardedNode: event }
         };
       }
-      addToInventory(player, event.resource, event.tier, event.charges || 1);
-      checkContractProgress(player, 'loot', { resource: event.resource, amount: event.charges || 1 });
+      const nodeQty = applyYieldBonus(event.charges || 1, guildYieldBonusPct);
+      addToInventory(player, event.resource, event.tier, nodeQty);
+      checkContractProgress(player, 'loot', { resource: event.resource, amount: nodeQty });
       const nodeXp = EXPLORATION_XP_BY_ZONE[zone] || 5;
       grantXp(player, nodeXp);
       const unstableNote = event.nodeState === 'unstable' ? ' (нестабильная — заряды повышены)' : '';
-      return safe(`${prefixText}⛏️ ЗАЛЕЖЬ${unstableNote}\n\n${event.text}\nВ трюм добавлено: ${event.charges || 1}× ${event.resource} T${event.tier}. ✨ +${nodeXp} XP.`);
+      return safe(`${prefixText}⛏️ ЗАЛЕЖЬ${unstableNote}\n\n${event.text}\nВ трюм добавлено: ${nodeQty}× ${event.resource} T${event.tier}. ✨ +${nodeXp} XP.`);
     }
     case 'find': {
       const mult = stormRewardMult();
-      addToInventory(player, event.loot.resource, event.loot.tier, event.loot.qty);
+      const findQty = applyYieldBonus(event.loot.qty, guildYieldBonusPct);
+      addToInventory(player, event.loot.resource, event.loot.tier, findQty);
       player.credits = (player.credits || 0) + Math.round(event.loot.credits * mult);
-      checkContractProgress(player, 'loot', { resource: event.loot.resource, amount: event.loot.qty });
+      checkContractProgress(player, 'loot', { resource: event.loot.resource, amount: findQty });
       const stormNote = mult > 1 ? ` (🌩️ ×${mult} за шторм)` : '';
       const findXp = EXPLORATION_XP_BY_ZONE[zone] || 5;
       grantXp(player, findXp);
@@ -216,9 +262,10 @@ function resolveExplorationEvent(player, event, zone, depth, deps, rng, prefixTe
       let totalCredits = 0;
       const parts = [];
       for (const item of event.items) {
-        addToInventory(player, item.resource, item.tier, item.qty);
+        const cacheQty = applyYieldBonus(item.qty, guildYieldBonusPct);
+        addToInventory(player, item.resource, item.tier, cacheQty);
         totalCredits += Math.round(item.credits * mult);
-        parts.push(`${item.qty}× ${item.resource} T${item.tier}`);
+        parts.push(`${cacheQty}× ${item.resource} T${item.tier}`);
       }
       player.credits = (player.credits || 0) + totalCredits;
       checkContractProgress(player, 'loot', { resource: event.items[0]?.resource, amount: event.items[0]?.qty || 0 });
@@ -306,13 +353,35 @@ function withMicroDiscovery(result, rng) {
   };
 }
 
-function explore(player, zone, rng, deps, stealthMode = false, depth = 0) {
+/** Редкий (8%, см. engine/faction-resources.js) бонусный дроп фракционного
+ * эксклюзивного сырья — доступен ТОЛЬКО в зоне станции, которой он
+ * принадлежит (currentStation учитывает visitingStation, не только
+ * родную фракцию — гость чужой станции тоже может его найти). Тот же
+ * паттерн, что withMicroDiscovery: применяется только когда есть куда
+ * продолжить, не на бой/диалог/конец вылазки. Независимая находка, не
+ * заменяет обычный лут события — добавляется поверх. */
+function withExclusiveResourceBonus(result, player, rng, rareDiscoveryBonusPct = 0) {
+  if (!result || result.nextState?.scene !== 'journey_continue') return result;
+  const stationFaction = currentStation(player);
+  const resource = rollFactionExclusiveResource(stationFaction, rng, rareDiscoveryBonusPct);
+  if (!resource) return result;
+  const bonusPlayer = result.nextState.player;
+  addToInventory(bonusPlayer, resource, 0, 1);
+  return {
+    reply: { ...result.reply, text: `${result.reply.text}\n\n✨ Среди находок — что-то незнакомое, явно фракционного происхождения: ${resource} ×1.` },
+    nextState: { ...result.nextState, player: bonusPlayer }
+  };
+}
+
+async function explore(player, zone, rng, deps, stealthMode = false, depth = 0) {
   player.zoneVisits = player.zoneVisits || { blue: 0, yellow: 0, red: 0 };
   player.zoneVisits[zone] = (player.zoneVisits[zone] || 0) + 1;
   checkContractProgress(player, 'explore', { zone });
 
   const zoneBase = ZONE_WEIGHTS[zone] || ZONE_WEIGHTS.blue;
   const themedWeights = applyThemeWeightBias(zoneBase, player.currentLocationTheme);
+  const guildYieldBonusPct = await guildYieldBonusFor(deps, player);
+  const rareDiscoveryBonusPct = await guildRareDiscoveryBonusFor(deps, player);
 
   if (stealthMode) {
     const spared = Math.round(themedWeights.ambush * 0.6);
@@ -321,11 +390,11 @@ function explore(player, zone, rng, deps, stealthMode = false, depth = 0) {
     if (event.type !== 'ambush') {
       player.stealthLog = [...(player.stealthLog || []), `Уклонение в ${ZONE_LABEL[zone] || zone}`].slice(-5);
     }
-    return withMicroDiscovery(resolveExplorationEvent(player, event, zone, 0, deps, rng, '', false), rng);
+    return withExclusiveResourceBonus(withMicroDiscovery(resolveExplorationEvent(player, event, zone, 0, deps, rng, '', false, guildYieldBonusPct), rng), player, rng, rareDiscoveryBonusPct);
   }
 
   const event = rollEventWithDepth(player, zone, depth, rng, themedWeights, player.currentLocationTheme);
-  return withMicroDiscovery(resolveExplorationEvent(player, event, zone, depth, deps, rng), rng);
+  return withExclusiveResourceBonus(withMicroDiscovery(resolveExplorationEvent(player, event, zone, depth, deps, rng, '', true, guildYieldBonusPct), rng), player, rng, rareDiscoveryBonusPct);
 }
 
 /** Резолвит один полный раунд боя со стаей — умение (или обычная атака)
@@ -375,14 +444,14 @@ function resolvePackAction(state, targetName, skillId, rng, deps) {
   };
 }
 
-function handleExploration(state, input, rng, deps) {
+async function handleExploration(state, input, rng, deps) {
   switch (state.scene) {
     case SCENES.STEALTH_EXPLORE: {
       if (input === '⬅️ Назад') {
         return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
       }
       if (input === 'Уйти в тень') {
-        return explore({ ...state.player }, state.player.zone || 'blue', rng, deps, true);
+        return await explore({ ...state.player }, state.player.zone || 'blue', rng, deps, true);
       }
       return { reply: { text: 'Выбери действие кнопкой ниже.', buttons: ['Уйти в тень', '⬅️ Назад'] }, nextState: state };
     }
@@ -560,7 +629,7 @@ function handleExploration(state, input, rng, deps) {
         };
       }
       if (state.kind === 'explore') {
-        return explore(state.player, state.payload.zone, rng, deps, !!state.payload.stealthMode, state.payload.depth || 0);
+        return await explore(state.player, state.payload.zone, rng, deps, !!state.payload.stealthMode, state.payload.depth || 0);
       }
       // Посещение чужой станции — раньше здесь мутировался player.faction
       // напрямую (тот же эффект, что и полноценная смена фракции, но без
@@ -617,7 +686,8 @@ function handleExploration(state, input, rng, deps) {
           if (toShip) return toShip;
           return { reply: { text: `🛰️ ${result.text}`, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
         }
-        return withMicroDiscovery(resolveExplorationEvent(player, result.blockingEvent, zone, depth || 0, deps, rng, `⚠️ ${result.text}\n\n`), rng);
+        const rareDiscoveryBonusPct = await guildRareDiscoveryBonusFor(deps, player);
+        return withExclusiveResourceBonus(withMicroDiscovery(resolveExplorationEvent(player, result.blockingEvent, zone, depth || 0, deps, rng, `⚠️ ${result.text}\n\n`), rng), player, rng, rareDiscoveryBonusPct);
       }
       if (input === 'Вернуться на станцию') {
         const toShip = returnFromPlanet(player, '🪐 Ты не торопясь идёшь назад к кораблю — вылазка окончена, всё добытое уже в трюме.\n\n');
@@ -652,7 +722,7 @@ function handleExploration(state, input, rng, deps) {
         if (result.reward.flag) { nextPlayer.flags = nextPlayer.flags || {}; nextPlayer.flags[result.reward.flag] = true; }
       }
       if (result.flag) { nextPlayer.flags = nextPlayer.flags || {}; nextPlayer.flags[result.flag] = true; }
-      if (choice.consequenceId) applyConsequenceToPlayer(nextPlayer, choice.consequenceId);
+      if (choice.consequenceId) await applyConsequenceToPlayer(deps, nextPlayer, choice.consequenceId);
       if (event.flag) { nextPlayer.flags = nextPlayer.flags || {}; nextPlayer.flags[event.flag] = true; }
       return safeReturnChoice(result.text || event.text, nextPlayer, zone, depth);
     }
