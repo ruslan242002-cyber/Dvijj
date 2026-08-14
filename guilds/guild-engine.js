@@ -4,6 +4,7 @@ const { GUILD_LIMITS, GUILD_ROLES, GUILD_ERRORS } = require('./guild-data.js');
 const { nextUpgradeCost, levelDef } = require('./guild-levels.js');
 const { logWorldEvent } = require('../lib/world-feed.js');
 const { logEconomyEvent, EVENT_TYPES } = require('../lib/economy-audit.js');
+const { notifyGuildMembers } = require('../lib/notifications.js');
 
 /**
  * ДВИЖОК ГИЛЬДИЙ — архитектурно повторяет market-engine.js: любое действие,
@@ -201,6 +202,8 @@ async function purchaseGuildUpgrade(deps, player) {
   const guild = await store.getGuild(player.guildId).catch(() => null);
   if (guild) {
     logWorldEvent(deps, { type: 'guild_upgrade', text: `Гильдия «${guild.name}» достигла уровня «${purchasedLevelDef.name}».` }).catch(() => {});
+    const memberIds = await store.getGuildMemberIds(player.guildId).catch(() => []);
+    notifyGuildMembers(deps, memberIds, `🏗️ Твоя гильдия «${guild.name}» достигла уровня «${purchasedLevelDef.name}»! Новый бонус уже действует.`, player.id).catch(() => {});
   }
 
   return { newLevel, levelDef: purchasedLevelDef };
