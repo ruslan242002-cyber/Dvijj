@@ -1,0 +1,69 @@
+'use strict';
+
+/**
+ * РЕМОНТ КОРАБЛЯ — раньше нигде не существовал как система (только
+ * `player.ship.hp` менялся боем, чинить его было физически нечем).
+ * Стоимость — за недостающий HP, не за корабль целиком: тот же принцип
+ * "ремонт 5-25% себестоимости", что уже применяется к экипировке
+ * капитана (см. более раннюю экономическую матрицу) — чинить дешевле,
+ * чем строить заново, но не бесплатно, иначе это не sink вообще.
+ *
+ * repairDiscountPct (Guild Projects: "Ремонтный док") — единственный
+ * реальный потребитель этого эффекта, который до этого файла был
+ * мёртвым полем в guild-project-data.js, ни на что не влияющим.
+ */
+const { getActiveGuildProjectEffects } = require('../guilds/guild-projects.js');
+const { logEconomyEvent, EVENT_TYPES } = require('../lib/economy-audit.js');
+
+// Кредитов за 1 единицу недостающего HP корпуса, до скидок. Ship — не
+// экипировка, себестоимость растёт вместе с уровнем корабля (более
+// прокачанный корабль — дороже чинить, тот же принцип, что и с бронёй).
+const BASE_REPAIR_COST_PER_HP = 3;
+
+function repairCostPerHpForLevel(shipLevel = 1) {
+  return BASE_REPAIR_COST_PER_HP * (1 + (shipLevel - 1) * 0.15);
+}
+
+/** Стоимость полного ремонта ДО скидки — используется и для превью в UI,
+ * и внутри repairShip. */
+function fullRepairCost(ship, guildRepairDiscountPct = 0) {
+  const missing = Math.max(0, (ship.hpMax || 0) - (ship.hp || 0));
+  if (missing <= 0) return 0;
+  const perHp = repairCostPerHpForLevel(ship.level || 1);
+  const raw = missing * perHp;
+  return Math.max(0, Math.round(raw * (1 - guildRepairDiscountPct / 100)));
+}
+
+/** Гильдейская скидка на ремонт — та же деградация без гильдии/store,
+ * что и остальные эффекты Guild Projects. */
+async function guildRepairDiscountFor(deps, player) {
+  if (!player.guildId || !deps.guildStore) return 0;
+  const effects = await getActiveGuildProjectEffects(deps, player.guildId);
+  return effects.repairDiscountPct;
+}
+
+/**
+ * Полный ремонт корабля до 100% HP. Не чинит частично — если у игрока
+ * не хватает кредитов на полный ремонт, лучше явно сказать "не хватает",
+ * чем оставить корабль в странном промежуточном состоянии, за которое
+ * непонятно, сколько ещё доплачивать.
+ */
+async function repairShip(deps, player) {
+  if (!player.ship) return { success: false, reason: 'NO_SHIP' };
+  const missing = (player.ship.hpMax || 0) - (player.ship.hp || 0);
+  if (missing <= 0) return { success: false, reason: 'ALREADY_FULL' };
+
+  const discountPct = await guildRepairDiscountFor(deps, player);
+  const cost = fullRepairCost(player.ship, discountPct);
+
+  if ((player.credits || 0) < cost) return { success: false, reason: 'INSUFFICIENT_CREDITS', cost };
+
+  player.credits -= cost;
+  player.ship.hp = player.ship.hpMax;
+
+  logEconomyEvent(deps, { type: EVENT_TYPES.SHIP_REPAIR, playerId: player.id, credits: -cost, note: `ship_level_${player.ship.level || 1}` }).catch(() => {});
+
+  return { success: true, cost, discountPct, healedAmount: missing };
+}
+
+module.exports = { fullRepairCost, repairCostPerHpForLevel, guildRepairDiscountFor, repairShip, BASE_REPAIR_COST_PER_HP };
