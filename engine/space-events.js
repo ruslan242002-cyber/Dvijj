@@ -59,15 +59,9 @@ function pickWeighted(weights, rng) {
 // ⚠️ ТЕСТОВЫЙ РЕЖИМ — тот же множитель, что в engine/exploration-engine.js
 // (rollLoot), но для космической добычи. Убрать вместе с тем флагом.
 const TESTING_MODE = true;
-require('../lib/testing-mode-guard.js').assertNotProductionTesting(TESTING_MODE, 'space-events.js');
 const TESTING_LOOT_MULTIPLIER = 500;
 
-/**
- * guildYieldBonusPct — тот же гильд-бонус, что и в rollLoot()
- * (exploration-engine.js), для космической добычи. Применяется только
- * к qty, не к credits — см. пояснение там же.
- */
-function rollSpaceLoot(distance, rng, preferShipParts = false, guildYieldBonusPct = 0) {
+function rollSpaceLoot(distance, rng, preferShipParts = false) {
   const mult = distanceRewardMultiplier(distance);
   const pool = preferShipParts ? SHIP_PART_RESOURCES : SPACE_RESOURCES;
   const resource = pool[Math.floor(rng() * pool.length)];
@@ -75,7 +69,6 @@ function rollSpaceLoot(distance, rng, preferShipParts = false, guildYieldBonusPc
   let qty = Math.max(1, Math.round((2 + Math.floor(rng() * 3)) * mult));
   let credits = Math.round((10 + tier * 8) * mult);
   if (TESTING_MODE) { qty *= TESTING_LOOT_MULTIPLIER; credits *= TESTING_LOOT_MULTIPLIER; }
-  if (guildYieldBonusPct > 0) { qty = Math.round(qty * (1 + guildYieldBonusPct / 100)); }
   return { resource, tier, qty, credits };
 }
 
@@ -154,7 +147,7 @@ const GRAVITY_ANOMALY_LINES = [
   'Приборы поздно замечают гравитационный карман — корабль ощутимо тянет в сторону, топливо уходит на компенсацию',
 ];
 
-function rollSpaceEvent(player, distance, rng = Math.random, ambushContext = null, guildYieldBonusPct = 0) {
+function rollSpaceEvent(player, distance, rng = Math.random, ambushContext = null) {
   if (ambushContext) {
     const { cellId, neighborCellIds, activeAmbushes } = ambushContext;
     const chance = ambushEncounterChance(cellId, neighborCellIds, activeAmbushes, player.id);
@@ -178,7 +171,7 @@ function rollSpaceEvent(player, distance, rng = Math.random, ambushContext = nul
       return { type: 'empty_space', text: pick(EMPTY_SPACE_LINES) };
 
     case 'hostile_ship': {
-      const enemy = generateHostileShip(distance, player.shipLevel || 1, rng);
+      const enemy = generateHostileShip(distance, player.ship?.level || 1, rng);
       // Часть враждебных встреч приходит с эскортом — не всегда одиночный
       // корабль, иногда цель прикрыта сопровождением (см. "ЦЕЛИ" в
       // референсе: уничтожить катер + уничтожить сопровождение +
@@ -187,7 +180,7 @@ function rollSpaceEvent(player, distance, rng = Math.random, ambushContext = nul
       const hasEscort = rng() < escortChance;
       let escort = null;
       if (hasEscort) {
-        escort = generateHostileShip(distance, player.shipLevel || 1, rng);
+        escort = generateHostileShip(distance, player.ship?.level || 1, rng);
         escort.name = `Эскорт «${escort.name}»`;
         escort.hp = Math.round(escort.hp * 0.7);
         escort.hpMax = escort.hp;
@@ -207,7 +200,7 @@ function rollSpaceEvent(player, distance, rng = Math.random, ambushContext = nul
     }
 
     case 'derelict_wreck': {
-      const loot = rollSpaceLoot(distance, rng, true, guildYieldBonusPct);
+      const loot = rollSpaceLoot(distance, rng, true);
       return { type: 'derelict_wreck', loot, text: `${pick(DERELICT_WRECK_LINES)} Забираешь ${loot.qty}× ${loot.resource} T${loot.tier}.` };
     }
 
@@ -217,7 +210,7 @@ function rollSpaceEvent(player, distance, rng = Math.random, ambushContext = nul
     }
 
     case 'asteroid_field': {
-      const loot = rollSpaceLoot(distance, rng, false, guildYieldBonusPct);
+      const loot = rollSpaceLoot(distance, rng);
       const hullRisk = 0.25; // шанс повредить корпус при добыче
       return { type: 'asteroid_field', loot, hullRisk, text: pick(ASTEROID_FIELD_LINES) };
     }
