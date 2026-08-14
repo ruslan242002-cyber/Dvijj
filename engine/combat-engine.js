@@ -2,29 +2,11 @@
 const { DAMAGE_TYPES, damageTypeForSkill, resistanceMultiplier } = require('./damage-types.js');
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 const DEFAULT_ACCURACY = 0.8, DEFAULT_DODGE = 0.1, DEFAULT_FOCUS = 0.75, CRIT_MULT = 1.5;
-// ── PvP-баланс ──────────────────────────────────────────────────────
-// Все бонусы классов-наставников/фракций считались с прицелом на PvE
-// (выживание группы против боссов) — без поправки они делают дуэли
-// нечестными: танк (Вуаль+Инженер) при равных статах получает ~57%
-// снижения урона + 22% шанс отражения, стеклянная пушка получает
-// вдвое меньше пробития И огребает отражённый урон сверху. SHIELD_CAP_PVP
-// ниже, чем в PvE (60% вместо 85%) — никто не становится
-// неубиваемым. CLASS_FX_DAMPENING_PVP вдвое ослабляет "острые" эффекты
-// (перегрузка/снятие брони/бонус крит-урона/отражение) конкретно в PvP,
-// не трогая базовые статы (огневая мощь/защита/крит-шанс/самолечение
-// остаются как есть — это честный рост силы, не всплеск/наказание).
 const SHIELD_CAP_PVE = 85;
 const SHIELD_CAP_PVP = 60;
 const CLASS_FX_DAMPENING_PVP = 0.5;
 function critChance(luck, bonus = 0) { return clamp(0.05 + luck * 0.003 + bonus, 0, 0.6); }
 
-/** Отражение урона (Инженер, 3+ ступень) — проверяется на защищающейся
- * стороне, не на атакующей. Не снижает исходный урон (защитник всё
- * равно получает удар полностью) — это ДОПОЛНИТЕЛЬНЫЙ встречный урон
- * атакующему, честная плата за агрессию против танка. rng здесь берётся
- * из замыкания basicAttack/useSkill — передаётся явно, не через
- * Math.random напрямую, чтобы боевые логи оставались детерминированными
- * при тестах с seeded rng. */
 function applyReflect(attacker, defender, dmg, rng = Math.random, pvpMode = false) {
   if (defender.reflectChance && rng() < defender.reflectChance * (pvpMode ? CLASS_FX_DAMPENING_PVP : 1) && dmg > 0) {
     const reflected = Math.round(dmg * (defender.reflectPct || 0) * (pvpMode ? CLASS_FX_DAMPENING_PVP : 1));
@@ -42,8 +24,10 @@ function basicAttack(attacker, defender, rng = Math.random, pvpMode = false) {
   const critMult = CRIT_MULT + (attacker.critDamageBonusPct || 0) * (pvpMode ? CLASS_FX_DAMPENING_PVP : 1);
   let dmg = base * (isCrit ? critMult : 1);
   const shieldCap = pvpMode ? SHIELD_CAP_PVP : SHIELD_CAP_PVE;
-  dmg = dmg * (1 - clamp(defender.stats.shielding ?? 0, 0, shieldCap) / 100);
-  dmg *= resistanceMultiplier(defender, DAMAGE_TYPES.KINETIC);
+  const shieldPct = clamp(defender.stats.shielding ?? 0, 0, shieldCap);
+  dmg = dmg * (1 - shieldPct / 100);
+  const resistMult = resistanceMultiplier(defender, DAMAGE_TYPES.KINETIC);
+  dmg *= resistMult;
   const overchargeChance = (attacker.overchargeChance || 0) * (pvpMode ? CLASS_FX_DAMPENING_PVP : 1);
   if (overchargeChance && rng() < overchargeChance) dmg *= 1.5;
   if (isCrit && attacker.critShieldShredPct && defender.stats.shielding != null) {
@@ -51,7 +35,12 @@ function basicAttack(attacker, defender, rng = Math.random, pvpMode = false) {
     defender.stats.shielding = Math.max(0, Math.round(defender.stats.shielding * (1 - shredPct)));
   }
   dmg = applyReflect(attacker, defender, dmg, rng, pvpMode);
-  return { hit: true, dmg: Math.round(dmg), crit: isCrit };
+  return {
+    hit: true, dmg: Math.round(dmg), crit: isCrit,
+    // Разбивка для читаемого текста боя ("Базовый 180 × крит1.5 − щит40% × сопр.0.8 = 116")
+    // — не влияет на расчёт, чисто для лога/карточки боя.
+    breakdown: { base: Math.round(base), critMult: isCrit ? critMult : 1, shieldPct: Math.round(shieldPct), resistMult },
+  };
 }
 function useSkill(attacker, defender, skill, rng = Math.random, pvpMode = false) {
   const chance = skill.usesFocus === false
@@ -83,8 +72,6 @@ function useSkill(attacker, defender, skill, rng = Math.random, pvpMode = false)
     defender.stats.shielding = Math.max(0, defender.stats.shielding - skill.shieldShred);
   }
   let selfHeal = 0;
-  // Целитель (класс-наставник Ирис Вейл) — усиливает ЛЮБОЕ самолечение
-  // умения (и прямое, и лайфстил), не отдельная новая механика.
   const lifestealBonusMult = 1 + (attacker.lifestealBonus || 0);
   if (skill.selfHealPct) selfHeal += Math.round(attacker.hpMax * skill.selfHealPct * lifestealBonusMult);
   if (skill.lifestealPct && dmg > 0) selfHeal += Math.round(dmg * skill.lifestealPct * lifestealBonusMult);
@@ -121,15 +108,8 @@ function tickPeriodic(fighter) {
   fighter.hp = clamp(Math.round(fighter.hp - roundedDot + roundedHot), 0, fighter.hpMax);
   return { totalDot: roundedDot, totalHot: roundedHot };
 }
-const CRIT_VULNERABLE_POINT_SHRED = 2; // крит бьёт в уязвимую точку — немного снижает броню цели навсегда
+const CRIT_VULNERABLE_POINT_SHRED = 2;
 
-/**
- * ЗОНАЛЬНЫЕ МОДИФИКАТОРЫ БОЯ — жёлтая зона: 10% шанс "помехи" (сенсоры
- * сбоят, -10% точности ОБОИМ на этот ход). Красная зона: 20% шанс
- * "резонанса" (случайный урон 5-15 по ОБОИМ, не зависит от щита/брони —
- * это фон, а не атака). Синяя зона — без модификаторов. Один ролл на
- * ход, применяется в resolveTurn() одинаково для игрока и врага.
- */
 const ZONE_MOD_CHANCE = { yellow: 0.1, red: 0.2 };
 function applyZoneMod(zone, rng) {
   if (zone === 'yellow' && rng() < ZONE_MOD_CHANCE.yellow) {
@@ -163,9 +143,6 @@ function resolveTurn({ attacker, defender, stim, skill, zone, rng = Math.random,
     defender.hp = clamp(defender.hp - finalDmg, 0, defender.hpMax);
     if (finalDmg > 0) log.push(`${attacker.name || 'Атакующий'} наносит ${finalDmg} урона${result.crit ? ' (КРИТ)' : ''}.`);
     if (result.crit && finalDmg > 0 && defender.stats?.shielding != null) {
-      // Крит — не просто больше урона, а попадание в уязвимую точку:
-      // немного портит броню цели на оставшийся бой (тот же приём, что и
-      // у shieldShred-умений, не отдельная новая система).
       const before = defender.stats.shielding;
       defender.stats.shielding = Math.max(0, defender.stats.shielding - CRIT_VULNERABLE_POINT_SHRED);
       if (defender.stats.shielding < before) log.push('Удар пришёлся в уязвимую точку — броня повреждена.');
