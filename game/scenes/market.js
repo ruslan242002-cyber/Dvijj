@@ -45,7 +45,9 @@ async function buyFromMarket(deps, player, playerId, listing, qty = listing.qty)
   const nextPlayer = { ...player, credits: proxyBuyer.credits };
   const parsed = parseMarketItemId(listing.itemId);
   if (parsed) addToInventory(nextPlayer, parsed.resource, parsed.tier, purchase.qtyBought);
+  nextPlayer.marketTradeCount = (nextPlayer.marketTradeCount || 0) + 1; // для lib/achievements.js:market_trader — нигде не велось в архиве, завожу здесь
   logEconomyEvent(deps, { type: EVENT_TYPES.MARKET_BUY, playerId, credits: -(listing.price * qty), resource: parsed?.resource, tier: parsed?.tier, qty: purchase.qtyBought }).catch(() => {});
+  if (deps.knownPlayersStore) deps.knownPlayersStore.giveReputation(playerId, listing.sellerId, 'trader').catch(() => {});
   return nextPlayer;
 }
 
@@ -61,6 +63,7 @@ async function sellToMarket(deps, player, playerId, resource, tier, qty, price) 
     player.inventory = item.qty > 0 ? inv : inv.filter((i) => i !== item);
   }
   logEconomyEvent(deps, { type: EVENT_TYPES.MARKET_SELL, playerId, resource, tier, qty: -qty, note: `listed_at_${price}` }).catch(() => {});
+  player.marketTradeCount = (player.marketTradeCount || 0) + 1;
   return listing;
 }
 
@@ -249,6 +252,7 @@ async function handleMarket(state, input, rng, deps, playerId) {
         const newAchievements = checkAchievements(player);
         const achievementsNote = newAchievements.length ? `\n\n${newAchievements.map((a) => `🏆 Достижение: «${a.title}»`).join('\n')}` : '';
         addFactionReputation(player, player.faction, result.reward.reputation);
+        logEconomyEvent(deps, { type: EVENT_TYPES.TRADE_ROUTE_REWARD, playerId, credits: result.reward.credits, note: result.route.id }).catch(() => {});
         return tradeRoutesScreen(player, `🚚 Маршрут сдан! 💳+${result.reward.credits}, ⭐+${result.reward.reputation}.${achievementsNote}\n\n`);
       }
       const takeMatch = /^Взять: → (.+)$/.exec(input);
