@@ -39,6 +39,10 @@ const { handleTravel } = require('./scenes/travel.js');
 const { handleVein } = require('./scenes/vein.js');
 const { shouldCheckSpawn, rollSpawn, randomVeinTier } = require('../engine/vein-spawn-timer.js');
 const { createVein } = require('../engine/resource-vein.js');
+const {
+  shouldCheckSpawn: shouldCheckTractSpawn, rollSpawn: rollTractSpawn,
+  rollTractDuration, rollDeadEndOrigin,
+} = require('../engine/tract-spawn-timer.js');
 
 // scene -> обработчик. Несколько сцен могут указывать на один и тот же
 // модуль (например STATION и DISTRICT_HUB оба идут в handleHub) — каждый
@@ -240,6 +244,30 @@ async function step(state, text, rng = Math.random, deps = {}, playerId = null) 
         }
       } catch (err) {
         console.error('проверка появления жилы упала:', err.message);
+      }
+    }
+
+    // Тот же ленивый принцип — появление временного Тракта из тупиковых
+    // узлов (Разлом Кайлара/Пустошь Табира). Не привязано к тому, где
+    // сейчас игрок — жила проверяется от лица зашедшего на станцию, Тракт
+    // так же: сам факт визита кого угодно на станцию — повод проверить.
+    if (deps.tractStore) {
+      try {
+        const lastTractCheck = await deps.tractStore.getLastSpawnCheckAt();
+        if (shouldCheckTractSpawn(lastTractCheck)) {
+          await deps.tractStore.markSpawnChecked();
+          if (rollTractSpawn(rng)) {
+            const origin = rollDeadEndOrigin(rng);
+            const HOME_NODES = ['priyut', 'vual', 'terminus', 'arsenal', 'kuznitsa'];
+            const destination = HOME_NODES[Math.floor(rng() * HOME_NODES.length)];
+            const duration = rollTractDuration(rng);
+            const stability = 0.4 + rng() * 0.5;
+            const tract = await deps.tractStore.createTemporaryTract({ from: origin, to: destination, durationMs: duration, stability });
+            result.tractJustSpawned = tract;
+          }
+        }
+      } catch (err) {
+        console.error('проверка появления временного Тракта упала:', err.message);
       }
     }
   }
