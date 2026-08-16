@@ -4,10 +4,9 @@
  * Адаптер сюжетных событий world-context -> exploration.js.
  *
  * Dynamic events остаются отдельной системой.
- * Здесь они приводятся к уже существующему контракту exploration.js.
+ * Здесь они приводятся к существующему контракту exploration.js.
  *
- * ВАЖНО:
- * Не создаём новый движок событий и не дублируем combat.
+ * Никакого второго движка событий здесь нет.
  */
 
 function buildDynamicEnemy({
@@ -43,23 +42,18 @@ function buildDynamicEnemy({
       power: Math.round(
         base * 1.1
       ),
-
       mind: Math.round(
         base * 1.1
       ),
-
       reaction: Math.round(
         base * 1.1
       ),
-
       endurance: Math.round(
         base * 1.1
       ),
-
       firepower: Math.round(
         base * 1.25
       ),
-
       shielding: Math.min(
         70,
         Math.round(
@@ -98,12 +92,6 @@ function buildDynamicEnemy({
 
     periodic: [],
 
-    /*
-     * Служебные данные сюжетного боя.
-     * Combat их не использует как боевые характеристики,
-     * но они сохраняются в объекте врага для следующего шага
-     * сюжетной цепочки.
-     */
     ...(fragmentId
       ? {
           fragmentId,
@@ -112,10 +100,6 @@ function buildDynamicEnemy({
   };
 }
 
-/**
- * Переносит награду dynamic-event в формат
- * существующего exploration.js.
- */
 function rewardFields(
   reward = {}
 ) {
@@ -155,23 +139,16 @@ function rewardFields(
 }
 
 /**
- * Превращает одну сюжетную кнопку
- * в существующий формат exploration.
+ * Нормализует один вариант выбора.
  */
 function adaptChoice(
   choice,
-  rng
+  rng,
+  eventFlag = null
 ) {
   const result =
     choice.result || {};
 
-  /*
-   * Самая важная часть:
-   * результат выбора не должен исчезать после нажатия.
-   *
-   * exploration.js после выбора показывает choice.text,
-   * поэтому результат добавляем туда сразу.
-   */
   const visibleText = [
     choice.text,
     result.text,
@@ -199,11 +176,37 @@ function adaptChoice(
     ),
   };
 
+  /*
+   * Локальное последствие конкретного выбора.
+   */
   if (
     result.consequenceId
   ) {
     adapted.consequence =
       result.consequenceId;
+  }
+
+  /*
+   * Флаг самого события.
+   *
+   * Например:
+   * anomaly_whisper_seen
+   *
+   * Он должен применяться независимо от того,
+   * выбрал игрок бой, побег или мирный вариант.
+   */
+  if (
+    eventFlag
+  ) {
+    adapted.eventFlag =
+      eventFlag;
+  }
+
+  if (
+    choice.flag
+  ) {
+    adapted.eventFlag =
+      choice.flag;
   }
 
   if (
@@ -233,17 +236,6 @@ function adaptChoice(
     };
   }
 
-  /*
-   * Некоторые события задают сюжетный
-   * флаг непосредственно на событии.
-   */
-  if (
-    choice.flag
-  ) {
-    adapted.consequence =
-      choice.flag;
-  }
-
   return adapted;
 }
 
@@ -263,11 +255,7 @@ function adaptDynamicEvent(
     event.type
   ) {
     /**
-     * Личное сообщение куратора.
-     *
-     * Был просто story без кнопки,
-     * теперь это нормальное одношаговое
-     * событие exploration.
+     * Сюжетное сообщение.
      */
     case 'story':
       return {
@@ -286,10 +274,14 @@ function adaptDynamicEvent(
 
             result: {
               text:
-                'Сообщение сохранено. Координаты и поручение куратора теперь учитываются в дальнейших событиях.',
+                'Сообщение сохранено. Поручение куратора теперь учитывается в дальнейших событиях.',
             },
 
-            flag:
+            /*
+             * Раньше здесь было `flag`, которое
+             * exploration.js не применял.
+             */
+            consequence:
               event.flag ||
               null,
           },
@@ -313,14 +305,15 @@ function adaptDynamicEvent(
           (choice) =>
             adaptChoice(
               choice,
-              rng
+              rng,
+              event.flag ||
+                null
             )
         ),
       };
 
     /**
-     * Сюжетный выбор,
-     * где один из вариантов ведёт в combat.
+     * Сюжетный выбор с возможным боем.
      */
     case 'combat_choice':
       return {
@@ -336,16 +329,15 @@ function adaptDynamicEvent(
           (choice) =>
             adaptChoice(
               choice,
-              rng
+              rng,
+              event.flag ||
+                null
             )
         ),
       };
 
     /**
-     * Страж фрагмента Тракта.
-     *
-     * Сам бой остаётся существующим combat.
-     * Здесь только передаём ему служебный fragmentId.
+     * Страж фрагмента.
      */
     case 'boss':
       return {
@@ -392,13 +384,15 @@ function adaptDynamicEvent(
           (choice) =>
             adaptChoice(
               choice,
-              rng
+              rng,
+              event.flag ||
+                null
             )
         ),
       };
 
     /**
-     * Сюжетная находка / подтверждение гипотезы.
+     * Сюжетная находка.
      */
     case 'discovery':
       return {
@@ -431,17 +425,18 @@ function adaptDynamicEvent(
                     `hypothesis:${event.hypothesisConfirm}`,
                 }
               : {}),
+
+            ...(event.flag
+              ? {
+                  eventFlag:
+                    event.flag,
+                }
+              : {}),
           },
         ],
       };
 
     default:
-      /*
-       * Неизвестный тип не ломаем.
-       * Возвращаем исходное событие,
-       * чтобы существующая procedural-ветка
-       * могла обработать его своим способом.
-       */
       return event;
   }
 }
