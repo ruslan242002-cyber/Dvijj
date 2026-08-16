@@ -11,2525 +11,796 @@
 const {
   rollEvent, rollLoot, ZONE_WEIGHTS, generateEnemy,
   resolveDistressChoice, resolveResonancePedestal, resolveTerminalHack,
-  resolveEchoPlayback, resolveFragmentGuardian,
-  resolveKailarAnomaly, resolveNeutralEncounter,
-  resolveMicroDiscovery, resolveDeepExploration,
-  resolveDynamicEvent,
+  resolveEchoPlayback, resolveReactionHazard, resolveCorruptedAi,
 } = require('../../engine/exploration-engine.js');
 
+const TICK_RADIATION_GAIN = 2; // % облучения за каждый тик вылазки, независимо от типа события
+const EXPLORATION_XP_BY_ZONE = { blue: 5, yellow: 10, red: 15 }; // скромный опыт за успешные небоевые находки — "чуть-чуть", не замена бою
+const { rollNamedEncounter, buildBestiaryFighter, BESTIARY } = require('../../engine/bestiary.js');
+const { rollEventWithDepth } = require('../../engine/deep-exploration.js');
+const { rollMicroDiscovery, GROUND_DISCOVERIES } = require('../../lib/micro-discovery.js');
+const { resolvePackRound, packStatusText } = require('../../engine/pack-combat.js');
+const { grantXp } = require('../../engine/leveling.js');
+const { travelScreen } = require('./travel.js');
+const { applyThemeWeightBias } = require('../../lib/named-locations.js');
+const { attemptEvacuation } = require('../../engine/evacuation.js');
+const { getEvacChanceBonus, getRadiationDiscount } = require('../../lib/housing.js');
+const { pickAnomalyPuzzle, resolvePuzzleAttempt } = require('../../lib/anomaly-puzzles.js');
+const { pickRandomArtifact } = require('../../lib/artifacts.js');
+const { addFactionReputation } = require('../../engine/reputation.js');
+const { rollFactionExclusiveResource } = require('../../engine/faction-resources.js');
+const { activeGuildBonuses } = require('../../guilds/guild-levels.js');
+const { getActiveGuildProjectEffects } = require('../../guilds/guild-projects.js');
+const { discoverHypothesis } = require('../../lore/trakt-mythos.js');
+const { applyConsequence } = require('../../choices/consequence-engine.js');
+const { checkContractProgress } = require('../../contracts/contracts-engine.js');
+const { imageForEnemy } = require('../enemy-images.js');
+const { imageForLocation } = require('../location-images.js');
 const {
-  addToTripCargo,
-  tripCargoUnits,
-} = require('../../lib/trip-cargo.js');
-
-const {
-  addRadiation,
-} = require('../../lib/radiation.js');
-
-const {
-  getGuildUpgradeLevel,
-} = require('../../guilds/guild-store.js');
-
-const {
-  activeGuildBonuses,
-} = require('../../guilds/guild-levels.js');
-
-const {
-  currentStation,
-  stationButtons,
-  hubMessage,
+  hubMessage, stationButtons, addToInventory, startJourney, buildGuardianEnemy,
+  journeyContinueButtons, safeReturnChoice, stormRewardMult,
+  ZONE_TRAVEL_PHRASES, STATION_TRAVEL_PHRASES, CURATORS,
+  skillButtons, skillIdByName, skillCooldownNote, currentStation,
 } = require('./common.js');
-
-const {
-  travelScreen,
-} = require('./travel.js');
-
-const {
-  SCENES,
-} = require('./ids.js');
-
-const {
-  imageForEnemy,
-  imageForLocation,
-  imageForEvent,
-} = require('../../lib/image-assets.js');
-
-const {
-  applyWorldConsequence,
-} = require('../../lib/consequence-engine.js');
-
-const {
-  getWorldState,
-} = require('../../lib/world-state-store.js');
-
-const {
-  addWorldFeedEvent,
-} = require('../../lib/world-feed.js');
-
-const {
-  addFactionReputation,
-} = require('../../lib/faction-store.js');
-
-const {
-  addGuildResource,
-} = require('../../guilds/guild-store.js');
-
-const {
-  grantXp,
-} = require('../../engine/leveling.js');
-
-const {
-  checkAchievements,
-} = require('../../lib/achievements.js');
-
-const {
-  combatFullCard,
-} = require('../../lib/combat-card.js');
-
-const {
-  shipToFighter,
-  applyFighterResultToShip,
-} = require('../../engine/ship.js');
-
-const {
-  resolveTurn,
-} = require('../../engine/combat-engine.js');
-
-const {
-  logEconomyEvent,
-  EVENT_TYPES,
-} = require('../../lib/economy-audit.js');
-
-const {
-  logWorldEvent,
-} = require('../../lib/world-feed.js');
-
-const {
-  rollSpaceEvent,
-} = require('../../engine/space-events.js');
-
-const {
-  addToInventory,
-} = require('../../lib/inventory.js');
-
-const {
-  getPlayerState,
-  savePlayerState,
-} = require('../../lib/player-store.js');
-
-const {
-  dynamicEventById,
-} = require('../../engine/dynamic-events.js');
-
-const {
-  getNextFragment,
-} = require('../../lore/trakt-fragments.js');
-
-const {
-  updateLoreProgress,
-} = require('../../lore/lore-store.js');
-
-const {
-  getLoreProgress,
-} = require('../../lore/lore-store.js');
-
-const {
-  getHypothesisState,
-} = require('../../lore/hypotheses.js');
-
-const {
-  recordDiscovery,
-} = require('../../lore/discoveries.js');
-
-const {
-  getFaction,
-} = require('../../factions/faction-data.js');
-
-const {
-  getFactionState,
-} = require('../../factions/faction-store.js');
-
-const {
-  getGuild,
-} = require('../../guilds/guild-store.js');
-
-const {
-  guildResourceBalance,
-} = require('../../guilds/guild-store.js');
-
-const {
-  consumeGuildResource,
-} = require('../../guilds/guild-store.js');
-
-const {
-  getPlayer,
-} = require('../../lib/player-store.js');
-
-const {
-  savePlayer,
-} = require('../../lib/player-store.js');
-
-const {
-  nodeById,
-} = require('../../engine/tract-network.js');
-
-
-function zoneWeights(zone) {
-  return ZONE_WEIGHTS[zone] || ZONE_WEIGHTS.yellow;
-}
-
-
-function randomChoice(arr, rng = Math.random) {
-  if (!Array.isArray(arr) || arr.length === 0) return null;
-  return arr[Math.floor(rng() * arr.length)];
-}
-
-
-function normalizeDepth(depth) {
-  const value = Number(depth);
-  if (!Number.isFinite(value) || value < 0) return 0;
-  return Math.floor(value);
-}
-
-
-function explorationImageForZone(zone) {
-  if (zone === 'red') return imageForLocation('red_zone');
-  if (zone === 'yellow') return imageForLocation('yellow_zone');
-  if (zone === 'green') return imageForLocation('green_zone');
-  return imageForLocation('planet');
-}
-
-
-function makeExplorationState(
-  scene,
-  player,
-  zone,
-  depth,
-  extra = {}
-) {
-  return {
-    scene,
-    player,
-    zone,
-    depth: normalizeDepth(depth),
-    ...extra,
-  };
-}
-
-
-function applyLoot(player, loot) {
-  if (!loot) return null;
-
-  const resource = loot.resource || loot.type || loot.name;
-  const tier = loot.tier || 'common';
-  const qty = Number(loot.qty || loot.quantity || 0);
-
-  if (!resource || qty <= 0) return null;
-
-  addToTripCargo(
-    player,
-    resource,
-    tier,
-    qty
-  );
-
-  return {
-    resource,
-    tier,
-    qty,
-  };
-}
-
-
-function applyCredits(player, credits) {
-  const value = Number(credits || 0);
-  if (!Number.isFinite(value) || value <= 0) return 0;
-
-  player.credits = (player.credits || 0) + value;
-  return value;
-}
-
-
-function applyXpReward(player, xp) {
-  const value = Number(xp || 0);
-  if (!Number.isFinite(value) || value <= 0) return 0;
-
-  grantXp(player, value);
-  return value;
-}
-
-
-function applyReputationReward(player, factionId, amount) {
-  const value = Number(amount || 0);
-  if (!factionId || !Number.isFinite(value) || value === 0) {
-    return;
-  }
-
-  addFactionReputation(
-    player,
-    factionId,
-    value
-  );
-}
-
-
-function addRadiationSafe(player, amount) {
-  const value = Number(amount || 0);
-  if (!Number.isFinite(value) || value <= 0) return;
-
-  addRadiation(player, value);
-}
-
-
-async function guildYieldBonusFor(deps, player) {
-  if (!player?.guildId) return 0;
-
-  if (deps?.guildStore?.getGuildUpgradeLevel) {
-    const level = await deps.guildStore
-      .getGuildUpgradeLevel(player.guildId)
-      .catch(() => 0);
-
-    return activeGuildBonuses(level)
-      .explorationYieldPct || 0;
-  }
-
-  if (getGuildUpgradeLevel) {
-    const level = await getGuildUpgradeLevel(
-      deps,
-      player.guildId
-    ).catch(() => 0);
-
-    return activeGuildBonuses(level)
-      .explorationYieldPct || 0;
-  }
-
-  return 0;
-}
-
+const { SKILLS } = require('../../engine/skills-data.js');
+const { startCooldown, tickCooldowns } = require('../../engine/cooldowns.js');
+const { combatPackCard } = require('../../lib/combat-card.js');
+const { SCENES } = require('./ids.js');
 
 /**
- * Гильдейский бонус к добыче.
+ * Переходник к реальному choices/consequence-engine.js: applyConsequence
+ * там ожидает НЕ player напрямую, а "state" с вложенным state.player
+ * (там читается state.player.reputation, а не player.reputation) — плюс
+ * state.flags/state.quests/state.worldState/state.factionStanding отдельно
+ * от player. Подсовываем прокси-обёртку, а после — переносим изменения
+ * обратно на настоящий player. try/catch — на случай, если реальный файл
+ * в будущем снова разъедется по форме с тем, что здесь ожидается.
  */
-function applyYieldBonus(
-  qty,
-  guildYieldBonusPct
-) {
-  if (
-    !guildYieldBonusPct ||
-    guildYieldBonusPct <= 0
-  ) {
-    return qty;
-  }
-
-  return Math.round(
-    qty *
-      (1 + guildYieldBonusPct / 100)
-  );
-}
-
-
-async function applyExplorationLoot(
-  deps,
-  player,
-  loot
-) {
-  if (!loot) return null;
-
-  const bonus =
-    await guildYieldBonusFor(
-      deps,
-      player
-    );
-
-  const adjustedLoot = {
-    ...loot,
-    qty: applyYieldBonus(
-      Number(loot.qty || 0),
-      bonus
-    ),
-  };
-
-  return applyLoot(
+async function applyConsequenceToPlayer(deps, player, consequenceId) {
+  // worldState берётся из ОБЩЕГО стора (lib/world-state-store.js), не из
+  // player.worldState — раньше здесь был реальный баг: последствия вроде
+  // echoBehavior/stationTension писались в каждого игрока отдельно, то
+  // есть у каждого была своя личная "Периферия" вместо общего мира.
+  // Деградирует к пустому объекту без deps.worldStateStore — последствие
+  // всё равно применится (флаги/квесты/репутация — как раньше), просто
+  // мировая часть в этом случае некому будет сохранить.
+  const currentWorldState = deps.worldStateStore ? await deps.worldStateStore.getWorldState() : {};
+  const proxyState = {
     player,
-    adjustedLoot
-  );
-}
-
-
-function formatLoot(loot) {
-  if (!loot) return '';
-
-  const resource =
-    loot.resource ||
-    loot.type ||
-    loot.name ||
-    'ресурс';
-
-  return `📦 ${resource}: +${loot.qty}`;
-}
-
-
-function formatCredits(credits) {
-  const value = Number(credits || 0);
-
-  if (!Number.isFinite(value) || value <= 0) {
-    return '';
-  }
-
-  return `💰 +${value} кредитов`;
-}
-
-
-function formatXp(xp) {
-  const value = Number(xp || 0);
-
-  if (!Number.isFinite(value) || value <= 0) {
-    return '';
-  }
-
-  return `⭐ +${value} XP`;
-}
-
-
-function consequenceText(result) {
-  if (!result) return '';
-
-  if (typeof result === 'string') {
-    return result;
-  }
-
-  if (result.text) return result.text;
-  if (result.message) return result.message;
-
-  return '';
-}
-
-
-async function applyDynamicConsequences(
-  deps,
-  player,
-  consequence
-) {
-  if (!consequence) return null;
-
+    flags: player.flags || {},
+    quests: { locked: player.questLocks || [], unlockedEndings: player.unlockedEndings || [] },
+    worldState: currentWorldState,
+    factionStanding: player.factionStanding || {},
+  };
   try {
-    return await applyWorldConsequence(
-      deps,
-      player,
-      consequence
-    );
-  } catch (error) {
-    console.error(
-      'exploration: consequence failed',
-      error
-    );
+    applyConsequence(proxyState, consequenceId);
+  } catch (err) {
+    console.error(`applyConsequenceToPlayer('${consequenceId}') упал:`, err.message);
+    return false;
+  }
+  player.flags = proxyState.flags;
+  player.questLocks = proxyState.quests.locked;
+  player.unlockedEndings = proxyState.quests.unlockedEndings;
+  player.factionStanding = proxyState.factionStanding;
+  if (deps.worldStateStore) {
+    await deps.worldStateStore.applyWorldChange(proxyState.worldState).catch((err) => {
+      console.error('не удалось сохранить глобальное состояние мира:', err.message);
+    });
+  }
+  return true;
+}
 
+/** Возврат с планеты — раньше 'Вернуться на станцию' вёл ПРЯМО на
+ * станцию, полностью пропуская корабль, который всё это время ждал в
+ * открытом космосе (реальный баг, не по лору — как персонаж вообще
+ * оказался на станции, если улетал не оттуда?). Теперь — назад к
+ * кораблю на ту же дистанцию, откуда была высадка, с возможностью
+ * лететь дальше или уже оттуда возвращаться домой по-настоящему.
+ * pendingShipDistance ставится в performLanding (game/scenes/travel.js)
+ * и живёт на самом player, поэтому переживает всю цепочку вылазки без
+ * необходимости менять форму каждого промежуточного state. */
+function returnFromPlanet(player, prefixText = '') {
+  const distance = player.pendingShipDistance;
+  const cleanPlayer = { ...player, pendingShipDistance: undefined };
+  if (distance === undefined) {
+    // Подстраховка — если поле почему-то не выставлено (старое состояние
+    // без него), не ломаем игру, просто ведём как раньше.
     return null;
   }
+  return travelScreen(cleanPlayer, distance, prefixText);
 }
 
-
-async function explorationHeader(
-  deps,
-  player,
-  zone,
-  depth
-) {
-  const cargo = tripCargoUnits(player);
-
-  const lines = [
-    `🔭 ВЫЛАЗКА`,
-    '',
-    `Зона: ${
-      zone === 'red'
-        ? '🔴 красная'
-        : zone === 'green'
-          ? '🟢 зелёная'
-          : '🟡 жёлтая'
-    }`,
-    `Глубина: ${normalizeDepth(depth)}`,
-    `📦 Груз рейса: ${cargo} ед.`,
-  ];
-
-  if (player.radiation) {
-    lines.push(
-      `☢️ Радиация: ${player.radiation}`
-    );
-  }
-
-  return lines.join('\n');
+/** Гильдейский бонус к добыче (2-й уровень гильд-апгрейда, guild-levels.js:
+ * explorationYieldPct) — применяется как множитель к уже свёрнутому qty,
+ * не как отдельный параметр rollLoot на каждом пути (event.loot приходит
+ * уже готовым из rollEventWithDepth/rollEvent, которые сами не знают о
+ * гильдиях — тот же принцип разделения, что и везде в проекте). */
+function applyYieldBonus(qty, guildYieldBonusPct) {
+  if (!guildYieldBonusPct || guildYieldBonusPct <= 0) return qty;
+  return Math.round(qty * (1 + guildYieldBonusPct / 100));
 }
 
-
-function journeyButtons() {
-  return [
-    '🔎 Продолжить исследование',
-    '🚀 Вернуться к кораблю',
-  ];
+/** Читает бонус явно, деградирует тихо без гильдии/deps.guildStore — тот
+ * же паттерн, что guildDamageBonusFor в game/scenes/boss.js. */
+async function guildYieldBonusFor(deps, player) {
+  if (!player.guildId || !deps.guildStore) return 0;
+  const guildLevel = await deps.guildStore.getGuildUpgradeLevel(player.guildId);
+  return activeGuildBonuses(guildLevel).explorationYieldPct;
 }
 
-
-function journeyContinueButtons() {
-  return [
-    '🔎 Углубиться',
-    '🚀 Вернуться к кораблю',
-    '🏃 Эвакуироваться',
-  ];
+/** Бонус "Разведывательная сеть" (Guild Projects, не Guild Levels) — тот
+ * же принцип деградации. Отдельная функция, потому что источник другой
+ * (завершённые проекты, не уровень апгрейда) и они складываются, а не
+ * заменяют друг друга. */
+async function guildRareDiscoveryBonusFor(deps, player) {
+  if (!player.guildId || !deps.guildStore) return 0;
+  const effects = await getActiveGuildProjectEffects(deps, player.guildId);
+  return effects.rareDiscoveryBonusPct;
 }
 
+function resolveExplorationEvent(player, event, zone, depth, deps, rng, prefixText = '', allowContinue = true, guildYieldBonusPct = 0) {
+  // Радиация теперь чисто временнáя — копится с каждым тиком вылазки
+  // (2% за тик), а не от конкретных событий-аномалий. Раньше это было
+  // источником "странного" облучения — почему у героя облучение растёт
+  // только на аномалиях, а на остальных 90% тиков нет вообще? Теперь
+  // логика простая и предсказуемая: сам факт нахождения в поле облучает.
+  const radiationDiscount = getRadiationDiscount(player);
+  const tickRadiation = Math.max(0, Math.round(TICK_RADIATION_GAIN * (1 - radiationDiscount)));
+  player.radiation = Math.min(100, (player.radiation || 0) + tickRadiation);
 
-function eventChoiceButtons(options) {
-  return options.map(
-    (option) =>
-      option.label ||
-      option.text ||
-      option.id
-  );
-}
-
-
-async function startJourney(
-  deps,
-  player,
-  zone,
-  depth = 0,
-  extra = {}
-) {
-  const normalizedDepth =
-    normalizeDepth(depth);
-
-  return {
-    reply: {
-      text: [
-        await explorationHeader(
-          deps,
-          player,
-          zone,
-          normalizedDepth
-        ),
-        '',
-        '🛰️ Корабль остаётся на орбите.',
-        'Ты начинаешь исследование района.',
-      ].join('\n'),
-      buttons: journeyButtons(),
-      imageKey:
-        explorationImageForZone(zone),
-    },
-    nextState: makeExplorationState(
-      SCENES.JOURNEY,
-      player,
-      zone,
-      normalizedDepth,
-      extra
-    ),
-  };
-}
-
-
-function generateJourneyEvent(
-  zone,
-  depth,
-  rng
-) {
-  const weights = zoneWeights(zone);
-
-  const event =
-    rollEvent(
-      zone,
-      depth,
-      rng,
-      weights
-    );
-
-  return event;
-}
-
-
-async function explore(
-  deps,
-  player,
-  zone,
-  depth,
-  rng = Math.random
-) {
-  const event =
-    generateJourneyEvent(
-      zone,
-      depth,
-      rng
-    );
-
-  if (!event) {
-    return {
-      reply: {
-        text:
-          '🔭 Вокруг только пыль, камни и слабые сигналы.\n\n' +
-          'Но где-то впереди что-то есть.',
-        buttons: journeyContinueButtons(),
-        imageKey:
-          explorationImageForZone(zone),
-      },
-      nextState: makeExplorationState(
-        SCENES.JOURNEY_CONTINUE,
-        player,
-        zone,
-        depth
-      ),
-    };
+  // ВАЖНО: применяем event.flag ЗДЕСЬ, для любого типа события, а не только
+  // в exploration_event_choice. Раньше это применялось только для веток с
+  // выбором — 'story' (curator_message) никогда не ставил свой флаг
+  // curator_message_seen, из-за чего сообщение куратора зацикливалось
+  // навсегда и блокировало вообще все остальные события в зоне для любого
+  // игрока с доступным квестом куратора (реальный баг, не связанный с
+  // бестиарием, просто раньше не проявлялся в тестах).
+  if (event.flag) {
+    player.flags = player.flags || {};
+    player.flags[event.flag] = true;
   }
 
-  return resolveExplorationEvent(
-    deps,
-    player,
-    zone,
-    depth,
-    event,
-    rng
-  );
-}
+  const safe = (text, extra) => allowContinue
+    ? safeReturnChoice(text, player, zone, depth, false, extra)
+    : { reply: { text, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
 
-
-async function resolveExplorationEvent(
-  deps,
-  player,
-  zone,
-  depth,
-  event,
-  rng = Math.random
-) {
-  if (!event) {
-    return {
-      reply: {
-        text: '⚠️ Событие не определено.',
-        buttons: journeyContinueButtons(),
-      },
-      nextState: makeExplorationState(
-        SCENES.JOURNEY_CONTINUE,
-        player,
-        zone,
-        depth
-      ),
-    };
-  }
-
-  const eventType =
-    event.type ||
-    event.kind ||
-    event.id;
-
-  switch (eventType) {
-    case 'empty':
-    case 'empty_space':
-    case 'quiet':
+  switch (event.type) {
+    case 'pack_ambush': {
       return {
-        reply: {
-          text:
-            event.text ||
-            '🌫️ Район кажется совершенно пустым.',
-          buttons:
-            journeyContinueButtons(),
-          imageKey:
-            explorationImageForZone(zone),
-        },
-        nextState:
-          makeExplorationState(
-            SCENES.JOURNEY_CONTINUE,
-            player,
-            zone,
-            depth
-          ),
-      };
-
-    case 'loot':
-    case 'resource':
-    case 'cache': {
-      const loot =
-        await applyExplorationLoot(
-          deps,
-          player,
-          event.loot
-        );
-
-      const credits =
-        applyCredits(
-          player,
-          event.credits ||
-            event.reward?.credits
-        );
-
-      return {
-        reply: {
-          text: [
-            event.text ||
-              '📦 Обнаружен тайник.',
-            formatLoot(loot),
-            formatCredits(
-              credits
-            ),
-            '',
-            'Груз помещён в трюм текущего рейса.',
-          ]
-            .filter(Boolean)
-            .join('\n'),
-          buttons:
-            journeyContinueButtons(),
-          imageKey:
-            imageForEvent(
-              eventType
-            ),
-        },
-        nextState:
-          makeExplorationState(
-            SCENES.JOURNEY_CONTINUE,
-            player,
-            zone,
-            depth,
-            {
-              lastEvent: eventType,
-            }
-          ),
+        reply: { text: `${prefixText}⚠️ Стая (${event.pack.length})!\n\n${packStatusText(event.pack)}`, buttons: ['⚔️ Атаковать', 'Отступить'] },
+        nextState: { scene: 'pack_pre_combat', player, zone, depth, pack: event.pack }
       };
     }
 
-    case 'enemy':
-    case 'combat':
-    case 'hostile':
-    case 'creature': {
-      const enemy =
-        event.enemy ||
-        generateEnemy(
-          zone,
-          depth,
-          rng
-        );
+    case 'ambush': {
+      // Успокоенный сектор (убит "хозяин" вроде эхо-матки) — шанс, что
+      // засада вообще не происходит, вместо неё спокойная находка.
+      const calmedFlag = player.currentSectorId && `sector_${player.currentSectorId}_calmed`;
+      if (calmedFlag && player.flags?.[calmedFlag] && rng() < 0.5) {
+        const loot = rollLoot(zone, rng, player.level || 1);
+        const mult = stormRewardMult();
+        const qty = applyYieldBonus(loot.qty, guildYieldBonusPct);
+        addToInventory(player, loot.resource, loot.tier, qty);
+        player.credits = (player.credits || 0) + Math.round(loot.credits * mult);
+        return safe(`${prefixText}🔭 Здесь непривычно тихо после того, как что-то в этом секторе умолкло навсегда. ${qty}× ${loot.resource} T${loot.tier} находится без сопротивления.`);
+      }
 
-      return {
-        reply: {
-          text:
-            event.text ||
-            `⚔️ ${enemy.name} выходит из укрытия.`,
-          buttons: [
-            '⚔️ Атаковать',
-            'Отступить',
-          ],
-          imageKey:
-            imageForEnemy(
-              enemy.name
-            ),
-        },
-        nextState: {
-          scene: 'pre_combat',
-          player,
-          enemy,
-          zone,
-          depth,
-        },
-      };
-    }
+      // Редкий шанс встретить ИМЕННОГО монстра бестиария вместо обычного
+      // процедурного врага.
+      const namedEnemy = rollNamedEncounter(zone, player.level, rng);
+      const enemy = namedEnemy || event.enemy;
+      const bonusNote = event.depthBonusTier ? `\n(усилен глубиной вылазки: +${event.depthBonusTier} к тиру)` : '';
 
-    case 'distress_signal': {
-      const choice =
-        resolveDistressChoice(
-          event,
-          'inspect',
-          rng
-        );
-
-      return {
-        reply: {
-          text:
-            event.text ||
-            '📡 Ты ловишь слабый сигнал бедствия.',
-          buttons: [
-            'Помочь',
-            'Проигнорировать',
-            'Исследовать сигнал',
-          ],
-          imageKey:
-            imageForEvent(
-              'distress_signal'
-            ),
-        },
-        nextState: {
-          scene:
-            SCENES.EXPLORATION_EVENT_CHOICE,
-          player,
-          zone,
-          depth,
-          event,
-          choiceResult: choice,
-        },
-      };
-    }
-
-    case 'anomaly':
-    case 'space_anomaly':
-    case 'kailar_anomaly': {
-      const result =
-        resolveKailarAnomaly(
-          event,
-          player,
-          rng
-        );
-
-      return {
-        reply: {
-          text: [
-            event.text ||
-              '🌀 Пространство вокруг тебя начинает искажаться.',
-            consequenceText(
-              result
-            ),
-          ]
-            .filter(Boolean)
-            .join('\n\n'),
-          buttons: [
-            'Исследовать',
-            'Отойти',
-          ],
-          imageKey:
-            imageForEvent(
-              'anomaly'
-            ),
-        },
-        nextState: {
-          scene:
-            SCENES.ANOMALY_CHOICE,
-          player,
-          zone,
-          depth,
-          event,
-        },
-      };
-    }
-
-    case 'resonance_pedestal':
-    case 'pedestal': {
-      return {
-        reply: {
-          text:
-            event.text ||
-            '🗿 Перед тобой стоит древний резонансный пьедестал.',
-          buttons: [
-            'Активировать',
-            'Осмотреть',
-            'Отойти',
-          ],
-          imageKey:
-            imageForEvent(
-              'resonance_pedestal'
-            ),
-        },
-        nextState: {
-          scene:
-            SCENES.EXPLORATION_EVENT_CHOICE,
-          player,
-          zone,
-          depth,
-          event,
-        },
-      };
-    }
-
-    case 'terminal':
-    case 'terminal_hack': {
-      return {
-        reply: {
-          text:
-            event.text ||
-            '💻 Ты находишь старый терминал.',
-          buttons: [
-            'Взломать',
-            'Осмотреть',
-            'Отойти',
-          ],
-          imageKey:
-            imageForEvent(
-              'terminal'
-            ),
-        },
-        nextState: {
-          scene:
-            SCENES.EXPLORATION_EVENT_CHOICE,
-          player,
-          zone,
-          depth,
-          event,
-        },
-      };
-    }
-
-    case 'echo':
-    case 'echo_playback': {
-      return {
-        reply: {
-          text:
-            event.text ||
-            '📼 В древнем устройстве сохранился чей-то голос.',
-          buttons: [
-            'Прослушать',
-            'Остановить',
-          ],
-          imageKey:
-            imageForEvent(
-              'echo'
-            ),
-        },
-        nextState: {
-          scene:
-            SCENES.EXPLORATION_EVENT_CHOICE,
-          player,
-          zone,
-          depth,
-          event,
-        },
-      };
-    }
-
-    case 'fragment_guardian': {
-      const fragment =
-        getNextFragment(
-          player
-        );
-
-      return {
-        reply: {
-          text: [
-            event.text ||
-              '👁️ Страж фрагмента появляется из темноты.',
-            fragment
-              ? `Фрагмент: ${fragment.title || fragment.id}`
-              : 'Похоже, здесь уже нечего искать.',
-          ].join('\n\n'),
-          buttons: fragment
-            ? [
-                'Исследовать фрагмент',
-                'Отойти',
-              ]
-            : ['Отойти'],
-          imageKey:
-            imageForEvent(
-              'fragment_guardian'
-            ),
-        },
-        nextState: {
-          scene:
-            SCENES.EXPLORATION_EVENT_CHOICE,
-          player,
-          zone,
-          depth,
-          event,
-          fragment,
-        },
-      };
-    }
-
-    case 'micro_discovery':
-    case 'micro_discovery_event': {
-      const result =
-        resolveMicroDiscovery(
-          event,
-          player,
-          rng
-        );
-
-      return {
-        reply: {
-          text: [
-            event.text ||
-              '🔎 Ты замечаешь небольшую деталь, которую легко было пропустить.',
-            consequenceText(
-              result
-            ),
-          ]
-            .filter(Boolean)
-            .join('\n\n'),
-          buttons:
-            journeyContinueButtons(),
-          imageKey:
-            imageForEvent(
-              'micro_discovery'
-            ),
-        },
-        nextState:
-          makeExplorationState(
-            SCENES.JOURNEY_CONTINUE,
-            player,
-            zone,
-            depth
-          ),
-      };
-    }
-
-    case 'deep_exploration':
-    case 'deep': {
-      return {
-        reply: {
-          text:
-            event.text ||
-            '🕳️ След ведёт глубже в неизвестную часть района.',
-          buttons: [
-            'Углубиться',
-            'Вернуться к кораблю',
-          ],
-          imageKey:
-            imageForEvent(
-              'deep_exploration'
-            ),
-        },
-        nextState: {
-          scene:
-            SCENES.DEEP_EXPLORATION,
-          player,
-          zone,
-          depth,
-          event,
-        },
-      };
-    }
-
-    case 'dynamic_event':
-    case 'dynamic': {
-      const dynamic =
-        dynamicEventById(
-          event.eventId ||
-            event.id
-        );
-
-      return {
-        reply: {
-          text:
-            dynamic?.text ||
-            event.text ||
-            '📡 В глубине зоны возникает необычное событие.',
-          buttons:
-            dynamic?.choices
-              ? eventChoiceButtons(
-                  dynamic.choices
-                )
-              : journeyContinueButtons(),
-          imageKey:
-            imageForEvent(
-              'dynamic_event'
-            ),
-        },
-        nextState: {
-          scene:
-            SCENES.EXPLORATION_EVENT_CHOICE,
-          player,
-          zone,
-          depth,
-          event,
-          dynamic,
-        },
-      };
-    }
-
-    case 'neutral_encounter':
-    case 'neutral': {
-      return {
-        reply: {
-          text:
-            event.text ||
-            '🧭 Ты сталкиваешься с неизвестным путником.',
-          buttons: [
-            'Поговорить',
-            'Наблюдать',
-            'Уйти',
-          ],
-          imageKey:
-            imageForEvent(
-              'neutral_encounter'
-            ),
-        },
-        nextState: {
-          scene:
-            SCENES.NEUTRAL_ENCOUNTER,
-          player,
-          zone,
-          depth,
-          event,
-        },
-      };
-    }
-
-    default:
-      return {
-        reply: {
-          text:
-            event.text ||
-            '🔭 Ты обнаруживаешь нечто неизвестное.',
-          buttons:
-            journeyContinueButtons(),
-          imageKey:
-            imageForEvent(
-              eventType
-            ),
-        },
-        nextState:
-          makeExplorationState(
-            SCENES.JOURNEY_CONTINUE,
-            player,
-            zone,
-            depth,
-            {
-              lastEvent: eventType,
-            }
-          ),
-      };
-  }
-}
-
-
-async function handleExplorationEventChoice(
-  deps,
-  state,
-  input,
-  rng
-) {
-  const {
-    player,
-    zone,
-    depth,
-    event,
-    dynamic,
-    fragment,
-  } = state;
-
-  if (input === 'Отойти') {
-    return {
-      reply: {
-        text:
-          '🚶 Ты отходишь от объекта и возвращаешься к маршруту.',
-        buttons:
-          journeyContinueButtons(),
-      },
-      nextState:
-        makeExplorationState(
-          SCENES.JOURNEY_CONTINUE,
-          player,
-          zone,
-          depth
-        ),
-    };
-  }
-
-  if (event?.type === 'distress_signal') {
-    const result =
-      resolveDistressChoice(
-        event,
-        input,
-        rng
-      );
-
-    if (result?.loot) {
-      await applyExplorationLoot(
-        deps,
-        player,
-        result.loot
-      );
-    }
-
-    applyCredits(
-      player,
-      result?.credits
-    );
-
-    applyXpReward(
-      player,
-      result?.xp
-    );
-
-    if (result?.radiation) {
-      addRadiationSafe(
-        player,
-        result.radiation
-      );
-    }
-
-    return {
-      reply: {
-        text: [
-          result?.text ||
-            '📡 Сигнал затихает.',
-          formatLoot(
-            result?.loot
-          ),
-          formatCredits(
-            result?.credits
-          ),
-          formatXp(
-            result?.xp
-          ),
-        ]
-          .filter(Boolean)
-          .join('\n\n'),
-        buttons:
-          journeyContinueButtons(),
-      },
-      nextState:
-        makeExplorationState(
-          SCENES.JOURNEY_CONTINUE,
-          player,
-          zone,
-          depth
-        ),
-    };
-  }
-
-  if (
-    event?.type ===
-      'resonance_pedestal' &&
-    input === 'Активировать'
-  ) {
-    const result =
-      resolveResonancePedestal(
-        event,
-        player,
-        rng
-      );
-
-    if (result?.xp) {
-      applyXpReward(
-        player,
-        result.xp
-      );
-    }
-
-    if (result?.loot) {
-      await applyExplorationLoot(
-        deps,
-        player,
-        result.loot
-      );
-    }
-
-    return {
-      reply: {
-        text: [
-          result?.text ||
-            '✨ Пьедестал отвечает на твой сигнал.',
-          formatLoot(
-            result?.loot
-          ),
-          formatXp(
-            result?.xp
-          ),
-        ]
-          .filter(Boolean)
-          .join('\n\n'),
-        buttons:
-          journeyContinueButtons(),
-      },
-      nextState:
-        makeExplorationState(
-          SCENES.JOURNEY_CONTINUE,
-          player,
-          zone,
-          depth
-        ),
-    };
-  }
-
-  if (
-    event?.type ===
-      'terminal_hack' &&
-    input === 'Взломать'
-  ) {
-    const result =
-      resolveTerminalHack(
-        event,
-        player,
-        rng
-      );
-
-    if (result?.xp) {
-      applyXpReward(
-        player,
-        result.xp
-      );
-    }
-
-    if (result?.credits) {
-      applyCredits(
-        player,
-        result.credits
-      );
-    }
-
-    if (result?.loot) {
-      await applyExplorationLoot(
-        deps,
-        player,
-        result.loot
-      );
-    }
-
-    return {
-      reply: {
-        text: [
-          result?.text ||
-            '💻 Ты получаешь доступ к терминалу.',
-          formatLoot(
-            result?.loot
-          ),
-          formatCredits(
-            result?.credits
-          ),
-          formatXp(
-            result?.xp
-          ),
-        ]
-          .filter(Boolean)
-          .join('\n\n'),
-        buttons:
-          journeyContinueButtons(),
-      },
-      nextState:
-        makeExplorationState(
-          SCENES.JOURNEY_CONTINUE,
-          player,
-          zone,
-          depth
-        ),
-    };
-  }
-
-  if (
-    event?.type ===
-      'echo_playback' &&
-    input === 'Прослушать'
-  ) {
-    const result =
-      resolveEchoPlayback(
-        event,
-        player,
-        rng
-      );
-
-    if (result?.xp) {
-      applyXpReward(
-        player,
-        result.xp
-      );
-    }
-
-    if (result?.consequence) {
-      await applyDynamicConsequences(
-        deps,
-        player,
-        result.consequence
-      );
-    }
-
-    return {
-      reply: {
-        text: [
-          result?.text ||
-            '📼 Запись заканчивается.',
-          formatXp(
-            result?.xp
-          ),
-        ]
-          .filter(Boolean)
-          .join('\n\n'),
-        buttons:
-          journeyContinueButtons(),
-      },
-      nextState:
-        makeExplorationState(
-          SCENES.JOURNEY_CONTINUE,
-          player,
-          zone,
-          depth
-        ),
-    };
-  }
-
-  if (
-    event?.type ===
-      'fragment_guardian'
-  ) {
-    const nextFragment =
-      fragment ||
-      getNextFragment(
-        player
-      );
-
-    if (
-      input ===
-      'Исследовать фрагмент'
-    ) {
-      if (nextFragment) {
-        updateLoreProgress(
-          player,
-          nextFragment
-        );
-
-        recordDiscovery(
-          player,
-          nextFragment.id
-        );
-
-        const result = {
-          text:
-            `📜 Ты находишь фрагмент: ${nextFragment.title || nextFragment.id}.`,
-          xp:
-            nextFragment.xp ||
-            0,
-        };
-
-        applyXpReward(
-          player,
-          result.xp
-        );
-
+      // "Нейтральные" именные монстры (см. engine/bestiary.js: neutral:true,
+      // например Кураторский страж) не нападают сами — игроку решать.
+      if (enemy.neutral) {
         return {
-          reply: {
-            text: [
-              result.text,
-              formatXp(
-                result.xp
-              ),
-            ]
-              .filter(Boolean)
-              .join('\n\n'),
-            buttons:
-              journeyContinueButtons(),
-          },
-          nextState:
-            makeExplorationState(
-              SCENES.JOURNEY_CONTINUE,
-              player,
-              zone,
-              depth
-            ),
+          reply: { text: `${prefixText}👁️ ${enemy.name}\n\n${enemy.name} пока не проявляет враждебности — патрулирует, не приближаясь.`, buttons: ['Обойти стороной', '⚔️ Атаковать'], imageKey: imageForEnemy(enemy.name) },
+          nextState: { scene: 'neutral_encounter', player, enemy, zone, depth }
         };
       }
-    }
-  }
 
-  if (dynamic) {
-    const selected =
-      dynamic.choices?.find(
-        (choice) =>
-          (choice.label ||
-            choice.text ||
-            choice.id) ===
-          input
-      );
-
-    if (selected) {
-      const result =
-        await resolveDynamicEvent(
-          dynamic,
-          selected,
-          player,
-          rng
-        );
-
-      if (result?.loot) {
-        await applyExplorationLoot(
-          deps,
-          player,
-          result.loot
-        );
-      }
-
-      applyCredits(
-        player,
-        result?.credits
-      );
-
-      applyXpReward(
-        player,
-        result?.xp
-      );
-
-      if (result?.consequence) {
-        await applyDynamicConsequences(
-          deps,
-          player,
-          result.consequence
-        );
-      }
-
+      const nameLine = namedEnemy ? `⚠️ ${enemy.name}\n\n${BESTIARY[enemy.bestiaryId]?.lore || ''}` : `⚠️ ОТГОЛОСОК\n\n${event.text}`;
       return {
-        reply: {
-          text: [
-            result?.text ||
-              '📡 Событие завершено.',
-            formatLoot(
-              result?.loot
-            ),
-            formatCredits(
-              result?.credits
-            ),
-            formatXp(
-              result?.xp
-            ),
-          ]
-            .filter(Boolean)
-            .join('\n\n'),
-          buttons:
-            journeyContinueButtons(),
-        },
-        nextState:
-          makeExplorationState(
-            SCENES.JOURNEY_CONTINUE,
-            player,
-            zone,
-            depth
-          ),
+        reply: { text: `${prefixText}${nameLine}${bonusNote}`, buttons: ['⚔️ Атаковать', 'Отступить'], imageKey: imageForEnemy(enemy.name) },
+        nextState: { scene: 'pre_combat', player, enemy, zone, depth }
       };
     }
-  }
-
-  return {
-    reply: {
-      text:
-        'Выбери действие кнопкой ниже.',
-      buttons:
-        eventChoiceButtons(
-          event?.choices ||
-            dynamic?.choices ||
-            []
-        ).concat(
-          ['Отойти']
-        ),
-    },
-    nextState: state,
-  };
-}
-
-
-async function handleDeepExploration(
-  deps,
-  state,
-  input,
-  rng
-) {
-  const {
-    player,
-    zone,
-    depth,
-    event,
-  } = state;
-
-  if (
-    input ===
-    'Вернуться к кораблю'
-  ) {
-    return returnFromPlanet(
-      deps,
-      player,
-      '🚀 Ты прекращаешь глубокую разведку и возвращаешься к кораблю.\n\n'
-    );
-  }
-
-  if (
-    input !==
-    'Углубиться'
-  ) {
-    return {
-      reply: {
-        text:
-          'Выбери действие кнопкой ниже.',
-        buttons: [
-          'Углубиться',
-          'Вернуться к кораблю',
-        ],
-      },
-      nextState: state,
-    };
-  }
-
-  const result =
-    resolveDeepExploration(
-      event,
-      player,
-      zone,
-      depth,
-      rng
-    );
-
-  const nextDepth =
-    normalizeDepth(
-      depth + 1
-    );
-
-  if (result?.loot) {
-    await applyExplorationLoot(
-      deps,
-      player,
-      result.loot
-    );
-  }
-
-  applyCredits(
-    player,
-    result?.credits
-  );
-
-  applyXpReward(
-    player,
-    result?.xp
-  );
-
-  if (result?.radiation) {
-    addRadiationSafe(
-      player,
-      result.radiation
-    );
-  }
-
-  return {
-    reply: {
-      text: [
-        result?.text ||
-          '🕳️ Ты углубляешься в неизвестность.',
-        formatLoot(
-          result?.loot
-        ),
-        formatCredits(
-          result?.credits
-        ),
-        formatXp(
-          result?.xp
-        ),
-        `Глубина: ${nextDepth}`,
-      ]
-        .filter(Boolean)
-        .join('\n\n'),
-      buttons:
-        journeyContinueButtons(),
-      imageKey:
-        imageForEvent(
-          'deep_exploration'
-        ),
-    },
-    nextState:
-      makeExplorationState(
-        SCENES.JOURNEY_CONTINUE,
-        player,
-        zone,
-        nextDepth,
-        {
-          deepExploration: true,
-        }
-      ),
-  };
-}
-
-
-async function handleAnomalyChoice(
-  deps,
-  state,
-  input,
-  rng
-) {
-  const {
-    player,
-    zone,
-    depth,
-    event,
-  } = state;
-
-  if (input === 'Отойти') {
-    return {
-      reply: {
-        text:
-          '🌀 Ты отступаешь от аномалии.',
-        buttons:
-          journeyContinueButtons(),
-      },
-      nextState:
-        makeExplorationState(
-          SCENES.JOURNEY_CONTINUE,
-          player,
-          zone,
-          depth
-        ),
-    };
-  }
-
-  if (input === 'Исследовать') {
-    const result =
-      resolveKailarAnomaly(
-        event,
-        player,
-        rng
-      );
-
-    if (result?.loot) {
-      await applyExplorationLoot(
-        deps,
-        player,
-        result.loot
-      );
-    }
-
-    applyCredits(
-      player,
-      result?.credits
-    );
-
-    applyXpReward(
-      player,
-      result?.xp
-    );
-
-    if (result?.radiation) {
-      addRadiationSafe(
-        player,
-        result.radiation
-      );
-    }
-
-    if (result?.consequence) {
-      await applyDynamicConsequences(
-        deps,
-        player,
-        result.consequence
-      );
-    }
-
-    return {
-      reply: {
-        text: [
-          result?.text ||
-            '🌀 Аномалия отвечает на твоё присутствие.',
-          formatLoot(
-            result?.loot
-          ),
-          formatCredits(
-            result?.credits
-          ),
-          formatXp(
-            result?.xp
-          ),
-        ]
-          .filter(Boolean)
-          .join('\n\n'),
-        buttons:
-          journeyContinueButtons(),
-      },
-      nextState:
-        makeExplorationState(
-          SCENES.JOURNEY_CONTINUE,
-          player,
-          zone,
-          depth
-        ),
-    };
-  }
-
-  return {
-    reply: {
-      text:
-        'Выбери действие кнопкой ниже.',
-      buttons: [
-        'Исследовать',
-        'Отойти',
-      ],
-    },
-    nextState: state,
-  };
-}
-
-
-async function handleNeutralEncounter(
-  deps,
-  state,
-  input,
-  rng
-) {
-  const {
-    player,
-    zone,
-    depth,
-    event,
-  } = state;
-
-  if (input === 'Уйти') {
-    return {
-      reply: {
-        text:
-          '🚶 Ты уходишь, не вмешиваясь.',
-        buttons:
-          journeyContinueButtons(),
-      },
-      nextState:
-        makeExplorationState(
-          SCENES.JOURNEY_CONTINUE,
-          player,
-          zone,
-          depth
-        ),
-    };
-  }
-
-  const result =
-    resolveNeutralEncounter(
-      event,
-      input,
-      player,
-      rng
-    );
-
-  if (result?.loot) {
-    await applyExplorationLoot(
-      deps,
-      player,
-      result.loot
-    );
-  }
-
-  applyCredits(
-    player,
-    result?.credits
-  );
-
-  applyXpReward(
-    player,
-    result?.xp
-  );
-
-  if (result?.consequence) {
-    await applyDynamicConsequences(
-      deps,
-      player,
-      result.consequence
-    );
-  }
-
-  return {
-    reply: {
-      text: [
-        result?.text ||
-          '🧭 Встреча заканчивается.',
-        formatLoot(
-          result?.loot
-        ),
-        formatCredits(
-          result?.credits
-        ),
-        formatXp(
-          result?.xp
-        ),
-      ]
-        .filter(Boolean)
-        .join('\n\n'),
-      buttons:
-        journeyContinueButtons(),
-    },
-    nextState:
-      makeExplorationState(
-        SCENES.JOURNEY_CONTINUE,
-        player,
-        zone,
-        depth
-      ),
-  };
-}
-
-
-async function handleJourney(
-  deps,
-  state,
-  input,
-  rng
-) {
-  if (input === '🚀 Вернуться к кораблю') {
-    return returnFromPlanet(
-      deps,
-      state.player,
-      '🚀 Ты возвращаешься к кораблю.\n\n'
-    );
-  }
-
-  if (
-    input ===
-    '🔎 Продолжить исследование'
-  ) {
-    return explore(
-      deps,
-      state.player,
-      state.zone,
-      state.depth,
-      rng
-    );
-  }
-
-  return {
-    reply: {
-      text:
-        'Выбери действие кнопкой ниже.',
-      buttons:
-        journeyButtons(),
-    },
-    nextState: state,
-  };
-}
-
-
-async function handleJourneyContinue(
-  deps,
-  state,
-  input,
-  rng
-) {
-  if (
-    input ===
-      '🚀 Вернуться к кораблю' ||
-    input ===
-      '🏃 Эвакуироваться'
-  ) {
-    return returnFromPlanet(
-      deps,
-      state.player,
-      input === '🏃 Эвакуироваться'
-        ? '🏃 Ты эвакуируешься из зоны и возвращаешься к кораблю.\n\n'
-        : '🚀 Ты возвращаешься к кораблю.\n\n'
-    );
-  }
-
-  if (
-    input ===
-    '🔎 Углубиться'
-  ) {
-    const nextDepth =
-      normalizeDepth(
-        state.depth + 1
-      );
-
-    return explore(
-      deps,
-      state.player,
-      state.zone,
-      nextDepth,
-      rng
-    );
-  }
-
-  return {
-    reply: {
-      text:
-        'Выбери действие кнопкой ниже.',
-      buttons:
-        journeyContinueButtons(),
-    },
-    nextState: state,
-  };
-}
-
-
-function fighterForPlayer(
-  player
-) {
-  return shipToFighter(
-    player.ship,
-    player.name ||
-      'Игрок'
-  );
-}
-
-
-function applyCombatDamageToPlayer(
-  player,
-  fighter,
-  rng
-) {
-  if (!player.ship) return;
-
-  applyFighterResultToShip(
-    player.ship,
-    fighter,
-    rng
-  );
-}
-
-
-async function handlePreCombat(
-  deps,
-  state,
-  input,
-  rng
-) {
-  const {
-    player,
-    enemy,
-    zone,
-    depth,
-  } = state;
-
-  if (input === 'Отступить') {
-    if (rng() < 0.6) {
-      return returnFromPlanet(
-        deps,
-        player,
-        '🏃 Ты отступаешь от противника и возвращаешься к кораблю.\n\n'
-      );
-    }
-
-    return {
-      reply: {
-        text:
-          '🏃 Отступление не удалось. Противник перекрывает путь.',
-        buttons: [
-          '⚔️ Атаковать',
-          'Отступить',
-        ],
-        imageKey:
-          imageForEnemy(
-            enemy.name
-          ),
-      },
-      nextState: {
-        scene: 'pre_combat',
-        player,
-        enemy,
-        zone,
-        depth,
-      },
-    };
-  }
-
-  if (
-    input ===
-    '⚔️ Атаковать'
-  ) {
-    const fighter =
-      fighterForPlayer(
-        player
-      );
-
-    return {
-      reply: {
-        text:
-          combatFullCard(
-            fighter,
-            enemy
-          ),
-        buttons: [
-          '⚔️ Атаковать',
-          'Отступить',
-        ],
-        imageKey:
-          imageForEnemy(
-            enemy.name
-          ),
-      },
-      nextState: {
-        scene: 'combat',
-        player,
-        enemy,
-        zone,
-        depth,
-      },
-    };
-  }
-
-  return {
-    reply: {
-      text:
-        'Выбери действие кнопкой ниже.',
-      buttons: [
-        '⚔️ Атаковать',
-        'Отступить',
-      ],
-      imageKey:
-        imageForEnemy(
-          enemy.name
-        ),
-    },
-    nextState: state,
-  };
-}
-
-
-async function handleCombat(
-  deps,
-  state,
-  input,
-  rng
-) {
-  const {
-    player,
-    enemy,
-    zone,
-    depth,
-  } = state;
-
-  if (input === 'Отступить') {
-    if (rng() < 0.6) {
-      return returnFromPlanet(
-        deps,
-        player,
-        '🏃 Ты вырываешься из боя и возвращаешься к кораблю.\n\n'
-      );
-    }
-
-    return {
-      reply: {
-        text:
-          '🏃 Манёвр не удался.',
-        buttons: [
-          '⚔️ Атаковать',
-          'Отступить',
-        ],
-        imageKey:
-          imageForEnemy(
-            enemy.name
-          ),
-      },
-      nextState: state,
-    };
-  }
-
-  if (
-    input !==
-    '⚔️ Атаковать'
-  ) {
-    return {
-      reply: {
-        text:
-          'Выбери действие кнопкой ниже.',
-        buttons: [
-          '⚔️ Атаковать',
-          'Отступить',
-        ],
-      },
-      nextState: state,
-    };
-  }
-
-  const attacker =
-    fighterForPlayer(
-      player
-    );
-
-  const playerTurn =
-    resolveTurn({
-      attacker,
-      defender: enemy,
-      rng,
-    });
-
-  applyCombatDamageToPlayer(
-    player,
-    playerTurn.attacker,
-    rng
-  );
-
-  if (
-    playerTurn.defender.hp <=
-    0
-  ) {
-    const xp =
-      Number(
-        enemy.reward?.xp ||
-        enemy.xp ||
-        0
-      );
-
-    const credits =
-      Number(
-        enemy.reward?.credits ||
-        enemy.credits ||
-        0
-      );
-
-    applyXpReward(
-      player,
-      xp
-    );
-
-    applyCredits(
-      player,
-      credits
-    );
-
-    if (
-      enemy.loot
-    ) {
-      await applyExplorationLoot(
-        deps,
-        player,
-        enemy.loot
-      );
-    }
-
-    const note =
-      [
-        formatXp(xp),
-        formatCredits(
-          credits
-        ),
-      ]
-        .filter(Boolean)
-        .join('\n');
-
-    return returnFromPlanet(
-      deps,
-      player,
-      `⚔️ ${playerTurn.log.join(' ')}\n\n` +
-        `💥 ${enemy.name || 'Противник'} уничтожен.\n\n` +
-        `${note ? `${note}\n\n` : ''}` +
-        `🚀 Ты возвращаешься к кораблю.`
-    );
-  }
-
-  const enemyTurn =
-    resolveTurn({
-      attacker: enemy,
-      defender: attacker,
-      rng,
-    });
-
-  applyCombatDamageToPlayer(
-    player,
-    enemyTurn.defender,
-    rng
-  );
-
-  if (
-    enemyTurn.defender.hp <=
-    0
-  ) {
-    const result =
-      returnFromPlanet(
-        deps,
-        {
-          ...player,
-          hp: Math.round(
-            player.hpMax *
-              0.3
-          ),
-        },
-        `⚡ ${playerTurn.log.join(' ')}\n\n` +
-          `${enemyTurn.log.join(' ')}\n\n` +
-          `☠️ Слишком сильный удар. ` +
-          `Аварийная капсула тянет тебя обратно к кораблю.\n\n`
-      );
-
-    return result;
-  }
-
-  return {
-    reply: {
-      text: [
-        `⚔️ ${playerTurn.log.join(' ')}`,
-        enemyTurn.log.join(' '),
-        '',
-        combatFullCard(
-          shipToFighter(
-            player.ship,
-            player.name ||
-              'Игрок'
-          ),
-          enemy
-        ),
-      ].join('\n'),
-      buttons: [
-        '⚔️ Атаковать',
-        'Отступить',
-      ],
-      imageKey:
-        imageForEnemy(
-          enemy.name
-        ),
-    },
-    nextState: {
-      scene: 'combat',
-      player,
-      enemy,
-      zone,
-      depth,
-    },
-  };
-}
-
-
-/**
- * Возврат с планеты.
- *
- * ВАЖНО:
- * здесь больше не передаётся старый distance как второй аргумент
- * travelScreen().
- *
- * Travel теперь получает актуальные deps, включая tractStore/world
- * dependencies, и сам определяет положение корабля через currentNodeId.
- *
- * pendingShipDistance используется только как маркер того, что игрок
- * действительно находился на планете в рамках текущего рейса.
- */
-function returnFromPlanet(
-  deps,
-  player,
-  prefixText = ''
-) {
-  const cleanPlayer = {
-    ...player,
-    pendingShipDistance: undefined,
-  };
-
-  if (
-    !player ||
-    player.pendingShipDistance ===
-      undefined
-  ) {
-    return null;
-  }
-
-  return travelScreen(
-    deps,
-    cleanPlayer,
-    prefixText
-  );
-}
-
-
-async function handleStealthExplore(
-  deps,
-  state,
-  input,
-  rng
-) {
-  if (
-    input === '⬅️ Назад'
-  ) {
-    return {
-      reply: {
-        text:
-          hubMessage(
-            state.player
-          ),
-        buttons:
-          stationButtons(
-            deps,
-            state.player
-          ),
-        imageKey:
-          imageForLocation(
-            'station',
-            state.player.faction
-          ),
-      },
-      nextState: {
-        scene: 'station',
-        player:
-          state.player,
-      },
-    };
-  }
-
-  const player =
-    state.player;
-
-  if (
-    input ===
-    'Проникнуть'
-  ) {
-    const success =
-      rng() < 0.65;
-
-    if (success) {
-      const loot =
-        rollLoot(
-          'yellow',
-          state.depth || 0,
-          rng
-        );
-
-      await applyExplorationLoot(
-        deps,
-        player,
-        loot
-      );
-
+    case 'anomaly': {
+      const puzzle = pickAnomalyPuzzle(rng);
       return {
-        reply: {
-          text: [
-            '🌑 Ты бесшумно проникаешь в Архив теней.',
-            'Системы безопасности не успевают тебя заметить.',
-            formatLoot(
-              loot
-            ),
-          ]
-            .filter(Boolean)
-            .join('\n\n'),
-          buttons:
-            journeyContinueButtons(),
-          imageKey:
-            imageForLocation(
-              'terminus'
-            ),
-        },
-        nextState:
-          makeExplorationState(
-            SCENES.JOURNEY_CONTINUE,
-            player,
-            state.zone,
-            state.depth
-          ),
+        reply: { text: `${prefixText}🌀 АНОМАЛИЯ: ${puzzle.name}\n\n${puzzle.intro}`, buttons: ['Преодолеть'] },
+        nextState: { scene: 'anomaly_puzzle', player, zone, depth, puzzle, baseEvent: event }
       };
     }
-
-    return {
-      reply: {
-        text:
-          '🚨 Система безопасности замечает движение.',
-        buttons: [
-          '⚔️ Атаковать',
-          'Отступить',
-        ],
-        imageKey:
-          imageForLocation(
-            'terminus'
-          ),
-      },
-      nextState: {
-        scene: 'pre_combat',
-        player,
-        enemy:
-          generateEnemy(
-            state.zone,
-            state.depth,
-            rng
-          ),
-        zone:
-          state.zone,
-        depth:
-          state.depth,
-      },
-    };
+    case 'distress': {
+      // 15% шанс, что сигнал бедствия — это Тракт-плакальщица под прикрытием
+      // (см. engine/bestiary.js: её лор буквально про эксплуатацию distress-сигналов).
+      // Это отдельный, более редкий и более "лорный" случай поверх обычной
+      // системы выбора — не каждая ловушка одинакова.
+      if (rng() < 0.15) {
+        const mimic = buildBestiaryFighter(BESTIARY.trakt_plakalschitsa, player.level);
+        return {
+          reply: { text: `${prefixText}📡 СИГНАЛ БЕДСТВИЯ\n\nКрик о помощи звучит слишком... правильно. Слишком по учебнику.\n\n${mimic.name} сбрасывает маскировку.`, buttons: ['⚔️ Атаковать', 'Отступить'], imageKey: imageForEnemy(mimic.name) },
+          nextState: { scene: 'pre_combat', player, enemy: mimic, zone, depth }
+        };
+      }
+      return {
+        reply: { text: `${prefixText}📡 СИГНАЛ БЕДСТВИЯ\n\n${event.text}`, buttons: ['Ответить', 'Просканировать издали', 'Игнорировать'] },
+        nextState: { scene: 'distress_choice', player, zone, depth, distressEvent: event }
+      };
+    }
+    case 'node': {
+      // Охраняемая залежь — сначала бой за доступ, потом добыча.
+      if (event.nodeState === 'guarded' && event.guardEnemy) {
+        return {
+          reply: { text: `${prefixText}⛏️ ЗАЛЕЖЬ\n\n${event.text}`, buttons: ['⚔️ Атаковать', 'Отступить'], imageKey: imageForEnemy(event.guardEnemy.name) },
+          nextState: { scene: 'pre_combat', player, enemy: event.guardEnemy, zone, depth, guardedNode: event }
+        };
+      }
+      const nodeQty = applyYieldBonus(event.charges || 1, guildYieldBonusPct);
+      addToInventory(player, event.resource, event.tier, nodeQty);
+      checkContractProgress(player, 'loot', { resource: event.resource, amount: nodeQty });
+      const nodeXp = EXPLORATION_XP_BY_ZONE[zone] || 5;
+      grantXp(player, nodeXp);
+      const unstableNote = event.nodeState === 'unstable' ? ' (нестабильная — заряды повышены)' : '';
+      return safe(`${prefixText}⛏️ ЗАЛЕЖЬ${unstableNote}\n\n${event.text}\nВ трюм добавлено: ${nodeQty}× ${event.resource} T${event.tier}. ✨ +${nodeXp} XP.`);
+    }
+    case 'find': {
+      const mult = stormRewardMult();
+      const findQty = applyYieldBonus(event.loot.qty, guildYieldBonusPct);
+      addToInventory(player, event.loot.resource, event.loot.tier, findQty);
+      player.credits = (player.credits || 0) + Math.round(event.loot.credits * mult);
+      checkContractProgress(player, 'loot', { resource: event.loot.resource, amount: findQty });
+      const stormNote = mult > 1 ? ` (🌩️ ×${mult} за шторм)` : '';
+      const findXp = EXPLORATION_XP_BY_ZONE[zone] || 5;
+      grantXp(player, findXp);
+      return safe(`${prefixText}🔭 ${event.text}${stormNote} ✨ +${findXp} XP.`);
+    }
+    case 'cache': {
+      const mult = stormRewardMult();
+      let totalCredits = 0;
+      const parts = [];
+      for (const item of event.items) {
+        const cacheQty = applyYieldBonus(item.qty, guildYieldBonusPct);
+        addToInventory(player, item.resource, item.tier, cacheQty);
+        totalCredits += Math.round(item.credits * mult);
+        parts.push(`${cacheQty}× ${item.resource} T${item.tier}`);
+      }
+      player.credits = (player.credits || 0) + totalCredits;
+      checkContractProgress(player, 'loot', { resource: event.items[0]?.resource, amount: event.items[0]?.qty || 0 });
+      return safe(`${prefixText}📦 ТАЙНИК\n\n${event.text}\nВнутри: ${parts.join(', ')}. 💳 +${totalCredits} кредитов.`);
+    }
+    case 'resonance_pedestal':
+      return {
+        reply: { text: `${prefixText}🔮 РЕЗОНАНСНЫЙ ПОСТАМЕНТ\n\n${event.text}`, buttons: ['Дотронуться', 'Пройти мимо'] },
+        nextState: { scene: 'resonance_pedestal_choice', player, zone, depth }
+      };
+    case 'terminal_hack':
+      return {
+        reply: { text: `${prefixText}💻 ЗАБРОШЕННЫЙ ТЕРМИНАЛ\n\n${event.text}`, buttons: ['Взломать', 'Не рисковать'] },
+        nextState: { scene: 'terminal_hack_choice', player, zone, depth }
+      };
+    case 'echo_playback':
+      return {
+        reply: { text: `${prefixText}📻 ЭХО-ЗАПИСЬ\n\n${event.text}`, buttons: ['Послушать немного', 'Дослушать до конца', 'Пройти мимо'] },
+        nextState: { scene: 'echo_playback_choice', player, zone, depth }
+      };
+    case 'reaction_hazard':
+      return {
+        reply: { text: `${prefixText}⚡ ЧТО-ТО НЕ ТАК\n\n${event.text}`, buttons: ['Среагировать'] },
+        nextState: { scene: 'reaction_hazard_choice', player, zone, depth }
+      };
+    case 'corrupted_ai':
+      return {
+        reply: { text: `${prefixText}🤖 ИСКАЖЁННЫЙ ИИ\n\n${event.text}`, buttons: ['Спросить про Тракт', 'Спросить про станцию', 'Отключить'] },
+        nextState: { scene: 'corrupted_ai_choice', player, zone, depth }
+      };
+    case 'sector': {
+      player.currentSectorId = event.sectorId;
+      // У сектора есть "хозяин" (см. worldgen/sector-map.js: resident) —
+      // не случайная засада, а осознанный выбор атаковать или пройти мимо.
+      if (event.residentId && event.residentAlive && BESTIARY[event.residentId]) {
+        const residentName = BESTIARY[event.residentId].name;
+        return {
+          reply: { text: `${prefixText}${event.text}`, buttons: [`⚔️ Атаковать: ${residentName}`, ...journeyContinueButtons(zone, false)] },
+          nextState: { scene: 'journey_continue', player, zone, depth, sectorResident: { sectorId: event.sectorId, residentId: event.residentId } }
+        };
+      }
+      return safe(`${prefixText}${event.text}`);
+    }
+    case 'story': {
+      return safe(`${prefixText}📨 ${event.text}`);
+    }
+    case 'discovery': {
+      if (event.hypothesisConfirm) discoverHypothesis(player, event.hypothesisConfirm);
+      if (event.reward?.credits) player.credits = (player.credits || 0) + event.reward.credits;
+      return safe(`${prefixText}📖 ${event.text}`);
+    }
+    case 'choice':
+    case 'combat_choice': {
+      if (!allowContinue) {
+        return safe(`${prefixText}${event.text}`);
+      }
+      return {
+        reply: { text: `${prefixText}${event.text}`, buttons: event.choices.map((c) => c.text) },
+        nextState: { scene: 'exploration_event_choice', player, zone, depth, event }
+      };
+    }
+    case 'boss': {
+      const enemy = buildGuardianEnemy(event.combat?.guardianName, event.combat?.tier || 5, rng);
+      return {
+        reply: { text: `${prefixText}👁️ ${event.text}`, buttons: ['⚔️ Атаковать', 'Отступить'], imageKey: imageForEnemy(enemy.name) },
+        nextState: { scene: 'pre_combat', player, enemy, zone, depth, fragmentId: event.fragmentId }
+      };
+    }
+    default:
+      return safe(`${prefixText}${event.text || 'Ничего не произошло.'}`);
   }
+}
 
-  if (
-    input ===
-    'Осмотреть'
-  ) {
-    return {
-      reply: {
-        text:
-          '🌑 Архив теней скрывает данные, которых нет ни в одном официальном реестре.',
-        buttons: [
-          'Проникнуть',
-          '⬅️ Назад',
-        ],
-        imageKey:
-          imageForLocation(
-            'terminus'
-          ),
-      },
-      nextState: state,
-    };
-  }
-
+/** Прикрепляет всплывающую находку к итогу тика — только если игроку
+ * реально есть куда "продолжить" (сцена journey_continue: не бой, не
+ * диалог, не конец вылазки). Роллит заново на каждый вызов — то есть на
+ * каждый отдельный тик, а не переносит старую находку дальше. */
+function withMicroDiscovery(result, rng) {
+  if (!result || result.nextState?.scene !== 'journey_continue') return result;
+  const discovery = rollMicroDiscovery(GROUND_DISCOVERIES, rng);
+  if (!discovery) return result;
   return {
-    reply: {
-      text:
-        'Выбери действие кнопкой ниже.',
-      buttons: [
-        'Проникнуть',
-        'Осмотреть',
-        '⬅️ Назад',
-      ],
-    },
-    nextState: state,
+    reply: { ...result.reply, text: `${result.reply.text}\n\n🔍 ${discovery.text}`, buttons: [`Изучить: ${discovery.name}`, ...result.reply.buttons] },
+    nextState: { ...result.nextState, microDiscovery: discovery }
   };
 }
 
+/** Редкий (8%, см. engine/faction-resources.js) бонусный дроп фракционного
+ * эксклюзивного сырья — доступен ТОЛЬКО в зоне станции, которой он
+ * принадлежит (currentStation учитывает visitingStation, не только
+ * родную фракцию — гость чужой станции тоже может его найти). Тот же
+ * паттерн, что withMicroDiscovery: применяется только когда есть куда
+ * продолжить, не на бой/диалог/конец вылазки. Независимая находка, не
+ * заменяет обычный лут события — добавляется поверх. */
+function withExclusiveResourceBonus(result, player, rng, rareDiscoveryBonusPct = 0) {
+  if (!result || result.nextState?.scene !== 'journey_continue') return result;
+  const stationFaction = currentStation(player);
+  const resource = rollFactionExclusiveResource(stationFaction, rng, rareDiscoveryBonusPct);
+  if (!resource) return result;
+  const bonusPlayer = result.nextState.player;
+  addToInventory(bonusPlayer, resource, 0, 1);
+  return {
+    reply: { ...result.reply, text: `${result.reply.text}\n\n✨ Среди находок — что-то незнакомое, явно фракционного происхождения: ${resource} ×1.` },
+    nextState: { ...result.nextState, player: bonusPlayer }
+  };
+}
 
-async function handleExploration(
-  state,
-  input,
-  rng,
-  deps
-) {
-  switch (
-    state.scene
-  ) {
+async function explore(player, zone, rng, deps, stealthMode = false, depth = 0) {
+  player.zoneVisits = player.zoneVisits || { blue: 0, yellow: 0, red: 0 };
+  player.zoneVisits[zone] = (player.zoneVisits[zone] || 0) + 1;
+  checkContractProgress(player, 'explore', { zone });
+
+  const zoneBase = ZONE_WEIGHTS[zone] || ZONE_WEIGHTS.blue;
+  const themedWeights = applyThemeWeightBias(zoneBase, player.currentLocationTheme);
+  const guildYieldBonusPct = await guildYieldBonusFor(deps, player);
+  const rareDiscoveryBonusPct = await guildRareDiscoveryBonusFor(deps, player);
+
+  if (stealthMode) {
+    const spared = Math.round(themedWeights.ambush * 0.6);
+    const weightsOverride = { ...themedWeights, ambush: themedWeights.ambush - spared, find: themedWeights.find + spared };
+    const event = rollEvent(zone, rng, player.level || 1, weightsOverride, player.currentLocationTheme);
+    if (event.type !== 'ambush') {
+      player.stealthLog = [...(player.stealthLog || []), `Уклонение в ${ZONE_LABEL[zone] || zone}`].slice(-5);
+    }
+    return withExclusiveResourceBonus(withMicroDiscovery(resolveExplorationEvent(player, event, zone, 0, deps, rng, '', false, guildYieldBonusPct), rng), player, rng, rareDiscoveryBonusPct);
+  }
+
+  const event = rollEventWithDepth(player, zone, depth, rng, themedWeights, player.currentLocationTheme);
+  return withExclusiveResourceBonus(withMicroDiscovery(resolveExplorationEvent(player, event, zone, depth, deps, rng, '', true, guildYieldBonusPct), rng), player, rng, rareDiscoveryBonusPct);
+}
+
+/** Резолвит один полный раунд боя со стаей — умение (или обычная атака)
+ * + выбранная цель, с честным кулдауном (тот же движок, что и в бою
+ * 1 на 1), новой картой на всю стаю, и правильными исходами победы/
+ * поражения. Общий хелпер для PACK_COMBAT (когда цель всего одна и
+ * выбирать не из чего) и PACK_TARGET (обычный путь). */
+function resolvePackAction(state, targetName, skillId, rng, deps) {
+  const skill = skillId ? SKILLS[skillId] : null;
+  const targetIndex = state.pack.findIndex((p) => p.name === targetName && p.hp > 0);
+  const prevPlayerHp = state.player.hp;
+  const prevPackHp = state.pack.map((p) => p.hp);
+
+  const result = resolvePackRound(state.player, state.pack, targetIndex, skill, rng);
+  const player = result.playerFighter;
+  const cooldownsAfterUse = skillId ? startCooldown(state.packCooldowns || {}, skillId, skill, player.cooldownReductionPct || 0) : (state.packCooldowns || {});
+  const tickedCooldowns = tickCooldowns(cooldownsAfterUse);
+
+  if (result.playerDefeated) {
+    const defeatedPlayer = { ...player, hp: Math.round(player.hpMax * 0.3) };
+    const toShip = returnFromPlanet(defeatedPlayer, '');
+    if (toShip) {
+      toShip.reply.text = `💥 ${result.log.join(' ')}\n\n💀 Стая берёт числом. Аварийная капсула тянет тебя обратно к кораблю.\n\n${toShip.reply.text}`;
+      return toShip;
+    }
+    return { reply: { text: `💥 ${result.log.join(' ')}\n\n💀 Стая берёт числом. Эвакуация на станцию.`, buttons: stationButtons(deps, defeatedPlayer) }, nextState: { scene: 'station', player: defeatedPlayer } };
+  }
+
+  if (result.packDefeated) {
+    const loot = rollLoot(state.zone, rng, player.level || 1);
+    const mult = stormRewardMult();
+    addToInventory(player, loot.resource, loot.tier, loot.qty);
+    player.credits = (player.credits || 0) + Math.round(loot.credits * mult);
+    grantXp(player, (EXPLORATION_XP_BY_ZONE[state.zone] || 5) * state.pack.length);
+    return {
+      reply: { text: `💥 ${result.log.join(' ')}\n\n🏆 Стая выбита целиком. 📦 +${loot.qty} ${loot.resource} T${loot.tier}, 💳 +${Math.round(loot.credits * mult)}.`, buttons: ['Углубиться дальше', 'Вернуться на станцию'] },
+      nextState: { scene: 'journey_continue', player, zone: state.zone, depth: state.depth }
+    };
+  }
+
+  const buttons = ['🗡️ Обычная атака', ...skillButtons(player, tickedCooldowns)];
+  const cdNote = skillCooldownNote(player, tickedCooldowns);
+  const cdLine = cdNote ? `\n\n${cdNote}` : '';
+  return {
+    reply: { text: `💥 ${result.log.join(' ')}\n\n${combatPackCard(player, result.pack, { prevPlayerHp, prevPackHp })}${cdLine}`, buttons },
+    nextState: { scene: SCENES.PACK_COMBAT, player, zone: state.zone, depth: state.depth, pack: result.pack, packCooldowns: tickedCooldowns }
+  };
+}
+
+async function handleExploration(state, input, rng, deps) {
+  switch (state.scene) {
     case SCENES.STEALTH_EXPLORE: {
-      return handleStealthExplore(
-        deps,
-        state,
-        input,
-        rng
-      );
+      if (input === '⬅️ Назад') {
+        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
+      }
+      if (input === 'Уйти в тень') {
+        return await explore({ ...state.player }, state.player.zone || 'blue', rng, deps, true);
+      }
+      return { reply: { text: 'Выбери действие кнопкой ниже.', buttons: ['Уйти в тень', '⬅️ Назад'] }, nextState: state };
+    }
+
+    case SCENES.PACK_PRE_COMBAT: {
+      if (input === 'Отступить') {
+        return { reply: { text: 'Ты отступаешь, не связываясь со стаей.', buttons: ['Углубиться дальше', 'Вернуться на станцию'] }, nextState: { scene: 'journey_continue', player: state.player, zone: state.zone, depth: state.depth } };
+      }
+      const buttons = ['🗡️ Обычная атака', ...skillButtons(state.player, {})];
+      return {
+        reply: { text: `⚠️ Стая окружает — бей по одной цели за раз, но отвечают все живые разом.\n\n${combatPackCard(state.player, state.pack)}`, buttons },
+        nextState: { scene: SCENES.PACK_COMBAT, player: state.player, zone: state.zone, depth: state.depth, pack: state.pack, packCooldowns: {} }
+      };
+    }
+
+    case SCENES.PACK_COMBAT: {
+      // Шаг 1 из 2 — выбор действия (обычная атака или умение), без цели.
+      const skillId = input === '🗡️ Обычная атака' ? null : skillIdByName(input);
+      const skill = skillId ? SKILLS[skillId] : null;
+      if (input !== '🗡️ Обычная атака' && !skill) {
+        const buttons = ['🗡️ Обычная атака', ...skillButtons(state.player, state.packCooldowns || {})];
+        return { reply: { text: 'Выбери действие кнопкой ниже.', buttons }, nextState: state };
+      }
+      const alive = state.pack.filter((p) => p.hp > 0);
+      if (alive.length === 1) {
+        // Единственная живая цель — не заставляем выбирать вручную.
+        return resolvePackAction(state, alive[0].name, skillId, rng, deps);
+      }
+      const targets = alive.map((p) => `🎯 ${p.name}`);
+      return {
+        reply: { text: `Цель для «${skill ? skill.name : 'Обычной атаки'}»:`, buttons: targets },
+        nextState: { scene: SCENES.PACK_TARGET, player: state.player, zone: state.zone, depth: state.depth, pack: state.pack, packCooldowns: state.packCooldowns, pendingSkillId: skillId }
+      };
+    }
+
+    case SCENES.PACK_TARGET: {
+      const match = /^🎯 (.+)$/.exec(input);
+      const targetName = match ? match[1] : null;
+      if (!targetName || !state.pack.some((p) => p.name === targetName && p.hp > 0)) {
+        const targets = state.pack.filter((p) => p.hp > 0).map((p) => `🎯 ${p.name}`);
+        return { reply: { text: 'Выбери живую цель кнопкой ниже.', buttons: targets }, nextState: state };
+      }
+      return resolvePackAction(state, targetName, state.pendingSkillId, rng, deps);
+    }
+
+    case 'distress_choice': {
+      const player = { ...state.player };
+      const { zone, depth, distressEvent } = state;
+      const journeyButtons = ['Углубиться дальше', 'Вернуться на станцию'];
+      const backToJourney = (text) => ({ reply: { text, buttons: journeyButtons }, nextState: { scene: 'journey_continue', player, zone, depth } });
+
+      const choiceMap = { 'Ответить': 'respond', 'Просканировать издали': 'scan', 'Игнорировать': 'ignore' };
+      const choice = choiceMap[input];
+      if (!choice) return { reply: { text: 'Выбери: Ответить, Просканировать издали или Игнорировать.', buttons: ['Ответить', 'Просканировать издали', 'Игнорировать'] }, nextState: state };
+
+      const result = resolveDistressChoice(choice, distressEvent, player);
+      if (result.outcome === 'ambush') {
+        return {
+          reply: { text: `📡 ${result.text}`, buttons: ['⚔️ Атаковать', 'Отступить'], imageKey: imageForEnemy(result.enemy.name) },
+          nextState: { scene: 'pre_combat', player, enemy: result.enemy, zone, depth }
+        };
+      }
+      if (result.outcome === 'rewarded') {
+        const mult = stormRewardMult();
+        player.credits = (player.credits || 0) + Math.round(result.reward.credits * mult);
+        addFactionReputation(player, player.faction, result.reward.reputation);
+        return backToJourney(`📡 ${result.text}\n💳 +${Math.round(result.reward.credits * mult)} кредитов, ⭐ +${result.reward.reputation} репутации.`);
+      }
+      if (result.outcome === 'scan_trap_revealed' || result.outcome === 'scan_genuine_revealed') {
+        return {
+          reply: { text: `📡 ${result.text}`, buttons: ['Ответить', 'Игнорировать'] },
+          nextState: { scene: 'distress_choice', player, zone, depth, distressEvent }
+        };
+      }
+      return backToJourney(`📡 ${result.text}`);
+    }
+
+    case 'resonance_pedestal_choice': {
+      const player = { ...state.player };
+      const { zone, depth } = state;
+      if (input === 'Пройти мимо') {
+        return { reply: { text: 'Решаешь не трогать постамент.', buttons: ['Углубиться дальше', 'Вернуться на станцию'] }, nextState: { scene: 'journey_continue', player, zone, depth } };
+      }
+      if (input !== 'Дотронуться') return { reply: { text: 'Выбери: Дотронуться или Пройти мимо.', buttons: ['Дотронуться', 'Пройти мимо'] }, nextState: state };
+
+      const result = resolveResonancePedestal(rng, player.level || 1);
+      let note = '';
+      if (result.xp) { grantXp(player, result.xp); note = ` ✨ +${result.xp} XP.`; }
+      if (result.radiationGain) { player.radiation = Math.min(100, (player.radiation || 0) + result.radiationGain); note = ` ☢️ +${result.radiationGain}%.`; }
+      if (result.loot) { addToInventory(player, result.loot.resource, result.loot.tier, result.loot.qty); note = ` 📦 +${result.loot.qty}× ${result.loot.resource} T${result.loot.tier}.`; }
+      if (result.reputationGain) { addFactionReputation(player, player.faction, result.reputationGain); note = ` ⭐ +${result.reputationGain} репутации.`; }
+      return { reply: { text: `🔮 ${result.text}${note}`, buttons: ['Углубиться дальше', 'Вернуться на станцию'] }, nextState: { scene: 'journey_continue', player, zone, depth } };
+    }
+
+    case 'terminal_hack_choice': {
+      const player = { ...state.player };
+      const { zone, depth } = state;
+      if (input === 'Не рисковать') {
+        return { reply: { text: 'Решаешь не рисковать со взломом.', buttons: ['Углубиться дальше', 'Вернуться на станцию'] }, nextState: { scene: 'journey_continue', player, zone, depth } };
+      }
+      if (input !== 'Взломать') return { reply: { text: 'Выбери: Взломать или Не рисковать.', buttons: ['Взломать', 'Не рисковать'] }, nextState: state };
+
+      const result = resolveTerminalHack('hack', player, rng, player.level || 1);
+      if (result.outcome === 'fail_alarm') {
+        return {
+          reply: { text: `💻 ${result.text}`, buttons: ['⚔️ Атаковать', 'Отступить'], imageKey: imageForEnemy(result.enemy.name) },
+          nextState: { scene: 'pre_combat', player, enemy: result.enemy, zone, depth }
+        };
+      }
+      let note = '';
+      if (result.xp) { grantXp(player, result.xp); note += ` ✨ +${result.xp} XP.`; }
+      if (result.loot) { addToInventory(player, result.loot.resource, result.loot.tier, result.loot.qty); note += ` 📦 +${result.loot.qty}× ${result.loot.resource} T${result.loot.tier}.`; }
+      return { reply: { text: `💻 ${result.text}${note}`, buttons: ['Углубиться дальше', 'Вернуться на станцию'] }, nextState: { scene: 'journey_continue', player, zone, depth } };
+    }
+
+    case 'echo_playback_choice': {
+      const player = { ...state.player };
+      const { zone, depth } = state;
+      const choiceMap = { 'Послушать немного': 'listen_short', 'Дослушать до конца': 'listen_full', 'Пройти мимо': 'skip' };
+      const choice = choiceMap[input];
+      if (!choice) return { reply: { text: 'Выбери один из вариантов.', buttons: ['Послушать немного', 'Дослушать до конца', 'Пройти мимо'] }, nextState: state };
+
+      const result = resolveEchoPlayback(choice, rng, player.level || 1);
+      if (result.outcome === 'ambushed') {
+        return {
+          reply: { text: `📻 ${result.text}`, buttons: ['⚔️ Атаковать', 'Отступить'], imageKey: imageForEnemy(result.enemy.name) },
+          nextState: { scene: 'pre_combat', player, enemy: result.enemy, zone, depth }
+        };
+      }
+      let note = '';
+      if (result.xp) { grantXp(player, result.xp); note += ` ✨ +${result.xp} XP.`; }
+      if (result.loot) { addToInventory(player, result.loot.resource, result.loot.tier, result.loot.qty); note += ` 📦 +${result.loot.qty}× ${result.loot.resource} T${result.loot.tier}.`; }
+      return { reply: { text: `📻 ${result.text}${note}`, buttons: ['Углубиться дальше', 'Вернуться на станцию'] }, nextState: { scene: 'journey_continue', player, zone, depth } };
+    }
+
+    case 'reaction_hazard_choice': {
+      const player = { ...state.player };
+      const { zone, depth } = state;
+      if (input !== 'Среагировать') return { reply: { text: 'Выбери: Среагировать.', buttons: ['Среагировать'] }, nextState: state };
+
+      const result = resolveReactionHazard(player, rng, player.level || 1);
+      let note = '';
+      if (result.loot) { addToInventory(player, result.loot.resource, result.loot.tier, result.loot.qty); note += ` 📦 +${result.loot.qty}× ${result.loot.resource} T${result.loot.tier}.`; }
+      if (result.dmg) { player.hp = Math.max(0, player.hp - result.dmg); note += ` -${result.dmg} HP.`; }
+      if (player.hp <= 0) {
+        const toShip = returnFromPlanet({ ...player, hp: Math.round(player.hpMax * 0.3) }, `⚡ ${result.text}${note}\n\n☠️ Слишком сильный удар. Аварийная капсула тянет тебя обратно к кораблю.\n\n`);
+        if (toShip) return toShip;
+        return { reply: { text: `⚡ ${result.text}${note}\n\n☠️ Эвакуация на станцию.`, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player: { ...player, hp: Math.round(player.hpMax * 0.3) } } };
+      }
+      return { reply: { text: `⚡ ${result.text}${note}`, buttons: ['Углубиться дальше', 'Вернуться на станцию'] }, nextState: { scene: 'journey_continue', player, zone, depth } };
+    }
+
+    case 'corrupted_ai_choice': {
+      const player = { ...state.player };
+      const { zone, depth } = state;
+      const choiceMap = { 'Спросить про Тракт': 'ask_about_trakt', 'Спросить про станцию': 'ask_about_station', 'Отключить': 'shut_down' };
+      const choice = choiceMap[input];
+      if (!choice) return { reply: { text: 'Выбери один из вариантов.', buttons: ['Спросить про Тракт', 'Спросить про станцию', 'Отключить'] }, nextState: state };
+
+      const result = resolveCorruptedAi(choice, player);
+      let note = '';
+      if (result.flag) { player.flags = player.flags || {}; player.flags[result.flag] = true; }
+      if (result.reputationGain) { addFactionReputation(player, result.faction || player.faction, result.reputationGain); note = ` ⭐ +${result.reputationGain} репутации.`; }
+      return { reply: { text: `🤖 ${result.text}${note}`, buttons: ['Углубиться дальше', 'Вернуться на станцию'] }, nextState: { scene: 'journey_continue', player, zone, depth } };
     }
 
     case SCENES.JOURNEY: {
-      return handleJourney(
-        deps,
-        state,
-        input,
-        rng
-      );
+      const stepsLeft = state.stepsLeft - 1;
+      if (stepsLeft > 0) {
+        const pool = state.kind === 'explore' ? (ZONE_TRAVEL_PHRASES[state.payload.zone] || ZONE_TRAVEL_PHRASES.blue) : STATION_TRAVEL_PHRASES;
+        const phraseText = pool[Math.floor(rng() * pool.length)];
+        return {
+          reply: { text: phraseText, buttons: ['Продолжить путь'] },
+          nextState: { scene: 'journey', player: state.player, kind: state.kind, payload: state.payload, stepsLeft }
+        };
+      }
+      if (state.kind === 'explore') {
+        return await explore(state.player, state.payload.zone, rng, deps, !!state.payload.stealthMode, state.payload.depth || 0);
+      }
+      // Посещение чужой станции — раньше здесь мутировался player.faction
+      // напрямую (тот же эффект, что и полноценная смена фракции, но без
+      // отката бонуса статов/пересчёта умений/проверки уровня). Теперь
+      // временная отметка "гость", родная фракция не трогается — см.
+      // common.js: currentStation().
+      const player = { ...state.player, visitingStation: state.payload.targetFaction };
+      return {
+        reply: { text: `Стыковка завершена. Станция «${player.visitingStation}» пускает тебя как гостя — доступны общие услуги (мастерская, ремонт, рынок), но не куратор. Чтобы говорить с куратором, нужно вступить во фракцию (Мостик → Станция приписки).`, buttons: stationButtons(deps, player) },
+        nextState: { scene: 'station', player }
+      };
     }
 
     case SCENES.JOURNEY_CONTINUE: {
-      return handleJourneyContinue(
-        deps,
-        state,
-        input,
-        rng
-      );
+      const { player, zone, depth, isBossContext, sectorResident, microDiscovery } = state;
+      if (microDiscovery && input === `Изучить: ${microDiscovery.name}`) {
+        const rewardedPlayer = { ...player };
+        let rewardNote;
+        if (microDiscovery.reward.credits) {
+          rewardedPlayer.credits = (rewardedPlayer.credits || 0) + microDiscovery.reward.credits;
+          rewardNote = `💳 +${microDiscovery.reward.credits} кредитов.`;
+        } else {
+          addToInventory(rewardedPlayer, microDiscovery.reward.resource, microDiscovery.reward.tier, microDiscovery.reward.qty);
+          rewardNote = `📦 +${microDiscovery.reward.qty} ${microDiscovery.reward.resource} T${microDiscovery.reward.tier}.`;
+        }
+        const baseButtons = sectorResident
+          ? [`⚔️ Атаковать: ${BESTIARY[sectorResident.residentId]?.name}`, ...journeyContinueButtons(zone, isBossContext)]
+          : journeyContinueButtons(zone, isBossContext);
+        return {
+          reply: { text: `Забираешь находку. ${rewardNote}`, buttons: baseButtons },
+          nextState: { scene: 'journey_continue', player: rewardedPlayer, zone, depth, isBossContext, sectorResident }
+        };
+      }
+      if (sectorResident && input === `⚔️ Атаковать: ${BESTIARY[sectorResident.residentId]?.name}`) {
+        const enemy = buildBestiaryFighter(BESTIARY[sectorResident.residentId], player.level);
+        return {
+          reply: { text: `⚔️ ${enemy.name} наконец обращает на тебя внимание.`, buttons: ['⚔️ Атаковать', 'Отступить'], imageKey: imageForEnemy(enemy.name) },
+          nextState: { scene: 'pre_combat', player, enemy, zone, depth, sectorResident }
+        };
+      }
+      if (input === 'Углубиться дальше') {
+        return startJourney(player, 'explore', { zone, depth: (depth || 0) + 1 }, rng);
+      }
+      if (input === 'Эвакуироваться') {
+        if (zone !== 'red' && !isBossContext) {
+          // Эвакуация не предлагалась в этой ситуации — не даём случайно
+          // сработать на нераспознанном вводе.
+          return { reply: { text: 'Выбери действие кнопкой ниже.', buttons: journeyContinueButtons(zone, isBossContext) }, nextState: state };
+        }
+        const bonus = getEvacChanceBonus(player);
+        const result = attemptEvacuation(player, zone, depth || 0, rng, bonus);
+        if (result.success) {
+          const toShip = returnFromPlanet(player, `🛰️ ${result.text}\n\n`);
+          if (toShip) return toShip;
+          return { reply: { text: `🛰️ ${result.text}`, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
+        }
+        const rareDiscoveryBonusPct = await guildRareDiscoveryBonusFor(deps, player);
+        return withExclusiveResourceBonus(withMicroDiscovery(resolveExplorationEvent(player, result.blockingEvent, zone, depth || 0, deps, rng, `⚠️ ${result.text}\n\n`), rng), player, rng, rareDiscoveryBonusPct);
+      }
+      if (input === 'Вернуться на станцию') {
+        const toShip = returnFromPlanet(player, '🪐 Ты не торопясь идёшь назад к кораблю — вылазка окончена, всё добытое уже в трюме.\n\n');
+        if (toShip) return toShip;
+        return { reply: { text: 'Ты не торопясь идёшь назад пешком — вылазка окончена, всё добытое уже в трюме.', buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
+      }
+      const fallbackButtons = sectorResident
+        ? [`⚔️ Атаковать: ${BESTIARY[sectorResident.residentId]?.name}`, ...journeyContinueButtons(zone, isBossContext)]
+        : journeyContinueButtons(zone, isBossContext);
+      return { reply: { text: 'Выбери действие кнопкой ниже.', buttons: fallbackButtons }, nextState: state };
     }
 
     case SCENES.EXPLORATION_EVENT_CHOICE: {
-      return handleExplorationEventChoice(
-        deps,
-        state,
-        input,
-        rng
-      );
+      const { player, zone, depth, event } = state;
+      const choice = (event.choices || []).find((c) => c.text === input);
+      if (!choice) {
+        return { reply: { text: `${event.text}`, buttons: event.choices.map((c) => c.text) }, nextState: state };
+      }
+      if (choice.combat) {
+        const combatZone = choice.combat.zoneOverride || zone;
+        const enemy = generateEnemy(combatZone, rng, player.level || 1);
+        return {
+          reply: { text: `⚔️ ${event.text}`, buttons: ['⚔️ Атаковать', 'Отступить'], imageKey: imageForEnemy(enemy.name) },
+          nextState: { scene: 'pre_combat', player, enemy, zone, depth }
+        };
+      }
+      const nextPlayer = { ...player };
+      const result = choice.result || {};
+      if (result.reward) {
+        if (result.reward.credits) nextPlayer.credits = (nextPlayer.credits || 0) + result.reward.credits;
+        if (result.reward.reputation) addFactionReputation(nextPlayer, nextPlayer.faction, result.reward.reputation);
+        if (result.reward.flag) { nextPlayer.flags = nextPlayer.flags || {}; nextPlayer.flags[result.reward.flag] = true; }
+      }
+      if (result.flag) { nextPlayer.flags = nextPlayer.flags || {}; nextPlayer.flags[result.flag] = true; }
+      if (choice.consequenceId) await applyConsequenceToPlayer(deps, nextPlayer, choice.consequenceId);
+      if (event.flag) { nextPlayer.flags = nextPlayer.flags || {}; nextPlayer.flags[event.flag] = true; }
+      return safeReturnChoice(result.text || event.text, nextPlayer, zone, depth);
     }
 
-    case SCENES.DEEP_EXPLORATION: {
-      return handleDeepExploration(
-        deps,
-        state,
-        input,
-        rng
-      );
+    case SCENES.ANOMALY_PUZZLE: {
+      if (input !== 'Преодолеть') {
+        return { reply: { text: 'Нажми «Преодолеть», чтобы попытаться пройти аномалию.', buttons: ['Преодолеть'] }, nextState: state };
+      }
+      const player = { ...state.player };
+      const { puzzle, baseEvent, zone, depth } = state;
+      const attempt = resolvePuzzleAttempt(puzzle, player);
+      player.hp = Math.max(0, player.hp - attempt.hpDamage);
+      const damageNote = attempt.hpDamage > 0 ? ` -${attempt.hpDamage} HP (${puzzle.failDamagePercent}% макс.).` : '';
+      const resultLine = attempt.passed ? '✅ Преодолено.' : '⚠️ Не преодолено.';
+
+      if (player.hp <= 0) {
+        return {
+          reply: { text: `${resultLine} ${attempt.text}${damageNote}\n\n☠️ Ловушка оказалась смертельной. Спасательная капсула вытаскивает тебя на станцию.`, buttons: stationButtons(deps, player) },
+          nextState: { scene: 'station', player: { ...player, hp: Math.round(player.hpMax * 0.3) } }
+        };
+      }
+
+      return {
+        reply: { text: `${resultLine} ${attempt.text}${damageNote}\n\n${baseEvent.text}\n❤️ HP: ${player.hp}/${player.hpMax}\n\nПока не улеглась пыль, можно ещё поискать в обломках аномалии.`, buttons: ['🔍 Искать артефакт', 'Доложить куратору', 'Утаить находку'] },
+        nextState: { scene: 'anomaly_choice', player, zone, depth, puzzleStat: puzzle.stat }
+      };
     }
 
     case SCENES.ANOMALY_CHOICE: {
-      return handleAnomalyChoice(
-        deps,
-        state,
-        input,
-        rng
-      );
+      const player = { ...state.player };
+      const zone = state.zone, depth = state.depth;
+      if (input === '🔍 Искать артефакт') {
+        const statValue = (player.stats && player.stats[state.puzzleStat]) || 0;
+        const searchChance = Math.min(0.6, 0.15 + statValue * 0.01); // растёт с тем же статом, что и сама головоломка
+        const searchDamage = Math.round(player.hpMax * 0.08);
+        if (rng() < searchChance) {
+          const artifact = pickRandomArtifact(rng);
+          player.artifacts = player.artifacts || [];
+          player.artifacts.push(artifact.id);
+          return {
+            reply: { text: `🔍 В обломках находится нечто целое — «${artifact.name}». ${artifact.blurb}\n\nЧто делать с находкой?`, buttons: ['Доложить куратору', 'Утаить находку'] },
+            nextState: { scene: 'anomaly_choice', player, zone, depth }
+          };
+        }
+        player.hp = Math.max(0, player.hp - searchDamage);
+        if (player.hp <= 0) {
+          return { reply: { text: `🔍 Поиск оборачивается новым выбросом резонанса. -${searchDamage} HP.\n\n☠️ Смертельно. Спасательная капсула вытаскивает тебя на станцию.`, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player: { ...player, hp: Math.round(player.hpMax * 0.3) } } };
+        }
+        return {
+          reply: { text: `🔍 Ничего не находится, только новый выброс резонанса. -${searchDamage} HP.\n\nЧто делать с находкой?`, buttons: ['Доложить куратору', 'Утаить находку'] },
+          nextState: { scene: 'anomaly_choice', player, zone, depth }
+        };
+      }
+      if (input === 'Доложить куратору') {
+        // Рутинная находка на вылазке — не сюжетный перелом, поэтому не
+        // трогает choices/consequence-engine.js (та система — для реальных
+        // сюжетных развилок вроде priyut_1_missing/echo_allied). Просто
+        // небольшая честная репутация за доклад.
+        addFactionReputation(player, player.faction, 5);
+        return safeReturnChoice('Куратор внимательно выслушивает доклад и кивает. +5 репутации станции.', player, zone, depth);
+      }
+      if (input === 'Утаить находку') {
+        return safeReturnChoice('Ты решаешь промолчать об увиденном. Что-то в этом решении отзывается в теле неприятным холодом — но, возможно, не только в теле.', player, zone, depth);
+      }
+      return { reply: { text: 'Выбери: доложить куратору или утаить находку.', buttons: ['Доложить куратору', 'Утаить находку'] }, nextState: state };
     }
 
     case SCENES.NEUTRAL_ENCOUNTER: {
-      return handleNeutralEncounter(
-        deps,
-        state,
-        input,
-        rng
-      );
-    }
-
-    case 'pre_combat': {
-      return handlePreCombat(
-        deps,
-        state,
-        input,
-        rng
-      );
-    }
-
-    case 'combat': {
-      return handleCombat(
-        deps,
-        state,
-        input,
-        rng
-      );
+      if (input === 'Обойти стороной') {
+        return safeReturnChoice(`Ты обходишь ${state.enemy.name} по широкой дуге — оно провожает тебя взглядом, но не двигается.`, state.player, state.zone, state.depth);
+      }
+      if (input === '⚔️ Атаковать') {
+        return {
+          reply: { text: `⚔️ Ты решаешь спровоцировать ${state.enemy.name}.`, buttons: ['⚔️ Атаковать', 'Отступить'], imageKey: imageForEnemy(state.enemy.name) },
+          nextState: { scene: 'pre_combat', player: state.player, enemy: state.enemy, zone: state.zone, depth: state.depth }
+        };
+      }
+      return { reply: { text: 'Выбери действие кнопкой ниже.', buttons: ['Обойти стороной', '⚔️ Атаковать'] }, nextState: state };
     }
 
     default:
@@ -2537,10 +808,4 @@ async function handleExploration(
   }
 }
 
-
-module.exports = {
-  handleExploration,
-  explore,
-  resolveExplorationEvent,
-  returnFromPlanet,
-};
+module.exports = { handleExploration, explore, resolveExplorationEvent, returnFromPlanet };
