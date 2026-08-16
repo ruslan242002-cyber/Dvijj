@@ -142,9 +142,22 @@ async function arriveAtNode(
   }
 
   player.currentNodeId = nodeId;
-  player.pendingShipDistance = undefined;
+
+  /*
+   * ВАЖНО:
+   * pendingShipDistance нельзя очищать здесь для обычного Node.
+   *
+   * После прибытия в Node игрок может высадиться на планету.
+   * exploration.js использует pendingShipDistance при возврате
+   * с планеты обратно к кораблю.
+   *
+   * Очищаем его только при фактическом прибытии в город,
+   * где рейс завершён и tripCargo переводится в безопасный склад.
+   */
 
   if (node.type === 'city') {
+    player.pendingShipDistance = undefined;
+
     const { banked } = bankTripCargo(player);
 
     clearTravelState(player);
