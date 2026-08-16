@@ -57,6 +57,19 @@ async function guildDamageBonusFor(deps, player) {
 }
 
 async function bossHub(deps, player, playerId, prefixText = '') {
+  // ВАЖНО: 11 именных боссов (engine/world-bosses/) НЕ показываются здесь.
+  // По уточнению — они "обычные враги, но в разы сильнее", встречаются НА
+  // СВОЕЙ ЛОКАЦИИ (см. boss.location в engine/world-bosses/boss-data.js),
+  // не через центральную кнопку станции. Настоящий "мировой босс" —
+  // отдельная механика через лайки/посты сообщества ВК, ещё не построена.
+  // Раньше здесь была ротация среди всех 11 — убрана по прямому указанию.
+  return {
+    reply: { text: `${prefixText}👹 МИРОВОЙ БОСС\n\nЭта механика ещё не запущена — появление мирового босса будет связано с активностью сообщества «Периферии» в ВК. Сильные противники сейчас встречаются на своих локациях в открытом космосе.`, buttons: ['⬅️ Назад'] },
+    nextState: { scene: 'station', player }
+  };
+}
+
+async function _unusedLegacyBossHub(deps, player, playerId, prefixText = '') {
   if (!deps.bossStore) {
     return {
       reply: { text: `${prefixText}👹 МИРОВОЙ БОСС\n\nСистема групповых боссов пока не подключена.`, buttons: ['⬅️ Назад'] },
@@ -108,17 +121,35 @@ async function handleBoss(state, input, rng, deps, playerId) {
     if (input === '⚔️ Атаковать') {
       const instance = await deps.bossStore.getActiveBoss(BOSS_SLOT);
       if (!instance || instance.defeated) return bossHub(deps, state.player, playerId, 'Босс уже недоступен.\n\n');
-      const buttons = ['⚔️ Обычная атака', ...skillButtons(state.player, state.bossCooldowns || {})];
+      const buttons = ['⚔️ Обычная атака', ...skillButtons(state.player, state.bossCooldowns || {}), '🏃 Уйти'];
       return { reply: { text: 'Выбери действие:', buttons }, nextState: { scene: SCENES.BOSS_COMBAT, player: state.player, bossCooldowns: state.bossCooldowns || {} } };
     }
     return bossHub(deps, state.player, playerId);
   }
 
   if (state.scene === SCENES.BOSS_COMBAT) {
+    if (input === '🏃 Уйти') {
+      const instance = await deps.bossStore.getActiveBoss(BOSS_SLOT);
+      const boss = instance ? findBoss(instance.bossId) : null;
+      // Переменный шанс — база 40%, растёт с reaction игрока (та же
+      // характеристика, что уже отвечает за уклонение/скорость реакции
+      // в остальном бою), падает с уровнем угрозы босса. Никогда не 0 и
+      // не 100% — побег должен оставаться решением с риском, не гарантией.
+      const reactionBonus = (state.player.stats?.reaction || 0) / 200; // 200 reaction -> +100%, реалистично даёт единицы-десятки %
+      const threatPenalty = { 'ЛЕГКО': 0, 'СРЕДНИЙ': 0.05, 'ВЫСОКИЙ': 0.1, 'СЛОЖНО': 0.15, 'ВЫСОЧАЙШИЙ': 0.2 }[boss?.threatLevel] || 0.1;
+      const escapeChance = Math.max(0.1, Math.min(0.9, 0.4 + reactionBonus - threatPenalty));
+      if (rng() < escapeChance) {
+        return bossHub(deps, state.player, playerId, '🏃 Манёвр удался — отрываешься от боя без потерь.\n\n');
+      }
+      return {
+        reply: { text: `🏃 Не получилось оторваться — ${boss?.name || 'противник'} остаётся на хвосте, бой продолжается.`, buttons: ['⚔️ Обычная атака', ...skillButtons(state.player, state.bossCooldowns || {}), '🏃 Уйти'] },
+        nextState: { scene: SCENES.BOSS_COMBAT, player: state.player, bossCooldowns: state.bossCooldowns || {} }
+      };
+    }
     const skillId = input === '⚔️ Обычная атака' ? null : skillIdByName(input);
     const skill = skillId ? SKILLS[skillId] : null;
     if (input !== '⚔️ Обычная атака' && !skill) {
-      const buttons = ['⚔️ Обычная атака', ...skillButtons(state.player, state.bossCooldowns || {})];
+      const buttons = ['⚔️ Обычная атака', ...skillButtons(state.player, state.bossCooldowns || {}), '🏃 Уйти'];
       return { reply: { text: 'Выбери действие кнопкой ниже.', buttons }, nextState: state };
     }
 
