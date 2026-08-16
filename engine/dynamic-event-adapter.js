@@ -3,15 +3,18 @@
 /**
  * Адаптер сюжетных событий world-context -> exploration.js.
  *
- * Генератор dynamic-events.js не должен знать о сценах игры.
- * Он возвращает доменные события, а этот слой приводит их
- * к существующему контракту exploration.js.
+ * Dynamic events остаются отдельной системой.
+ * Здесь они приводятся к уже существующему контракту exploration.js.
+ *
+ * ВАЖНО:
+ * Не создаём новый движок событий и не дублируем combat.
  */
 
 function buildDynamicEnemy({
   name,
   tier = 1,
   rng = Math.random,
+  fragmentId = null,
 }) {
   const safeTier = Math.max(
     1,
@@ -40,21 +43,28 @@ function buildDynamicEnemy({
       power: Math.round(
         base * 1.1
       ),
+
       mind: Math.round(
         base * 1.1
       ),
+
       reaction: Math.round(
         base * 1.1
       ),
+
       endurance: Math.round(
         base * 1.1
       ),
+
       firepower: Math.round(
         base * 1.25
       ),
+
       shielding: Math.min(
         70,
-        Math.round(base * 0.7)
+        Math.round(
+          base * 0.7
+        )
       ),
     },
 
@@ -64,54 +74,90 @@ function buildDynamicEnemy({
 
     accuracy:
       0.72 +
-      Math.min(safeTier, 5) * 0.02,
+      Math.min(
+        safeTier,
+        5
+      ) *
+        0.02,
 
     dodge:
       0.08 +
-      Math.min(safeTier, 5) * 0.015,
+      Math.min(
+        safeTier,
+        5
+      ) *
+        0.015,
 
     focus:
       0.65 +
-      Math.min(safeTier, 5) * 0.02,
+      Math.min(
+        safeTier,
+        5
+      ) *
+        0.02,
 
     periodic: [],
+
+    /*
+     * Служебные данные сюжетного боя.
+     * Combat их не использует как боевые характеристики,
+     * но они сохраняются в объекте врага для следующего шага
+     * сюжетной цепочки.
+     */
+    ...(fragmentId
+      ? {
+          fragmentId,
+        }
+      : {}),
   };
 }
 
+/**
+ * Переносит награду dynamic-event в формат
+ * существующего exploration.js.
+ */
 function rewardFields(
   reward = {}
 ) {
-  return {
-    ...(reward.credits
-      ? {
-          credits:
-            reward.credits,
-        }
-      : {}),
+  const result = {};
 
-    ...(reward.reputation
-      ? {
-          reputation:
-            reward.reputation,
-        }
-      : {}),
+  if (
+    reward.credits !==
+    undefined
+  ) {
+    result.credits =
+      reward.credits;
+  }
 
-    ...(reward.faction
-      ? {
-          faction:
-            reward.faction,
-        }
-      : {}),
+  if (
+    reward.reputation !==
+    undefined
+  ) {
+    result.reputation =
+      reward.reputation;
+  }
 
-    ...(reward.flag
-      ? {
-          consequence:
-            reward.flag,
-        }
-      : {}),
-  };
+  if (
+    reward.faction
+  ) {
+    result.faction =
+      reward.faction;
+  }
+
+  if (
+    reward.flag
+  ) {
+    result.consequence =
+      reward.flag;
+  }
+
+  return result;
 }
 
+/**
+ * Превращает одну сюжетную кнопку
+ * в существующий формат exploration.
+ */
 function adaptChoice(
   choice,
   rng
@@ -119,21 +165,50 @@ function adaptChoice(
   const result =
     choice.result || {};
 
+  /*
+   * Самая важная часть:
+   * результат выбора не должен исчезать после нажатия.
+   *
+   * exploration.js после выбора показывает choice.text,
+   * поэтому результат добавляем туда сразу.
+   */
+  const visibleText = [
+    choice.text,
+    result.text,
+  ]
+    .filter(
+      (value) =>
+        typeof value ===
+          'string' &&
+        value.trim()
+    )
+    .join(
+      '\n\n'
+    );
+
   const adapted = {
-    id: choice.id,
-    text: choice.text,
+    id:
+      choice.id,
+
+    text:
+      visibleText ||
+      'Продолжить',
 
     ...rewardFields(
       result.reward
     ),
   };
 
-  if (result.consequenceId) {
+  if (
+    result.consequenceId
+  ) {
     adapted.consequence =
       result.consequenceId;
   }
 
-  if (choice.combat) {
+  if (
+    choice.combat
+  ) {
     adapted.combat = {
       zoneOverride:
         choice.combat
@@ -150,8 +225,23 @@ function adaptChoice(
             choice.combat.tier,
 
           rng,
+
+          fragmentId:
+            choice.fragmentId ||
+            null,
         }),
     };
+  }
+
+  /*
+   * Некоторые события задают сюжетный
+   * флаг непосредственно на событии.
+   */
+  if (
+    choice.flag
+  ) {
+    adapted.consequence =
+      choice.flag;
   }
 
   return adapted;
@@ -169,48 +259,100 @@ function adaptDynamicEvent(
     return event;
   }
 
-  switch (event.type) {
+  switch (
+    event.type
+  ) {
+    /**
+     * Личное сообщение куратора.
+     *
+     * Был просто story без кнопки,
+     * теперь это нормальное одношаговое
+     * событие exploration.
+     */
     case 'story':
       return {
         ...event,
 
-        type: 'choice',
+        type:
+          'choice',
 
         choices: [
           {
-            id: 'continue',
+            id:
+              'continue',
 
             text:
               '📨 Принять сообщение',
 
-            consequence:
-              event.flag || null,
+            result: {
+              text:
+                'Сообщение сохранено. Координаты и поручение куратора теперь учитываются в дальнейших событиях.',
+            },
+
+            flag:
+              event.flag ||
+              null,
           },
         ],
       };
 
+    /**
+     * Обычный сюжетный выбор.
+     */
     case 'choice':
+      return {
+        ...event,
+
+        type:
+          'choice',
+
+        choices: (
+          event.choices ||
+          []
+        ).map(
+          (choice) =>
+            adaptChoice(
+              choice,
+              rng
+            )
+        ),
+      };
+
+    /**
+     * Сюжетный выбор,
+     * где один из вариантов ведёт в combat.
+     */
     case 'combat_choice':
       return {
         ...event,
 
-        type: 'choice',
+        type:
+          'choice',
 
         choices: (
-          event.choices || []
-        ).map((choice) =>
-          adaptChoice(
-            choice,
-            rng
-          )
+          event.choices ||
+          []
+        ).map(
+          (choice) =>
+            adaptChoice(
+              choice,
+              rng
+            )
         ),
       };
 
+    /**
+     * Страж фрагмента Тракта.
+     *
+     * Сам бой остаётся существующим combat.
+     * Здесь только передаём ему служебный fragmentId.
+     */
     case 'boss':
       return {
         ...event,
 
-        type: 'choice',
+        type:
+          'choice',
 
         choices: [
           {
@@ -219,6 +361,10 @@ function adaptDynamicEvent(
 
             text:
               '⚔️ Сразиться со стражем',
+
+            fragmentId:
+              event.fragmentId ||
+              null,
 
             combat: {
               tier:
@@ -236,24 +382,30 @@ function adaptDynamicEvent(
           },
 
           {
-            id: 'retreat',
+            id:
+              'retreat',
 
             text:
               '🚶 Отступить',
           },
-        ].map((choice) =>
-          adaptChoice(
-            choice,
-            rng
-          )
+        ].map(
+          (choice) =>
+            adaptChoice(
+              choice,
+              rng
+            )
         ),
       };
 
+    /**
+     * Сюжетная находка / подтверждение гипотезы.
+     */
     case 'discovery':
       return {
         ...event,
 
-        type: 'choice',
+        type:
+          'choice',
 
         choices: [
           {
@@ -262,6 +414,12 @@ function adaptDynamicEvent(
 
             text:
               '🔎 Изучить находку',
+
+            result: {
+              text:
+                event.text ||
+                'Ты внимательно изучаешь находку.',
+            },
 
             ...rewardFields(
               event.reward
@@ -278,6 +436,12 @@ function adaptDynamicEvent(
       };
 
     default:
+      /*
+       * Неизвестный тип не ломаем.
+       * Возвращаем исходное событие,
+       * чтобы существующая procedural-ветка
+       * могла обработать его своим способом.
+       */
       return event;
   }
 }
