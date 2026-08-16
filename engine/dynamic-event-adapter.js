@@ -1,12 +1,12 @@
 'use strict';
 
 /**
- * Адаптер сюжетных событий world-context -> exploration.js.
+ * Адаптер dynamic-events -> существующий exploration.js.
  *
- * Dynamic events остаются отдельной системой.
- * Здесь они приводятся к существующему контракту exploration.js.
+ * Dynamic-events генерирует сюжетные события.
+ * Exploration уже умеет обрабатывать обычный choice/combat.
  *
- * Никакого второго движка событий здесь нет.
+ * Здесь НЕ создаётся новый движок.
  */
 
 function buildDynamicEnemy({
@@ -33,38 +33,52 @@ function buildDynamicEnemy({
       name ||
       'Страж аномалии',
 
-    tier: safeTier,
+    tier:
+      safeTier,
 
     hp,
-    hpMax: hp,
+    hpMax:
+      hp,
 
     stats: {
-      power: Math.round(
-        base * 1.1
-      ),
-      mind: Math.round(
-        base * 1.1
-      ),
-      reaction: Math.round(
-        base * 1.1
-      ),
-      endurance: Math.round(
-        base * 1.1
-      ),
-      firepower: Math.round(
-        base * 1.25
-      ),
-      shielding: Math.min(
-        70,
+      power:
         Math.round(
-          base * 0.7
-        )
-      ),
+          base * 1.1
+        ),
+
+      mind:
+        Math.round(
+          base * 1.1
+        ),
+
+      reaction:
+        Math.round(
+          base * 1.1
+        ),
+
+      endurance:
+        Math.round(
+          base * 1.1
+        ),
+
+      firepower:
+        Math.round(
+          base * 1.25
+        ),
+
+      shielding:
+        Math.min(
+          70,
+          Math.round(
+            base * 0.7
+          )
+        ),
     },
 
-    luck: Math.round(
-      8 + safeTier * 1.5
-    ),
+    luck:
+      Math.round(
+        8 + safeTier * 1.5
+      ),
 
     accuracy:
       0.72 +
@@ -100,6 +114,10 @@ function buildDynamicEnemy({
   };
 }
 
+/**
+ * Переносит reward в поля,
+ * которые реально понимает exploration.js.
+ */
 function rewardFields(
   reward = {}
 ) {
@@ -128,6 +146,13 @@ function rewardFields(
       reward.faction;
   }
 
+  /*
+   * В dynamic-events flag находится
+   * внутри reward.
+   *
+   * exploration.js понимает consequence,
+   * поэтому сразу нормализуем его.
+   */
   if (
     reward.flag
   ) {
@@ -139,7 +164,7 @@ function rewardFields(
 }
 
 /**
- * Нормализует один вариант выбора.
+ * Нормализация одного выбора.
  */
 function adaptChoice(
   choice,
@@ -177,7 +202,10 @@ function adaptChoice(
   };
 
   /*
-   * Локальное последствие конкретного выбора.
+   * Последствие конкретного выбора.
+   *
+   * Например:
+   * echo_allied
    */
   if (
     result.consequenceId
@@ -187,13 +215,23 @@ function adaptChoice(
   }
 
   /*
+   * result.flag используется,
+   * например, у stranded_signal/flee.
+   */
+  if (
+    result.flag
+  ) {
+    adapted.consequence =
+      result.flag;
+  }
+
+  /*
    * Флаг самого события.
    *
    * Например:
    * anomaly_whisper_seen
    *
-   * Он должен применяться независимо от того,
-   * выбрал игрок бой, побег или мирный вариант.
+   * Он нужен после любого выбора.
    */
   if (
     eventFlag
@@ -202,6 +240,10 @@ function adaptChoice(
       eventFlag;
   }
 
+  /*
+   * Локальный flag выбора имеет
+   * более высокий приоритет.
+   */
   if (
     choice.flag
   ) {
@@ -209,6 +251,10 @@ function adaptChoice(
       choice.flag;
   }
 
+  /*
+   * Существующий combat.
+   * Никакого нового боевого движка.
+   */
   if (
     choice.combat
   ) {
@@ -255,7 +301,7 @@ function adaptDynamicEvent(
     event.type
   ) {
     /**
-     * Сюжетное сообщение.
+     * Сообщение куратора.
      */
     case 'story':
       return {
@@ -277,10 +323,6 @@ function adaptDynamicEvent(
                 'Сообщение сохранено. Поручение куратора теперь учитывается в дальнейших событиях.',
             },
 
-            /*
-             * Раньше здесь было `flag`, которое
-             * exploration.js не применял.
-             */
             consequence:
               event.flag ||
               null,
@@ -313,7 +355,8 @@ function adaptDynamicEvent(
       };
 
     /**
-     * Сюжетный выбор с возможным боем.
+     * Сюжетный выбор,
+     * который может привести к бою.
      */
     case 'combat_choice':
       return {
@@ -337,7 +380,7 @@ function adaptDynamicEvent(
       };
 
     /**
-     * Страж фрагмента.
+     * Страж фрагмента Тракта.
      */
     case 'boss':
       return {
@@ -394,7 +437,43 @@ function adaptDynamicEvent(
     /**
      * Сюжетная находка.
      */
-    case 'discovery':
+    case 'discovery': {
+      const choice = {
+        id:
+          'inspect_discovery',
+
+        text:
+          '🔎 Изучить находку',
+
+        result: {
+          text:
+            event.text ||
+            'Ты внимательно изучаешь находку.',
+        },
+
+        /*
+         * Кредиты и прочие reward-поля
+         * остаются на choice.
+         */
+        ...rewardFields(
+          event.reward
+        ),
+      };
+
+      if (
+        event.hypothesisConfirm
+      ) {
+        choice.consequence =
+          `hypothesis:${event.hypothesisConfirm}`;
+      }
+
+      if (
+        event.flag
+      ) {
+        choice.eventFlag =
+          event.flag;
+      }
+
       return {
         ...event,
 
@@ -402,41 +481,16 @@ function adaptDynamicEvent(
           'choice',
 
         choices: [
-          {
-            id:
-              'inspect_discovery',
-
-            text:
-              '🔎 Изучить находку',
-
-            result: {
-              text:
-                event.text ||
-                'Ты внимательно изучаешь находку.',
-            },
-
-            ...rewardFields(
-              event.reward
-            ),
-
-            ...(event.hypothesisConfirm
-              ? {
-                  consequence:
-                    `hypothesis:${event.hypothesisConfirm}`,
-                }
-              : {}),
-
-            ...(event.flag
-              ? {
-                  eventFlag:
-                    event.flag,
-                }
-              : {}),
-          },
+          choice,
         ],
       };
+    }
 
     default:
+      /*
+       * Неизвестный тип не уничтожаем.
+       * Возвращаем исходное событие.
+       */
       return event;
   }
 }
