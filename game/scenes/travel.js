@@ -1,7 +1,6 @@
 'use strict';
 
 const {
-  NODES,
   ROUTE_VARIANTS,
   availableRoutesFrom,
   nodeById,
@@ -40,6 +39,7 @@ const {
   hubMessage,
   stationButtons,
   addToInventory,
+  startJourney,
 } = require('./common.js');
 
 const {
@@ -52,10 +52,6 @@ const {
   rollTraderOffers,
   buyFromTrader,
 } = require('../../engine/trader-encounter.js');
-
-const {
-  notifyPlayer,
-} = require('../../lib/notifications.js');
 
 const {
   SCENES,
@@ -80,9 +76,9 @@ const CITY_NODE_IDS = new Set([
 ]);
 
 /*
- * ВАЖНО:
- * Тракт и named-locations исторически использовали разные ID.
- * Здесь единый слой соответствия.
+ * Старые ID Тракта и canonical ID named-locations.
+ * Не создаём новый справочник локаций — только связываем
+ * уже существующие системы.
  */
 const LOCATION_NODE_ALIASES = {
   kovcheg9: 'kovcheg9',
@@ -97,7 +93,6 @@ const LOCATION_NODE_ALIASES = {
   perimetr_tanvir: 'perimetr_tanvir',
 
   yarmarka_tenej: 'yarmarka_tenej',
-
   nekropol_ksarn: 'nekropol_ksarn',
   bezdna_orrin: 'bezdna_orrin',
   kuznya_zabytyh: 'kuznya_zabytyh',
@@ -120,21 +115,11 @@ function fuelCostForVariant(variant) {
 }
 
 function riskEmoji(riskLabel) {
-  return riskLabel === 'red'
-    ? '🔴'
-    : riskLabel === 'yellow'
-      ? '🟡'
-      : '🟢';
+  if (riskLabel === 'red') return '🔴';
+  if (riskLabel === 'yellow') return '🟡';
+  return '🟢';
 }
 
-/*
- * Не доверяем только node.type.
- *
- * Реальная система именованных планет находится в
- * lib/named-locations.js. Если место существует там —
- * это место высадки, даже если старый узел Тракта
- * случайно помечен city/location неправильно.
- */
 function resolveNamedLocation(nodeId) {
   const canonicalId =
     LOCATION_NODE_ALIASES[nodeId] || nodeId;
@@ -157,13 +142,14 @@ function resolveLocationZone(location) {
     return 'yellow';
   }
 
-  for (const [zone, locations] of Object.entries(
-    {
-      blue: locationsForZone('blue'),
-      yellow: locationsForZone('yellow'),
-      red: locationsForZone('red'),
-    }
-  )) {
+  for (const zone of [
+    'blue',
+    'yellow',
+    'red',
+  ]) {
+    const locations =
+      locationsForZone(zone);
+
     if (
       locations.some(
         (item) =>
@@ -178,14 +164,12 @@ function resolveLocationZone(location) {
 }
 
 /*
- * Вход в существующую систему exploration.
- *
- * Здесь НЕ создаётся новый движок.
- * Вся информация о конкретном месте передаётся
- * внутрь payload, чтобы exploration мог использовать
- * обычную механику вылазок + named-locations.
+ * ВАЖНО:
+ * Это НЕ готовое состояние для exploration.
+ * Это описание места, из которого после подтверждения
+ * высадки создаётся нормальный JOURNEY через startJourney().
  */
-function buildJourneyState(
+function buildJourneyContext(
   player,
   destinationNodeId
 ) {
@@ -200,123 +184,114 @@ function buildJourneyState(
     );
 
   return {
-    scene:
-      SCENES.JOURNEY,
-
     player,
-
-    /*
-     * Сохраняем оба идентификатора:
-     * node Тракта и canonical ID места.
-     */
     currentNodeId:
       destinationNodeId,
-
     planetaryNodeId:
       destinationNodeId,
-
     locationId:
-      location
-        ? location.id
-        : null,
-
-    fromTract: true,
-
-    depth: 0,
-
-    zone,
-
-    /*
-     * named-locations уже содержит theme,
-     * поэтому exploration не должен угадывать
-     * место по названию.
-     */
+      location?.id || null,
     locationTheme:
-      location
-        ? location.theme
-        : null,
-
+      location?.theme || null,
     locationName:
-      location
-        ? location.name
-        : nodeById(
-            destinationNodeId
-          )?.name ||
-          destinationNodeId,
-
+      location?.name ||
+      nodeById(destinationNodeId)?.name ||
+      destinationNodeId,
     locationBlurb:
-      location
-        ? location.blurb
-        : null,
-
+      location?.blurb || null,
     locationDetail:
-      location
-        ? location.detail
-        : null,
+      location?.detail || null,
+    zone,
   };
 }
 
-function destinationState(
+/*
+ * Создаёт именно тот JOURNEY, который принимает
+ * exploration.js:
+ *
+ * scene
+ * player
+ * kind
+ * payload
+ * stepsLeft
+ *
+ * startJourney уже является существующим общим
+ * механизмом common.js, поэтому второй генератор
+ * путешествия здесь не создаём.
+ */
+function startPlanetExploration(
   player,
-  destinationNodeId
+  destinationNodeId,
+  rng
 ) {
-  /*
-   * Сначала проверяем настоящие города.
-   */
-  if (
-    isCityNode(
-      destinationNodeId
-    )
-  ) {
-    return {
-      scene:
-        SCENES.STATION,
-
-      player,
-    };
-  }
-
-  /*
-   * Затем реальные именованные места.
-   *
-   * Это намеренно выше проверки node.type:
-   * named-locations — источник правды для высадки.
-   */
-  if (
-    isPlanetaryLocation(
-      destinationNodeId
-    )
-  ) {
-    return buildJourneyState(
+  const context =
+    buildJourneyContext(
       player,
       destinationNodeId
     );
-  }
 
-  /*
-   * Только неизвестный узел считаем
-   * обычным станционным прибытием.
-   */
-  const node =
-    nodeById(
-      destinationNodeId
-    );
-
-  if (
-    node?.type ===
-    'location'
-  ) {
-    return buildJourneyState(
+  const journey =
+    startJourney(
       player,
-      destinationNodeId
+      'explore',
+      {
+        zone:
+          context.zone,
+
+        depth: 0,
+
+        locationId:
+          context.locationId,
+
+        locationNodeId:
+          destinationNodeId,
+
+        locationTheme:
+          context.locationTheme,
+
+        locationName:
+          context.locationName,
+      },
+      rng
     );
-  }
 
   return {
-    scene:
-      SCENES.STATION,
+    ...journey,
 
-    player,
+    nextState: {
+      ...journey.nextState,
+
+      /*
+       * Эти поля не используются самим
+       * exploration-engine, но позволяют сохранить
+       * конкретное место высадки между шагами.
+       */
+      currentNodeId:
+        destinationNodeId,
+
+      planetaryNodeId:
+        destinationNodeId,
+
+      locationId:
+        context.locationId,
+
+      locationTheme:
+        context.locationTheme,
+
+      locationName:
+        context.locationName,
+
+      locationBlurb:
+        context.locationBlurb,
+
+      locationDetail:
+        context.locationDetail,
+
+      fromTract: true,
+
+      pendingShipDistance:
+        destinationNodeId,
+    },
   };
 }
 
@@ -344,26 +319,16 @@ async function travelScreen(
     );
 
   const cargo =
-    tripCargoUnits(
-      player
-    );
+    tripCargoUnits(player);
 
   if (!routes.length) {
     return {
       reply: {
         text:
-          `${prefixText}📍 ${
-            node?.name ||
-            nodeId
-          }\n` +
-          `⛽ Топливо: ${
-            player.ship.fuel
-          }/${
-            player.ship.fuelMax
-          }\n` +
-          `📦 Несданный груз: ${
-            cargo
-          } ед.\n\n` +
+          `${prefixText}` +
+          `📍 ${node?.name || nodeId}\n` +
+          `⛽ Топливо: ${player.ship.fuel}/${player.ship.fuelMax}\n` +
+          `📦 Несданный груз: ${cargo} ед.\n\n` +
           `Отсюда сейчас нет доступных маршрутов.`,
 
         buttons: [
@@ -380,50 +345,35 @@ async function travelScreen(
     };
   }
 
-  const byDestination =
-    {};
+  const byDestination = {};
 
-  for (
-    const route of routes
-  ) {
-    if (
-      !byDestination[
-        route.to
-      ]
-    ) {
-      byDestination[
-        route.to
-      ] = [];
+  for (const route of routes) {
+    if (!byDestination[route.to]) {
+      byDestination[route.to] = [];
     }
 
-    byDestination[
-      route.to
-    ].push(route);
+    byDestination[route.to].push(
+      route
+    );
   }
 
   const lines =
     Object.entries(
       byDestination
     ).map(
-      ([
-        toId,
-        variants,
-      ]) => {
+      ([toId, variants]) => {
         const toNode =
           nodeById(toId);
 
         const location =
-          resolveNamedLocation(
-            toId
-          );
+          resolveNamedLocation(toId);
 
         const icons =
           variants
-            .map(
-              (variant) =>
-                riskEmoji(
-                  variant.riskLabel
-                )
+            .map((variant) =>
+              riskEmoji(
+                variant.riskLabel
+              )
             )
             .join('');
 
@@ -435,8 +385,7 @@ async function travelScreen(
               : '📍';
 
         return (
-          `${typeLabel} ` +
-          `${icons} ` +
+          `${typeLabel} ${icons} ` +
           `${
             location?.name ||
             toNode?.name ||
@@ -449,25 +398,21 @@ async function travelScreen(
   const buttons =
     Object.keys(
       byDestination
-    ).map(
-      (toId) => {
-        const location =
-          resolveNamedLocation(
-            toId
-          );
+    ).map((toId) => {
+      const location =
+        resolveNamedLocation(toId);
 
-        const node =
-          nodeById(toId);
+      const node =
+        nodeById(toId);
 
-        return (
-          `→ ${
-            location?.name ||
-            node?.name ||
-            toId
-          }`
-        );
-      }
-    );
+      return (
+        `→ ${
+          location?.name ||
+          node?.name ||
+          toId
+        }`
+      );
+    });
 
   buttons.push(
     '🕳️ Засада',
@@ -477,18 +422,10 @@ async function travelScreen(
   return {
     reply: {
       text:
-        `${prefixText}📍 ${
-          node?.name ||
-          nodeId
-        }\n` +
-        `⛽ Топливо: ${
-          player.ship.fuel
-        }/${
-          player.ship.fuelMax
-        }\n` +
-        `📦 Несданный груз: ${
-          cargo
-        } ед.\n\n` +
+        `${prefixText}` +
+        `📍 ${node?.name || nodeId}\n` +
+        `⛽ Топливо: ${player.ship.fuel}/${player.ship.fuelMax}\n` +
+        `📦 Несданный груз: ${cargo} ед.\n\n` +
         `🗺️ Доступные направления:\n` +
         lines.join('\n'),
 
@@ -507,7 +444,7 @@ async function travelScreen(
   };
 }
 
-async function variantPickScreen(
+function variantPickScreen(
   player,
   routesToDestination,
   destinationName
@@ -528,24 +465,22 @@ async function variantPickScreen(
           return '⚠️ Неизвестный маршрут';
         }
 
+        const label =
+          route.variant ===
+          'dangerous'
+            ? 'Опасный'
+            : route.variant ===
+                'safe'
+              ? 'Безопасный'
+              : 'Обычный';
+
         return (
           `${riskEmoji(
             route.riskLabel
-          )} ` +
-          `${
-            route.variant ===
-            'dangerous'
-              ? 'Опасный'
-              : route.variant ===
-                  'safe'
-                ? 'Безопасный'
-                : 'Обычный'
-          } ` +
-          `(⛽${
-            fuelCostForVariant(
-              variant
-            )
-          })`
+          )} ${label} ` +
+          `(⛽${fuelCostForVariant(
+            variant
+          )})`
         );
       }
     );
@@ -557,9 +492,7 @@ async function variantPickScreen(
   return {
     reply: {
       text:
-        `Маршрут до «${
-          destinationName
-        }» — выбери вариант:\n` +
+        `Маршрут до «${destinationName}» — выбери вариант:\n` +
         `🔴 опасный — быстро, PvP разрешён\n` +
         `🟡 обычный — баланс\n` +
         `🟢 безопасный — медленнее, без PvP`,
@@ -588,32 +521,17 @@ function travelToDestination(
   player.currentNodeId =
     destinationNodeId;
 
-  const {
-    banked,
-  } =
-    bankTripCargo(
-      player
-    );
+  const { banked } =
+    bankTripCargo(player);
 
   const node =
-    nodeById(
-      destinationNodeId
-    );
+    nodeById(destinationNodeId);
 
   const location =
     resolveNamedLocation(
       destinationNodeId
     );
 
-  const state =
-    destinationState(
-      player,
-      destinationNodeId
-    );
-
-  /*
-   * ГОРОД.
-   */
   if (
     isCityNode(
       destinationNodeId
@@ -649,21 +567,20 @@ function travelToDestination(
     };
   }
 
-  /*
-   * ПЛАНЕТА / ИМЕНОВАННОЕ МЕСТО.
-   *
-   * Никакого handleHub.
-   */
   if (location) {
+    const context =
+      buildJourneyContext(
+        player,
+        destinationNodeId
+      );
+
     return {
       reply: {
         text:
           `${prefixText}` +
           `🛰️ Прибытие к локации:\n` +
-          `🪐 ${
-            location.name
-          }\n\n` +
-          `${location.blurb}\n\n` +
+          `🪐 ${location.name}\n\n` +
+          `${location.blurb || ''}\n\n` +
           `Можно высаживаться.` +
           (
             banked.length
@@ -678,19 +595,44 @@ function travelToDestination(
       },
 
       nextState: {
-        ...state,
+        scene:
+          SCENES.SHIP_TRAVEL,
+
+        player,
+
+        currentNodeId:
+          destinationNodeId,
+
+        planetaryNodeId:
+          destinationNodeId,
+
+        locationId:
+          context.locationId,
+
+        locationTheme:
+          context.locationTheme,
+
+        locationName:
+          context.locationName,
+
+        locationBlurb:
+          context.locationBlurb,
+
+        locationDetail:
+          context.locationDetail,
+
+        zone:
+          context.zone,
 
         landingReady:
           true,
+
+        pendingShipDistance:
+          destinationNodeId,
       },
     };
   }
 
-  /*
-   * Неизвестный узел — безопасный fallback.
-   * Но НЕ выдаём его за город, если он объявлен
-   * location в графе.
-   */
   if (
     node?.type ===
     'location'
@@ -699,10 +641,8 @@ function travelToDestination(
       reply: {
         text:
           `${prefixText}` +
-          `🛰️ Прибытие к неизвестной локации:\n` +
-          `📍 ${
-            node.name
-          }\n\n` +
+          `🛰️ Прибытие к локации:\n` +
+          `📍 ${node.name}\n\n` +
           `Локация ещё не связана с каталогом именованных мест.`,
 
         buttons: [
@@ -712,13 +652,22 @@ function travelToDestination(
       },
 
       nextState: {
-        ...buildJourneyState(
-          player,
-          destinationNodeId
-        ),
+        scene:
+          SCENES.SHIP_TRAVEL,
+
+        player,
+
+        currentNodeId:
+          destinationNodeId,
+
+        planetaryNodeId:
+          destinationNodeId,
 
         landingReady:
           true,
+
+        pendingShipDistance:
+          destinationNodeId,
       },
     };
   }
@@ -731,6 +680,7 @@ function travelToDestination(
           node?.name ||
           destinationNodeId
         }.`,
+
       buttons:
         stationButtons(
           deps,
@@ -865,12 +815,9 @@ async function resolveTransit(
     }
   }
 
-  let wreckageNote =
-    '';
+  let wreckageNote = '';
 
-  if (
-    deps.wreckageStore
-  ) {
+  if (deps.wreckageStore) {
     const wreck =
       await deps.wreckageStore
         .claimWreckage(
@@ -883,7 +830,7 @@ async function resolveTransit(
     if (wreck) {
       for (
         const item of
-        wreck.cargo
+        wreck.cargo || []
       ) {
         addToInventory(
           player,
@@ -894,7 +841,7 @@ async function resolveTransit(
       }
 
       wreckageNote =
-        `📡 Обломки: груз найден.\n\n`;
+        '📡 Обломки: груз найден.\n\n';
     }
   }
 
@@ -930,9 +877,7 @@ async function resolveTransit(
     return {
       reply: {
         text:
-          `${wreckageNote}${
-            event.text
-          }`,
+          `${wreckageNote}${event.text}`,
 
         buttons: [
           '⚔️ Атаковать',
@@ -955,14 +900,9 @@ async function resolveTransit(
     };
   }
 
-  if (
-    rng() <
-    0.12
-  ) {
+  if (rng() < 0.12) {
     const offers =
-      rollTraderOffers(
-        rng
-      );
+      rollTraderOffers(rng);
 
     return {
       reply: {
@@ -1020,10 +960,7 @@ async function resolveTransit(
       event.loot?.credits
     ) {
       player.credits =
-        (
-          player.credits ||
-          0
-        ) +
+        (player.credits || 0) +
         event.loot.credits;
     }
   }
@@ -1060,15 +997,19 @@ async function handleTravel(
   }
 
   /*
-   * Высадка.
+   * Игрок подтверждает высадку.
+   *
+   * ВАЖНО: после этого мы НЕ оставляем state.scene=JOURNEY
+   * вручную. Сначала показываем подтверждение высадки,
+   * а JOURNEY создаётся только кнопкой «Начать исследование».
    */
   if (
     state.landingReady &&
     input ===
       '🪐 Высадиться'
   ) {
-    const next =
-      buildJourneyState(
+    const context =
+      buildJourneyContext(
         player,
         state.planetaryNodeId ||
           state.currentNodeId
@@ -1077,12 +1018,10 @@ async function handleTravel(
     return {
       reply: {
         text:
-          `🪐 Ты высаживаешься на «${
-            next.locationName
-          }».\n\n` +
+          `🪐 Ты высаживаешься на «${context.locationName}».\n\n` +
           `${
-            next.locationDetail ||
-            next.locationBlurb ||
+            context.locationDetail ||
+            context.locationBlurb ||
             'Поверхность незнакомой локации встречает тебя тишиной.'
           }`,
 
@@ -1092,12 +1031,71 @@ async function handleTravel(
       },
 
       nextState: {
-        ...next,
+        scene:
+          SCENES.SHIP_TRAVEL,
+
+        player,
+
+        currentNodeId:
+          state.currentNodeId,
+
+        planetaryNodeId:
+          state.planetaryNodeId,
+
+        locationId:
+          context.locationId,
+
+        locationTheme:
+          context.locationTheme,
+
+        locationName:
+          context.locationName,
+
+        locationBlurb:
+          context.locationBlurb,
+
+        locationDetail:
+          context.locationDetail,
+
+        zone:
+          context.zone,
 
         landingReady:
           false,
+
+        landed:
+          true,
+
+        pendingShipDistance:
+          state.pendingShipDistance ||
+          state.planetaryNodeId ||
+          state.currentNodeId,
       },
     };
+  }
+
+  /*
+   * Теперь начинается настоящая вылазка.
+   *
+   * Здесь используется существующий startJourney()
+   * из common.js. Именно он формирует корректный:
+   *
+   * scene: journey
+   * kind: explore
+   * payload
+   * stepsLeft
+   */
+  if (
+    state.landed &&
+    input ===
+      '➡️ Начать исследование'
+  ) {
+    return startPlanetExploration(
+      player,
+      state.planetaryNodeId ||
+        state.currentNodeId,
+      rng
+    );
   }
 
   if (
@@ -1131,9 +1129,7 @@ async function handleTravel(
       return {
         reply: {
           text:
-            hubMessage(
-              player
-            ),
+            hubMessage(player),
 
           buttons:
             stationButtons(
@@ -1216,14 +1212,11 @@ async function handleTravel(
       const ambush =
         createAmbush(
           player.id,
-          currentNodeId(
-            player
-          ),
+          currentNodeId(player),
           {
-            shipSnapshot:
-              {
-                ...player.ship,
-              },
+            shipSnapshot: {
+              ...player.ship,
+            },
 
             playerName:
               player.name,
@@ -1239,8 +1232,7 @@ async function handleTravel(
         deps,
         player,
         `🕳️ Засада активна ${Math.round(
-          AMBUSH_DURATION_MS /
-            60000
+          AMBUSH_DURATION_MS / 60000
         )} мин.\n\n`
       );
     }
@@ -1250,14 +1242,6 @@ async function handleTravel(
         /^→\s+/,
         ''
       );
-
-    const destinationEntry =
-      Object.keys(
-        state.availableRoutes ||
-          []
-      ).length
-        ? null
-        : null;
 
     const routes =
       state.availableRoutes ||
@@ -1272,9 +1256,7 @@ async function handleTravel(
             );
 
           const node =
-            nodeById(
-              route.to
-            );
+            nodeById(route.to);
 
           return (
             location?.name ===
@@ -1353,7 +1335,7 @@ async function handleTravel(
           deps,
           player,
           state.destinationNodeId,
-          `Сделка заключена.\n\n`
+          'Сделка заключена.\n\n'
         );
       }
     }
@@ -1383,9 +1365,8 @@ async function handleTravel(
   ) {
     if (
       input ===
-      '🏃 Уйти' &&
-      rng() <
-        0.6
+        '🏃 Уйти' &&
+      rng() < 0.6
     ) {
       return travelScreen(
         deps,
@@ -1467,7 +1448,7 @@ async function handleTravel(
         deps,
         player,
         state.destinationNodeId,
-        `⚔️ Бой завершён.\n\n`
+        '⚔️ Бой завершён.\n\n'
       );
     }
 
@@ -1535,12 +1516,8 @@ async function handleTravel(
     return {
       reply: {
         text:
-          `${result.log.join(
-            ' '
-          )}\n` +
-          `${enemyTurn.log.join(
-            ' '
-          )}\n\n` +
+          `${result.log.join(' ')}\n` +
+          `${enemyTurn.log.join(' ')}\n\n` +
           combatFullCard(
             shipToFighter(
               player.ship,
@@ -1583,6 +1560,7 @@ module.exports = {
   isCityNode,
   isPlanetaryLocation,
   resolveNamedLocation,
-  buildJourneyState,
+  buildJourneyContext,
+  startPlanetExploration,
   HOME_NODE_BY_FACTION,
 };
