@@ -1,103 +1,635 @@
 'use strict';
 
 /**
- * СЕТЬ ТРАКТОВ — навигация как граф узлов и направленных маршрутов, не
- * линейная дистанция (как сейчас в engine/travel.js). Это НОВЫЙ слой,
- * который пока не заменяет существующую систему полётов — она стоит
- * рядом, тестируется отдельно, и подключается к game/scenes/travel.js
- * отдельным шагом, когда сама модель проверена.
+ * СЕТЬ ТРАКТОВ
  *
- * Ключевое свойство, ради которого всё это: Тракт может быть
- * ОДНОСТОРОННИМ. Приют → Ковчег-9 может существовать, а обратного пути
- * в моменте может не быть вообще — не искусственный запрет, а свойство
- * пространства после разрыва Тракта. Кнопки "лететь назад" физически
- * нет в списке доступных маршрутов, если обратного узла нет.
+ * Тракт — граф пространства, а не линейная дистанция.
+ *
+ * Есть два типа маршрутов:
+ *
+ * 1. ЕСТЕСТВЕННЫЕ — постоянные коридоры между соседними узлами.
+ *    Они существуют всегда.
+ *
+ * 2. ВРЕМЕННЫЕ — нестабильные окна Тракта из Redis.
+ *    Они появляются/исчезают независимо от постоянной сети.
+ *
+ * ВАЖНО:
+ * Ни одна исследуемая локация не должна превращаться в ловушку.
+ * Поэтому у каждой planetary/location-точки есть хотя бы один
+ * естественный выход.
  */
 
-// ── Узлы ──
 const NODES = {
-  priyut: { id: 'priyut', name: 'Приют', type: 'city' },
-  vual: { id: 'vual', name: 'Вуаль', type: 'city' },
-  terminus: { id: 'terminus', name: 'Терминус', type: 'city' },
-  arsenal: { id: 'arsenal', name: 'Арсенал', type: 'city' },
-  kuznitsa: { id: 'kuznitsa', name: 'Кузница', type: 'city' },
-  kovcheg9: { id: 'kovcheg9', name: 'Астероид «Ковчег-9»', type: 'location' },
-  sputnik_tishiny: { id: 'sputnik_tishiny', name: 'Спутник Тишины', type: 'location' },
-  prichal_pervogo: { id: 'prichal_pervogo', name: 'Причал Первого Прибытия', type: 'location' },
-  razlom_kaylara: { id: 'razlom_kaylara', name: 'Разлом Кайлара', type: 'location' },
-  pustosh_tabira: { id: 'pustosh_tabira', name: 'Пустошь Табира', type: 'location' },
-  tanvir: { id: 'tanvir', name: 'Спорный периметр Танвир', type: 'location' },
-  nekropol_ksarn: { id: 'nekropol_ksarn', name: 'Некрополь Ксарн', type: 'location' },
-  bezdna_orrin: { id: 'bezdna_orrin', name: 'Бездна Оррин', type: 'location' },
-  kuznya_zabytyh: { id: 'kuznya_zabytyh', name: 'Кузня Забытых', type: 'location' },
+  // Города
+  priyut: {
+    id: 'priyut',
+    name: 'Приют',
+    type: 'city',
+  },
+
+  vual: {
+    id: 'vual',
+    name: 'Вуаль',
+    type: 'city',
+  },
+
+  terminus: {
+    id: 'terminus',
+    name: 'Терминус',
+    type: 'city',
+  },
+
+  arsenal: {
+    id: 'arsenal',
+    name: 'Арсенал',
+    type: 'city',
+  },
+
+  kuznitsa: {
+    id: 'kuznitsa',
+    name: 'Кузница',
+    type: 'city',
+  },
+
+  // Синяя зона
+  kovcheg9: {
+    id: 'kovcheg9',
+    name: 'Астероид «Ковчег-9»',
+    type: 'location',
+  },
+
+  sputnik_tishiny: {
+    id: 'sputnik_tishiny',
+    name: 'Спутник Тишины',
+    type: 'location',
+    locationId: 'tishina',
+  },
+
+  prichal_pervogo: {
+    id: 'prichal_pervogo',
+    name: 'Причал Первого Прибытия',
+    type: 'location',
+  },
+
+  poligon_arsenala: {
+    id: 'poligon_arsenala',
+    name: 'Старый полигон Арсенала',
+    type: 'location',
+  },
+
+  // Жёлтая зона
+  razlom_kaylara: {
+    id: 'razlom_kaylara',
+    name: 'Разлом Кайлара',
+    type: 'location',
+  },
+
+  pustosh_tabira: {
+    id: 'pustosh_tabira',
+    name: 'Пустошь Табира',
+    type: 'location',
+  },
+
+  tanvir: {
+    id: 'tanvir',
+    name: 'Спорный периметр Танвир',
+    type: 'location',
+    locationId: 'perimetr_tanvir',
+  },
+
+  yarmarka_tenej: {
+    id: 'yarmarka_tenej',
+    name: 'Ярмарка Теней',
+    type: 'location',
+  },
+
+  // Красная зона
+  nekropol_ksarn: {
+    id: 'nekropol_ksarn',
+    name: 'Некрополь Ксарн',
+    type: 'location',
+  },
+
+  bezdna_orrin: {
+    id: 'bezdna_orrin',
+    name: 'Бездна Оррин',
+    type: 'location',
+  },
+
+  kuznya_zabytyh: {
+    id: 'kuznya_zabytyh',
+    name: 'Кузня Забытых',
+    type: 'location',
+  },
+
+  kladbische_flota: {
+    id: 'kladbische_flota',
+    name: 'Кладбище флота',
+    type: 'location',
+  },
+};
+
+const ROUTE_VARIANTS = {
+  DANGEROUS: {
+    id: 'dangerous',
+    speedMult: 2.0,
+    fuelMult: 1.3,
+    pvpAllowed: true,
+    riskLabel: 'red',
+  },
+
+  NORMAL: {
+    id: 'normal',
+    speedMult: 1.0,
+    fuelMult: 1.0,
+    pvpAllowed: true,
+    riskLabel: 'yellow',
+  },
+
+  SAFE: {
+    id: 'safe',
+    speedMult: 0.6,
+    fuelMult: 0.8,
+    pvpAllowed: false,
+    riskLabel: 'green',
+  },
 };
 
 /**
- * ПОСТОЯННЫЕ маршруты — долгоживущий каркас, не истекают. Каждый —
- * ОДНОНАПРАВЛЕННЫЙ (from→to), обратный путь нужно указывать отдельной
- * записью, если он реально существует. variants — 3 варианта риска на
- * один и тот же маршрут (опасный/обычный/безопасный), см. заметку про
- * "безопасный не должен быть просто хуже" — у него нет PvP и он
- * стабильнее, а не просто медленнее без компенсации.
+ * ЕСТЕСТВЕННЫЕ ТРАКТЫ.
+ *
+ * Здесь специально нет случайных teleport-like связей.
+ * Сеть строится как соседние коридоры:
+ *
+ * Приют
+ *   ├─ Ковчег-9
+ *   ├─ Причал Первого Прибытия
+ *   └─ Вуаль
+ *
+ * Вуаль
+ *   └─ Разлом Кайлара
+ *
+ * Кузница
+ *   ├─ Пустошь Табира
+ *   └─ Арсенал
+ *
+ * Жёлтые локации соединены между собой,
+ * а красная зона образует отдельный опасный пояс.
+ *
+ * КАЖДОЕ направление прописано отдельно.
+ * Поэтому отсутствие обратного пути — осознанное
+ * свойство конкретного маршрута, а не баг.
  */
-const ROUTE_VARIANTS = {
-  DANGEROUS: { id: 'dangerous', speedMult: 2.0, fuelMult: 1.3, pvpAllowed: true, riskLabel: 'red' },
-  NORMAL: { id: 'normal', speedMult: 1.0, fuelMult: 1.0, pvpAllowed: true, riskLabel: 'yellow' },
-  SAFE: { id: 'safe', speedMult: 0.6, fuelMult: 0.8, pvpAllowed: false, riskLabel: 'green' },
-};
-
 const PERMANENT_ROUTES = [
-  { id: 'route_priyut_kovcheg9', from: 'priyut', to: 'kovcheg9' },
-  { id: 'route_kovcheg9_priyut', from: 'kovcheg9', to: 'priyut' },
-  { id: 'route_priyut_vual', from: 'priyut', to: 'vual' },
-  { id: 'route_vual_priyut', from: 'vual', to: 'priyut' },
-  { id: 'route_priyut_prichal', from: 'priyut', to: 'prichal_pervogo' },
-  { id: 'route_prichal_priyut', from: 'prichal_pervogo', to: 'priyut' },
-  { id: 'route_vual_razlom', from: 'vual', to: 'razlom_kaylara' },
-  { id: 'route_priyut_kuznitsa', from: 'priyut', to: 'kuznitsa' },
-  { id: 'route_kuznitsa_priyut', from: 'kuznitsa', to: 'priyut' },
-  { id: 'route_kuznitsa_pustosh', from: 'kuznitsa', to: 'pustosh_tabira' },
-  { id: 'route_terminus_arsenal', from: 'terminus', to: 'arsenal' },
-  { id: 'route_arsenal_terminus', from: 'arsenal', to: 'terminus' },
+  // ───────── Приют ─────────
+
+  {
+    id: 'route_priyut_kovcheg9',
+    from: 'priyut',
+    to: 'kovcheg9',
+  },
+
+  {
+    id: 'route_kovcheg9_priyut',
+    from: 'kovcheg9',
+    to: 'priyut',
+  },
+
+  {
+    id: 'route_priyut_prichal',
+    from: 'priyut',
+    to: 'prichal_pervogo',
+  },
+
+  {
+    id: 'route_prichal_priyut',
+    from: 'prichal_pervogo',
+    to: 'priyut',
+  },
+
+  {
+    id: 'route_priyut_vual',
+    from: 'priyut',
+    to: 'vual',
+  },
+
+  {
+    id: 'route_vual_priyut',
+    from: 'vual',
+    to: 'priyut',
+  },
+
+  {
+    id: 'route_priyut_kuznitsa',
+    from: 'priyut',
+    to: 'kuznitsa',
+  },
+
+  {
+    id: 'route_kuznitsa_priyut',
+    from: 'kuznitsa',
+    to: 'priyut',
+  },
+
+  // ───────── Ковчег-9 / синяя зона ─────────
+
+  {
+    id: 'route_kovcheg9_tishina',
+    from: 'kovcheg9',
+    to: 'sputnik_tishiny',
+  },
+
+  {
+    id: 'route_tishina_kovcheg9',
+    from: 'sputnik_tishiny',
+    to: 'kovcheg9',
+  },
+
+  {
+    id: 'route_tishina_prichal',
+    from: 'sputnik_tishiny',
+    to: 'prichal_pervogo',
+  },
+
+  {
+    id: 'route_prichal_tishina',
+    from: 'prichal_pervogo',
+    to: 'sputnik_tishiny',
+  },
+
+  {
+    id: 'route_prichal_poligon',
+    from: 'prichal_pervogo',
+    to: 'poligon_arsenala',
+  },
+
+  {
+    id: 'route_poligon_prichal',
+    from: 'poligon_arsenala',
+    to: 'prichal_pervogo',
+  },
+
+  {
+    id: 'route_poligon_arsenal',
+    from: 'poligon_arsenala',
+    to: 'arsenal',
+  },
+
+  {
+    id: 'route_arsenal_poligon',
+    from: 'arsenal',
+    to: 'poligon_arsenala',
+  },
+
+  // ───────── Вуаль / Разлом ─────────
+
+  {
+    id: 'route_vual_razlom',
+    from: 'vual',
+    to: 'razlom_kaylara',
+  },
+
+  {
+    id: 'route_razlom_vual',
+    from: 'razlom_kaylara',
+    to: 'vual',
+  },
+
+  // Разлом — соседняя опасная зона.
+  {
+    id: 'route_razlom_tanvir',
+    from: 'razlom_kaylara',
+    to: 'tanvir',
+  },
+
+  {
+    id: 'route_tanvir_razlom',
+    from: 'tanvir',
+    to: 'razlom_kaylara',
+  },
+
+  // ───────── Кузница / Табир ─────────
+
+  {
+    id: 'route_kuznitsa_pustosh',
+    from: 'kuznitsa',
+    to: 'pustosh_tabira',
+  },
+
+  {
+    id: 'route_pustosh_kuznitsa',
+    from: 'pustosh_tabira',
+    to: 'kuznitsa',
+  },
+
+  {
+    id: 'route_pustosh_tanvir',
+    from: 'pustosh_tabira',
+    to: 'tanvir',
+  },
+
+  {
+    id: 'route_tanvir_pustosh',
+    from: 'tanvir',
+    to: 'pustosh_tabira',
+  },
+
+  // ───────── Жёлтая зона ─────────
+
+  {
+    id: 'route_tanvir_yarmarka',
+    from: 'tanvir',
+    to: 'yarmarka_tenej',
+  },
+
+  {
+    id: 'route_yarmarka_tanvir',
+    from: 'yarmarka_tenej',
+    to: 'tanvir',
+  },
+
+  {
+    id: 'route_yarmarka_vual',
+    from: 'yarmarka_tenej',
+    to: 'vual',
+  },
+
+  {
+    id: 'route_vual_yarmarka',
+    from: 'vual',
+    to: 'yarmarka_tenej',
+  },
+
+  // ───────── Красный пояс ─────────
+
+  {
+    id: 'route_yarmarka_nekropol',
+    from: 'yarmarka_tenej',
+    to: 'nekropol_ksarn',
+  },
+
+  {
+    id: 'route_nekropol_yarmarka',
+    from: 'nekropol_ksarn',
+    to: 'yarmarka_tenej',
+  },
+
+  {
+    id: 'route_nekropol_orrin',
+    from: 'nekropol_ksarn',
+    to: 'bezdna_orrin',
+  },
+
+  {
+    id: 'route_orrin_nekropol',
+    from: 'bezdna_orrin',
+    to: 'nekropol_ksarn',
+  },
+
+  {
+    id: 'route_orrin_kuznya',
+    from: 'bezdna_orrin',
+    to: 'kuznya_zabytyh',
+  },
+
+  {
+    id: 'route_kuznya_orrin',
+    from: 'kuznya_zabytyh',
+    to: 'bezdna_orrin',
+  },
+
+  {
+    id: 'route_kuznya_kladbische',
+    from: 'kuznya_zabytyh',
+    to: 'kladbische_flota',
+  },
+
+  {
+    id: 'route_kladbische_kuznya',
+    from: 'kladbische_flota',
+    to: 'kuznya_zabytyh',
+  },
+
+  /*
+   * Красная зона не должна быть тупиком.
+   * Из кладбища можно вернуться через Кузню,
+   * а из Кузни — через Оррин.
+   */
+
+  // ───────── Города ─────────
+
+  {
+    id: 'route_terminus_arsenal',
+    from: 'terminus',
+    to: 'arsenal',
+  },
+
+  {
+    id: 'route_arsenal_terminus',
+    from: 'arsenal',
+    to: 'terminus',
+  },
+
+  {
+    id: 'route_terminus_vual',
+    from: 'terminus',
+    to: 'vual',
+  },
+
+  {
+    id: 'route_vual_terminus',
+    from: 'vual',
+    to: 'terminus',
+  },
+
+  {
+    id: 'route_arsenal_kuznitsa',
+    from: 'arsenal',
+    to: 'kuznitsa',
+  },
+
+  {
+    id: 'route_kuznitsa_arsenal',
+    from: 'kuznitsa',
+    to: 'arsenal',
+  },
 ];
 
 /**
- * Временные Тракты — живут в Redis (см. lib/tract-store.js, следующий
- * шаг), не здесь. Здесь только чистая логика работы с уже загруженным
- * списком: как из постоянных+временных маршрутов собрать то, что РЕАЛЬНО
- * доступно игроку в узле прямо сейчас.
+ * Временные Тракты.
+ *
+ * Они НЕ находятся здесь постоянно.
+ * Этот файл только принимает их из Redis через
+ * availableRoutesFrom().
+ *
+ * Временный Тракт может:
+ *
+ * - открыть короткий обход;
+ * - соединить две удалённые точки;
+ * - временно открыть ранее недоступное направление;
+ * - исчезнуть после expiresAt.
+ *
+ * Главное: временный маршрут никогда не должен быть
+ * единственным способом выбраться из уже посещённой
+ * локации.
  */
 
-/** Все исходящие маршруты из узла — постоянные + ещё не истёкшие
- *  временные (переданные явно, не читаются из стора здесь). Каждый
- *  маршрут развёрнут в 3 варианта риска — итоговый список кнопок для
- *  игрока получается умножением количества направлений на 3. */
-function availableRoutesFrom(nodeId, activeTemporaryTracts = [], now = Date.now()) {
-  const permanent = PERMANENT_ROUTES.filter((r) => r.from === nodeId);
-  const temporary = activeTemporaryTracts.filter((t) => t.from === nodeId && t.expiresAt > now);
-  const routes = [...permanent, ...temporary.map((t) => ({ id: t.id, from: t.from, to: t.to, temporary: true, expiresAt: t.expiresAt, stability: t.stability }))];
+/**
+ * Все исходящие маршруты:
+ *
+ * постоянные + активные временные.
+ *
+ * Каждый маршрут получает три варианта риска.
+ */
+function availableRoutesFrom(
+  nodeId,
+  activeTemporaryTracts = [],
+  now = Date.now()
+) {
+  const permanent =
+    PERMANENT_ROUTES.filter(
+      (route) =>
+        route.from ===
+        nodeId
+    );
+
+  const temporary =
+    activeTemporaryTracts
+      .filter(
+        (tract) =>
+          tract.from ===
+            nodeId &&
+          Number(
+            tract.expiresAt
+          ) > now
+      )
+      .map(
+        (tract) => ({
+          id:
+            tract.id,
+
+          from:
+            tract.from,
+
+          to:
+            tract.to,
+
+          temporary:
+            true,
+
+          expiresAt:
+            tract.expiresAt,
+
+          stability:
+            tract.stability,
+        })
+      );
+
+  const routes = [
+    ...permanent,
+    ...temporary,
+  ];
 
   const result = [];
-  for (const route of routes) {
-    for (const variant of Object.values(ROUTE_VARIANTS)) {
-      result.push({ ...route, variant: variant.id, speedMult: variant.speedMult, fuelMult: variant.fuelMult, pvpAllowed: variant.pvpAllowed, riskLabel: variant.riskLabel });
+
+  for (
+    const route of routes
+  ) {
+    for (
+      const variant of Object.values(
+        ROUTE_VARIANTS
+      )
+    ) {
+      result.push({
+        ...route,
+
+        variant:
+          variant.id,
+
+        speedMult:
+          variant.speedMult,
+
+        fuelMult:
+          variant.fuelMult,
+
+        pvpAllowed:
+          variant.pvpAllowed,
+
+        riskLabel:
+          variant.riskLabel,
+      });
     }
   }
+
   return result;
 }
 
-/** Есть ли ВООБЩЕ путь назад из nodeId в originNodeId прямо сейчас —
- *  для UX-правила "не показывать кнопку назад, если пути физически нет"
- *  (не техническое сообщение об ошибке, а честное отсутствие маршрута). */
-function hasRouteBack(nodeId, originNodeId, activeTemporaryTracts = [], now = Date.now()) {
-  return availableRoutesFrom(nodeId, activeTemporaryTracts, now).some((r) => r.to === originNodeId);
+/**
+ * Есть ли физический путь назад.
+ */
+function hasRouteBack(
+  nodeId,
+  originNodeId,
+  activeTemporaryTracts = [],
+  now = Date.now()
+) {
+  return availableRoutesFrom(
+    nodeId,
+    activeTemporaryTracts,
+    now
+  ).some(
+    (route) =>
+      route.to ===
+      originNodeId
+  );
 }
 
-function nodeById(nodeId) {
-  return NODES[nodeId] || null;
+/**
+ * Проверка безопасности сети:
+ *
+ * ни одна location не должна остаться без
+ * естественного выхода.
+ *
+ * Используется для тестов/проверки перед деплоем.
+ */
+function locationsWithoutExit() {
+  return Object.values(
+    NODES
+  )
+    .filter(
+      (node) =>
+        node.type ===
+        'location'
+    )
+    .filter(
+      (node) =>
+        !PERMANENT_ROUTES.some(
+          (route) =>
+            route.from ===
+            node.id
+        )
+    )
+    .map(
+      (node) =>
+        node.id
+    );
+}
+
+function nodeById(
+  nodeId
+) {
+  return (
+    NODES[nodeId] ||
+    null
+  );
 }
 
 module.exports = {
-  NODES, PERMANENT_ROUTES, ROUTE_VARIANTS,
-  availableRoutesFrom, hasRouteBack, nodeById,
+  NODES,
+  PERMANENT_ROUTES,
+  ROUTE_VARIANTS,
+  availableRoutesFrom,
+  hasRouteBack,
+  locationsWithoutExit,
+  nodeById,
 };
