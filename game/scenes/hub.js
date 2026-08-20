@@ -61,6 +61,30 @@ const { travelScreen } = require('./travel.js');
 const { zoneForDistance } = require('../../engine/travel.js');
 const { SCENES } = require('./ids.js');
 
+const HOME_NODE_BY_FACTION_HUB = { 'Приют': 'priyut', 'Вуаль': 'vual', 'Терминус': 'terminus', 'Арсенал': 'arsenal', 'Кузница': 'kuznitsa' };
+
+/** «Люди в городе» — кто реально активен (последние ~18 минут) И
+ *  находится в том же узле, что и сам игрок (по lib/presence-store.js).
+ *  Приглашение сейчас упрощённое — уведомление в ЛС через VK, БЕЗ
+ *  формального состояния "пати" (той системы ещё нет) — честная кнопка
+ *  "предложить объединиться", не притворяется полноценным лобби. */
+async function peopleInCityScreen(deps, player, playerId, prefixText = '') {
+  if (!deps.presenceStore) {
+    return { reply: { text: `${prefixText}👥 Список людей в городе сейчас недоступен.`, buttons: ['⬅️ Назад'] }, nextState: { scene: 'station', player } };
+  }
+  const nodeId = player.currentNodeId || HOME_NODE_BY_FACTION_HUB[player.faction] || 'priyut';
+  const people = await deps.presenceStore.getActivePlayersAtNode(nodeId, playerId);
+  if (!people.length) {
+    return { reply: { text: `${prefixText}👥 Сейчас здесь никого активного не видно (последние ~18 минут).`, buttons: ['⬅️ Назад'] }, nextState: { scene: 'station', player } };
+  }
+  const lines = people.map((p) => `• ${p.name} (${p.faction})`);
+  const buttons = people.map((p) => `Пригласить: ${p.name}`).concat('⬅️ Назад');
+  return {
+    reply: { text: `${prefixText}👥 ЛЮДИ В ГОРОДЕ\n\n${lines.join('\n')}\n\nПредложить объединиться для исследований или боя?`, buttons },
+    nextState: { scene: 'people_in_city', player, peopleSnapshot: people }
+  };
+}
+
 async function resolveStationAction(input, state, deps, rng, playerId) {
   if (input === '📊 Статус') {
     return {
@@ -368,12 +392,8 @@ async function resolveStationAction(input, state, deps, rng, playerId) {
     return bossHub(deps, state.player, playerId);
   }
 
-  if (input === '👥 Отряд против босса') {
-    return raidLobbyScreen(
-      deps,
-      state.player,
-      playerId
-    );
+  if (input === '👥 Люди в городе') {
+    return peopleInCityScreen(deps, state.player, playerId);
   }
 
   if (input === 'Биржа') {
@@ -849,6 +869,21 @@ async function handleHub(
       );
     }
 
+    case 'people_in_city': {
+      if (input === '⬅️ Назад') {
+        return stationDefaultView(deps, state.player, rng);
+      }
+      const match = /^Пригласить: (.+)$/.exec(input);
+      if (match && deps.vk) {
+        const target = (state.peopleSnapshot || []).find((p) => p.name === match[1]);
+        if (target) {
+          deps.vk.sendMessage(target.peerId, `📡 ${state.player.name} предлагает объединиться — для исследований или боя. Загляни на станцию, если готов(а).`, []).catch(() => {});
+          return peopleInCityScreen(deps, state.player, playerId, `✅ Приглашение отправлено ${target.name}.\n\n`);
+        }
+      }
+      return peopleInCityScreen(deps, state.player, playerId);
+    }
+
     case SCENES.DISTRICT_HUB: {
       if (input === '⬅️ Назад') {
         return stationDefaultView(
@@ -868,6 +903,25 @@ async function handleHub(
         );
 
       if (direct) {
+        // ИСПРАВЛЕНО: раньше действие внутри группы (например "📊 Статус"
+        // внутри "Штаб") после выполнения возвращало то, что решил сам
+        // resolveStationAction — обычно scene:'station', то есть выкидывало
+        // на самый верхний уровень меню города, а не обратно в группу, где
+        // игрок и находился. Теперь: если действие вернуло именно верхний
+        // уровень станции (не свою отдельную сцену — бой/полёт/диалог и
+        // т.п. НЕ трогаем, у них своя логика), подменяем на district_hub с
+        // тем же groupLabel, чтобы игрок остался в том же меню.
+        if (direct.nextState?.scene === 'station' && direct.nextState.player) {
+          const activeVein3 = deps.veinStore ? await deps.veinStore.getActiveVein().catch(() => null) : null;
+          const groupsAfter = districtGroupsFor(direct.nextState.player, { vein: !!activeVein3, worldBoss: false });
+          const stillExists = groupsAfter.find((g) => g.label === state.groupLabel);
+          if (stillExists) {
+            return {
+              reply: direct.reply,
+              nextState: { scene: 'district_hub', player: direct.nextState.player, groupLabel: state.groupLabel },
+            };
+          }
+        }
         return direct;
       }
 
