@@ -3,6 +3,7 @@
 const { basicAttack, useSkill } = require('../engine/combat-engine.js');
 const { findBoss } = require('./boss-data.js');
 const { trySurvivalMechanic, activeClassEffects } = require('../engine/mentor-classes.js');
+const { makeGuildReputationStore } = require('../guilds/guild-reputation.js');
 
 /**
  * ОТРЯДНЫЙ БОЙ С БОССОМ — принципиально другой режим, чем bosses/boss-
@@ -112,7 +113,7 @@ function submitAction(raid, playerId, skillId) {
  *  вполне могут быть из разных гильдий (или без гильдии вовсе), общий
  *  бонус на всех был бы нечестным упрощением. Применяется ТОЛЬКО к
  *  урону игроков по боссу, не трогает урон босса по игрокам. */
-function resolveRound(raid, skillLookup, rng = Math.random, guildDamageBonusByPlayerId = {}) {
+function resolveRound(raid, skillLookup, rng = Math.random, guildDamageBonusByPlayerId = {}, deps = {}) {
   const boss = findBoss(raid.bossId);
   if (!boss || raid.finished) return raid;
   const roundLog = [];
@@ -174,6 +175,18 @@ function resolveRound(raid, skillLookup, rng = Math.random, guildDamageBonusByPl
     raid.finished = true;
     raid.victory = true;
     raid.log = [...roundLog, `🎉 ${boss.name} повержен всем отрядом!`];
+    // combat-репутация гильдии (guilds/guild-reputation.js) — каждая
+    // уникальная гильдия среди участников рейда получает вклад один раз,
+    // не за каждого своего игрока по отдельности (иначе гильдия из пяти
+    // человек в одном рейде получила бы впятеро больше гильдии-соло-игрока
+    // за ТОТ ЖЕ самый один разбитый босс).
+    if (deps.redis) {
+      const uniqueGuildIds = [...new Set(Object.values(raid.members).map((m) => m.fighterSnapshot?.guildId).filter(Boolean))];
+      const repStore = makeGuildReputationStore(deps.redis);
+      for (const guildId of uniqueGuildIds) {
+        repStore.addReputation(guildId, 'combat', 20).catch(() => {});
+      }
+    }
     return raid;
   }
 
