@@ -231,15 +231,16 @@ function returnFromPlanet(
   const distance =
     player.pendingShipDistance;
 
-  const cleanPlayer = {
-    ...player,
-    pendingShipDistance:
-      undefined,
-  };
-
   if (distance === undefined) {
     return null;
   }
+
+  const cleanPlayer = {
+    ...player,
+    currentNodeId: distance,
+    pendingShipDistance:
+      undefined,
+  };
 
   return travelScreen(
     deps,
