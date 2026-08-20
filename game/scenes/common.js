@@ -1233,20 +1233,10 @@ const DISTRICT_GROUPS = {
       ],
     },
     {
-      label: 'Терраса памяти',
+      label: 'Периферийный сектор',
       buttons: [
         'Терраса памяти',
-      ],
-    },
-    {
-      label: 'Мастерская новичка',
-      buttons: [
         'Мастерская новичка',
-      ],
-    },
-    {
-      label: 'Барак ожидания',
-      buttons: [
         'Барак ожидания',
       ],
     },
@@ -1589,7 +1579,7 @@ const DISTRICT_GROUPS = {
       ],
     },
     {
-      label: 'Слобода',
+      label: 'Литейный квартал',
       buttons: [
         'Бар',
         'Биржа',
@@ -1653,10 +1643,20 @@ const DISTRICT_GROUPS = {
   ],
 };
 
+// ИВЕНТ-ГЕЙТИНГ — «Мировой босс» и «Жила» на главной странице города
+// раньше были видны всегда. Флаг передаётся ЯВНО параметром при каждом
+// вызове, а не хранится в памяти модуля — на Vercel serverless нет
+// гарантии, что один и тот же процесс переживёт до следующего запроса
+// (холодный старт сбросил бы любой module-level флаг молча). Источник
+// правды — реальная проверка deps.veinStore на стороне вызывающего кода
+// (см. game/router.js), не кэш здесь.
+const HIDDEN_UNTIL_EVENT_LABELS = new Set(['⚔️ Мировой босс', '⛏️ Жила']);
+
 function districtGroupsFor(
-  player
+  player,
+  eventFlags = {}
 ) {
-  return (
+  const groups = (
     DISTRICT_GROUPS[
       player?.faction
     ] ||
@@ -1664,6 +1664,11 @@ function districtGroupsFor(
       'Приют'
     ]
   );
+  return groups.filter((g) => {
+    if (g.label === '⚔️ Мировой босс') return !!eventFlags.worldBoss;
+    if (g.label === '⛏️ Жила') return !!eventFlags.vein;
+    return true;
+  });
 }
 
 module.exports = {
