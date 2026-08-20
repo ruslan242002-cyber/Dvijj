@@ -23,6 +23,7 @@ async function handleVkEvent(body, deps) {
     const peerId = message.peer_id ?? message.from_id;
     const text = message.text || '';
 
+    const { presenceStore } = deps;
     const prevState = await store.get(peerId);
     if (knownPlayersStore) {
       // Не блокируем основной ответ игроку, если трекинг вдруг подведёт —
@@ -104,6 +105,12 @@ async function handleVkEvent(body, deps) {
     // случай, где такой откат на один шаг назад спас бы конкретного
     // игрока, если бы баг проявился уже после деплоя на реальных данных.
     if (redis) backupPlayerState({ redis }, peerId, prevState).catch(() => {});
+
+    if (presenceStore && nextState?.player) {
+      const p = nextState.player;
+      const nodeId = p.currentNodeId || { 'Приют': 'priyut', 'Вуаль': 'vual', 'Терминус': 'terminus', 'Арсенал': 'arsenal', 'Кузница': 'kuznitsa' }[p.faction] || 'priyut';
+      presenceStore.updatePresence(peerId, { name: p.name, faction: p.faction, nodeId }).catch((err) => console.error('presence update упал:', err.message));
+    }
 
     await store.set(peerId, nextState);
 
