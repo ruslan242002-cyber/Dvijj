@@ -747,9 +747,11 @@ async function handleHub(
         return direct;
       }
 
+      const activeVein = deps.veinStore ? await deps.veinStore.getActiveVein().catch(() => null) : null;
       const groups =
         districtGroupsFor(
-          state.player
+          state.player,
+          { vein: !!activeVein, worldBoss: false }
         );
 
       const group = groups.find(
@@ -869,9 +871,11 @@ async function handleHub(
         return direct;
       }
 
+      const activeVein2 = deps.veinStore ? await deps.veinStore.getActiveVein().catch(() => null) : null;
       const groups =
         districtGroupsFor(
-          state.player
+          state.player,
+          { vein: !!activeVein2, worldBoss: false }
         );
 
       const group =
