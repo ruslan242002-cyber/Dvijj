@@ -45,6 +45,7 @@ const { makeLeaderboardStore } = require('../lib/leaderboard-store.js');
 const { makeWorldStateStore } = require('../lib/world-state-store.js');
 const { makeTractStore } = require('../lib/tract-store.js');
 const { makeAmbushStore } = require('../lib/ambush-registry.js');
+const { makePresenceStore } = require('../lib/presence-store.js');
 const { sign } = require('../lib/auth-token.js');
 const { resolveEnemyImage } = require('../vk/photo-cache.js');
 
@@ -55,6 +56,7 @@ const bossStore = makeBossStoreUpstash(redisClient);
 const raidStore = makeRaidStoreUpstash(redisClient);
 const guildStore = makeGuildStoreUpstash(redisClient);
 const ambushStore = makeAmbushStore(redisClient);
+const presenceStore = makePresenceStore(redisClient);
 const veinStore = createUpstashVeinStore(redisClient);
 const knownPlayersStore = createKnownPlayersStore(redisClient);
 const wreckageStore = makeWreckageStore(redisClient);
@@ -90,6 +92,7 @@ module.exports = async (req, res) => {
       raidStore,
       guildStore,
       ambushStore,
+      presenceStore,
       veinStore,
       knownPlayersStore,
       wreckageStore,
