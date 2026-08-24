@@ -57,6 +57,10 @@ const {
   SCENES,
 } = require('./ids.js');
 
+const { partyAmbushReductionFor, nearbyPartyMemberCount } = require('../../engine/party-bonus.js');
+const { SHIP_SKILLS, SHIP_SKILL_BY_FACTION, shipSkillButtons, shipSkillIdByName } = require('../../engine/ship-skills.js');
+const { createStatusState, applyOverheat, hasStatus, getStatus } = require('../../engine/status/statusEngine.js');
+
 const FUEL_BASE_COST = 8;
 
 const HOME_NODE_BY_FACTION = {
@@ -532,6 +536,13 @@ function travelToDestination(
       destinationNodeId
     );
 
+  if (destinationNodeId === 'volny_port') {
+    // Не город ни формально, ни по stationButtons() — отдельный хаб со
+    // своими 6 районами (game/scenes/locations/volny-port.js).
+    const { volnyPortHub } = require('./locations/volny-port.js');
+    return volnyPortHub(player, `${prefixText}🛰️ Прибытие: Вольный Порт.${banked.length ? '\n📦 Груз сдан.' : ''}\n\n`);
+  }
+
   if (
     isCityNode(
       destinationNodeId
@@ -771,6 +782,10 @@ async function resolveTransit(
       ambusher &&
       ambusher.shipSnapshot
     ) {
+      const ambushReductionPct = await partyAmbushReductionFor(deps, player, player.id);
+      if (ambushReductionPct > 0 && rng() < ambushReductionPct / 100) {
+        return travelToDestination(deps, player, route.to, `👀 Товарищи по пати замечают засаду заранее — обходите её стороной.\n\n`);
+      }
       const enemy =
         shipToFighter(
           ambusher.shipSnapshot,
@@ -874,15 +889,16 @@ async function resolveTransit(
     event.type ===
     'hostile_ship'
   ) {
+    const nearbyPartyCount = await nearbyPartyMemberCount(deps, player, player.id);
+    const preCombatButtons = ['⚔️ Атаковать'];
+    if (nearbyPartyCount > 0) preCombatButtons.push('🤝 Позвать пати');
+    preCombatButtons.push('🏃 Уйти');
     return {
       reply: {
         text:
           `${wreckageNote}${event.text}`,
 
-        buttons: [
-          '⚔️ Атаковать',
-          '🏃 Уйти',
-        ],
+        buttons: preCombatButtons,
       },
 
       nextState: {
@@ -1375,6 +1391,18 @@ async function handleTravel(
       );
     }
 
+    if (input === '🤝 Позвать пати' && deps.partyStore && deps.partyCombatStore) {
+      const party = await deps.partyStore.getPartyForPlayer(player.id);
+      if (party) {
+        const enemyFighter = { ...state.enemy, hp: state.enemy.hp || state.enemy.hpMax, hpMax: state.enemy.hpMax };
+        const { startPartyCombatWithEnemy } = require('./party-combat.js');
+        return startPartyCombatWithEnemy(deps, player, player.id, party.id, enemyFighter, `🤝 Зовёшь пати на помощь!\n\n`);
+      }
+    }
+
+    const equippedShipSkillId = SHIP_SKILL_BY_FACTION[player.faction];
+    const skillButtons = shipSkillButtons(equippedShipSkillId ? [equippedShipSkillId] : [], player.shipSkillCooldowns || {});
+
     return {
       reply: {
         text:
@@ -1388,6 +1416,7 @@ async function handleTravel(
 
         buttons: [
           '⚔️ Атаковать',
+          ...skillButtons,
           '🏃 Уйти',
         ],
       },
@@ -1406,6 +1435,8 @@ async function handleTravel(
 
         ambusherPlayerId:
           state.ambusherPlayerId,
+
+        shipSkillCooldowns: player.shipSkillCooldowns || {},
       },
     };
   }
@@ -1423,10 +1454,22 @@ async function handleTravel(
     const defender =
       state.enemy;
 
+    const cooldowns = state.shipSkillCooldowns || {};
+    const usedSkillId = input === '⚔️ Атаковать' ? null : shipSkillIdByName(input);
+    const skill = usedSkillId && !(cooldowns[usedSkillId] > 0) ? SHIP_SKILLS[usedSkillId] : null;
+
+    let statusState = player.statusState || createStatusState();
+    if (skill) {
+      cooldowns[usedSkillId] = skill.cd;
+      statusState = applyOverheat(statusState, { intensity: 15, duration: 4 });
+    }
+    player.statusState = statusState;
+
     const result =
       resolveTurn({
         attacker,
         defender,
+        skill,
         rng,
         pvpMode:
           Boolean(
@@ -1439,6 +1482,7 @@ async function handleTravel(
       result.attacker,
       rng
     );
+    player.shipSkillCooldowns = Object.fromEntries(Object.entries(cooldowns).map(([id, cd]) => [id, Math.max(0, cd - (id === usedSkillId ? 0 : 1))]));
 
     if (
       result.defender.hp <=
@@ -1513,6 +1557,10 @@ async function handleTravel(
       };
     }
 
+    const equippedShipSkillId2 = SHIP_SKILL_BY_FACTION[player.faction];
+    const nextSkillButtons = shipSkillButtons(equippedShipSkillId2 ? [equippedShipSkillId2] : [], player.shipSkillCooldowns || {});
+    const overheatNote = hasStatus(statusState, 'overheat') ? `\n🔥 Перегрев: ${getStatus(statusState, 'overheat').intensity}%` : '';
+
     return {
       reply: {
         text:
@@ -1524,10 +1572,11 @@ async function handleTravel(
               'Твой корабль'
             ),
             defender
-          ),
+          ) + overheatNote,
 
         buttons: [
           '⚔️ Атаковать',
+          ...nextSkillButtons,
           '🏃 Уйти',
         ],
       },
@@ -1546,6 +1595,8 @@ async function handleTravel(
 
         ambusherPlayerId:
           state.ambusherPlayerId,
+
+        shipSkillCooldowns: player.shipSkillCooldowns || {},
       },
     };
   }
