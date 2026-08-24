@@ -36,6 +36,8 @@ const { handleMarket } = require('./scenes/market.js');
 const { handlePvp } = require('./scenes/pvp.js');
 const { handleHousing } = require('./scenes/housing.js');
 const { handleTravel } = require('./scenes/travel.js');
+const { handlePartyCombat } = require('./scenes/party-combat.js');
+const { handleVolnyPort } = require('./scenes/locations/volny-port.js');
 const { handleVein } = require('./scenes/vein.js');
 const { shouldCheckSpawn, rollSpawn, randomVeinTier } = require('../engine/vein-spawn-timer.js');
 const { createVein } = require('../engine/resource-vein.js');
@@ -139,6 +141,16 @@ const SCENE_HANDLERS = {
   [SCENES.VEIN_PVP_COMBAT]: handleVein,
   [SCENES.VEIN_MONSTER_COMBAT]: handleVein,
   [SCENES.VEIN_BOSS_COMBAT]: handleVein,
+
+  ['party_combat_menu']: handlePartyCombat,
+  ['party_combat_round']: handlePartyCombat,
+
+  ['volny_port_hub']: handleVolnyPort,
+  ['volny_port_docks']: handleVolnyPort,
+  ['volny_port_market']: handleVolnyPort,
+  ['volny_port_blackmarket']: handleVolnyPort,
+  ['volny_port_pilots']: handleVolnyPort,
+  ['volny_port_mercs']: handleVolnyPort,
 };
 
 const RESET_REPLY = {
