@@ -8,6 +8,8 @@
  */
 
 const { resolveTurn } = require('../../engine/combat-engine.js');
+const { createStatusState, applyInjury, applyBleeding } = require('../../engine/status/statusEngine.js');
+const { STATUS_SEVERITY } = require('../../engine/status/statusTypes.js');
 const { resolvePlayerTurn } = require('../../engine/combat-turn.js');
 const { SKILLS } = require('../../engine/skills-data.js');
 const { stimButtons, stimIdByName } = require('../../engine/stim-buttons.js');
@@ -157,7 +159,7 @@ function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prev
         };
       }
       const defeatedPlayer = { ...result.attacker, hp: Math.round(result.attacker.hpMax * 0.5) };
-      const toShip = returnFromPlanet(defeatedPlayer, '');
+      const toShip = returnFromPlanet(deps, defeatedPlayer, '');
       if (toShip) {
         toShip.reply.text = `💥 ${result.log.join(' ')}\n\n💀 Скафандр пробит. Аварийная капсула тянет тебя обратно к кораблю.\n\n${toShip.reply.text}`;
         return toShip;
@@ -171,6 +173,15 @@ function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prev
 
   const { skill: enemySkill, telegraphText } = pickEnemyAction(result.defender);
   const enemyTurn = resolveTurn({ attacker: result.defender, defender: result.attacker, skill: enemySkill, zone: state.zone, rng });
+  if (enemyTurn.hit && enemyTurn.crit) {
+    let statusState = enemyTurn.defender.statusState || createStatusState();
+    const dmgPct = enemyTurn.dmgDealt / (enemyTurn.defender.hpMax || 1);
+    statusState = applyInjury(statusState, { severity: dmgPct > 0.4 ? STATUS_SEVERITY.HIGH : STATUS_SEVERITY.MEDIUM, metadata: { combatCrit: true } });
+    if (dmgPct > 0.25) {
+      statusState = applyBleeding(statusState, { severity: STATUS_SEVERITY.MEDIUM, intensity: Math.round(dmgPct * 10) });
+    }
+    enemyTurn.defender.statusState = statusState;
+  }
   const telegraphLine = telegraphText ? `${telegraphText}\n` : '';
   const log = `${telegraphLine}${result.log.concat(enemyTurn.log).join(' ')}`;
 
@@ -188,7 +199,7 @@ function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prev
         };
       }
       const defeatedPlayer = { ...enemyTurn.defender, hp: Math.round(enemyTurn.defender.hpMax * 0.5) };
-      const toShip = returnFromPlanet(defeatedPlayer, '');
+      const toShip = returnFromPlanet(deps, defeatedPlayer, '');
       if (toShip) {
         toShip.reply.text = `💥 ${log}\n\n💀 Скафандр пробит. Аварийная капсула тянет тебя обратно к кораблю.\n\n${toShip.reply.text}`;
         return toShip;
@@ -239,7 +250,7 @@ function handleCombat(state, input, rng, deps, playerId) {
   switch (state.scene) {
     case SCENES.PRE_COMBAT: {
       if (input === 'Отступить') {
-        const toShip = returnFromPlanet(state.player, '');
+        const toShip = returnFromPlanet(deps, state.player, '');
         if (toShip) {
           toShip.reply.text = `Ты отступаешь на безопасное расстояние.\n\n${toShip.reply.text}`;
           return toShip;
