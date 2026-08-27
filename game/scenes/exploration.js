@@ -96,6 +96,10 @@ const {
   getActiveGuildProjectEffects,
 } = require('../../guilds/guild-projects.js');
 
+const { createStatusState, hasStatus, applyDetected } = require('../../engine/status/statusEngine.js');
+const { partyYieldBonusFor } = require('../../engine/party-bonus.js');
+const { veinLegacyBonusFor } = require('../../lib/vein-legacy-bonus-store.js');
+
 const {
   discoverHypothesis,
 } = require('../../lore/trakt-mythos.js');
@@ -1220,16 +1224,16 @@ async function explore(
     );
 
   const guildYieldBonusPct =
-    await guildYieldBonusFor(
+    (await guildYieldBonusFor(
       deps,
       player
-    );
+    )) + (await partyYieldBonusFor(deps, player, player.id));
 
   const rareDiscoveryBonusPct =
-    await guildRareDiscoveryBonusFor(
+    (await guildRareDiscoveryBonusFor(
       deps,
       player
-    );
+    )) + (await veinLegacyBonusFor(deps, currentStation(player)));
 
   await applyExplorationTick(
     deps,
@@ -1237,10 +1241,12 @@ async function explore(
   );
 
   if (stealthMode) {
+    const alreadyDetected = hasStatus(player.statusState || createStatusState(), 'detected');
+    const spareRatio = alreadyDetected ? 0.3 : 0.6;
     const spared =
       Math.round(
         themedWeights.ambush *
-          0.6
+          spareRatio
       );
 
     const weightsOverride = {
@@ -1273,6 +1279,8 @@ async function explore(
           zone
         }`,
       ].slice(-5);
+    } else {
+      player.statusState = applyDetected(player.statusState || createStatusState(), { duration: 3 });
     }
 
     return withExclusiveResourceBonus(
@@ -1494,6 +1502,9 @@ function resolvePackAction(
           result.pack
         )}`,
       buttons: [
+        ...result.pack
+          .filter((p) => p.hp > 0)
+          .map((p) => `⚔️ Атаковать: ${p.name}`),
         ...skillButtons(
           player,
           tickedCooldowns
@@ -1909,10 +1920,10 @@ async function handleExploration(
         }
 
         const rareDiscoveryBonusPct =
-          await guildRareDiscoveryBonusFor(
+          (await guildRareDiscoveryBonusFor(
             deps,
             player
-          );
+          )) + (await veinLegacyBonusFor(deps, currentStation(player)));
 
         return withExclusiveResourceBonus(
           withMicroDiscovery(
@@ -2712,7 +2723,9 @@ async function handleExploration(
                   enemy.name
               ).join(', ')}`,
             buttons: [
-              '⚔️ Атаковать',
+              ...pack
+                .filter((p) => p.hp > 0)
+                .map((p) => `⚔️ Атаковать: ${p.name}`),
               'Отступить',
             ],
           },
@@ -3086,19 +3099,27 @@ async function handleExploration(
         };
       }
 
+      const attackTargetMatch =
+        /^⚔️ Атаковать: (.+)$/.exec(input);
+
       const skillId =
         skillIdByName(
           input
         );
 
-      return resolvePackAction(
-        state,
-        state.pack.length === 1
+      const chosenTargetName =
+        attackTargetMatch
+          ? attackTargetMatch[1]
+          : state.pack.length === 1
           ? state.pack[0].name
           : state.pack.find(
               (p) =>
                 p.hp > 0
-            )?.name,
+            )?.name;
+
+      return resolvePackAction(
+        state,
+        chosenTargetName,
         skillId,
         rng,
         deps
