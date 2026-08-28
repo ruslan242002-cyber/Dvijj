@@ -148,10 +148,6 @@ const {
 } = require('../../engine/cooldowns.js');
 
 const {
-  combatPackCard,
-} = require('../../lib/combat-card.js');
-
-const {
   SCENES,
 } = require('./ids.js');
 
@@ -1869,6 +1865,39 @@ async function handleExploration(
 
       if (
         input ===
+        'Вернуться на станцию'
+      ) {
+        const toShip =
+          returnFromPlanet(
+            deps,
+            player,
+            '🪐 Ты возвращаешься к кораблю. Весь добытый груз остаётся в трюме рейса.\n\n'
+          );
+
+        if (toShip) {
+          return toShip;
+        }
+
+        return {
+          reply: {
+            text:
+              'Ты возвращаешься к кораблю.',
+            buttons:
+              stationButtons(
+                deps,
+                player
+              ),
+          },
+          nextState: {
+            scene:
+              SCENES.STATION,
+            player,
+          },
+        };
+      }
+
+      if (
+        input ===
         'Эвакуироваться'
       ) {
         if (
@@ -1942,39 +1971,6 @@ async function handleExploration(
           rng,
           rareDiscoveryBonusPct
         );
-      }
-
-      if (
-        input ===
-        'Вернуться на станцию'
-      ) {
-        const toShip =
-          returnFromPlanet(
-            deps,
-            player,
-            '🪐 Ты возвращаешься к кораблю. Весь добытый груз остаётся в трюме рейса.\n\n'
-          );
-
-        if (toShip) {
-          return toShip;
-        }
-
-        return {
-          reply: {
-            text:
-              'Ты возвращаешься к кораблю.',
-            buttons:
-              stationButtons(
-                deps,
-                player
-              ),
-          },
-          nextState: {
-            scene:
-              SCENES.STATION,
-            player,
-          },
-        };
       }
 
       return {
