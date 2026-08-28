@@ -1858,6 +1858,8 @@ async function handleExploration(
             zone,
             depth:
               (depth || 0) + 1,
+            locationTheme:
+              player.currentLocationTheme,
           },
           rng
         );
