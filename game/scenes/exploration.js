@@ -228,8 +228,18 @@ function returnFromPlanet(
   player,
   prefixText = ''
 ) {
+  // ⚠️ БАГ-ФИКС: player.pendingShipDistance НИКОГДА не присваивался нигде
+  // в кодовой базе (проверено grep по всему проекту) — только похожее по
+  // названию state.pendingShipDistance (поле СЦЕНЫ, не игрока) в travel.js,
+  // которое никогда не копировалось на самого player. Из-за этого
+  // returnFromPlanet() ВСЕГДА получала undefined и ВСЕГДА проваливалась в
+  // резервный вариант (scene: 'station') — отступление считало любую
+  // локацию городом. player.currentNodeId, наоборот, надёжно
+  // устанавливается в travelToDestination() при КАЖДОМ прибытии
+  // (game/scenes/travel.js) и остаётся верным всё время вылазки — им и
+  // пользуемся вместо мёртвого pendingShipDistance.
   const distance =
-    player.pendingShipDistance;
+    player.currentNodeId;
 
   if (distance === undefined) {
     return null;
@@ -238,8 +248,6 @@ function returnFromPlanet(
   const cleanPlayer = {
     ...player,
     currentNodeId: distance,
-    pendingShipDistance:
-      undefined,
   };
 
   return travelScreen(
@@ -825,8 +833,6 @@ function resolveExplorationEvent(
     depth,
     event,
   };
-
-  console.log('[DEBUG exploration] resolveExplorationEvent event.type:', event.type, '| loot:', JSON.stringify(event.loot), '| default nextState.scene:', nextState.scene);
 
   if (
     event.type === 'find' &&
@@ -1544,14 +1550,10 @@ async function handleExploration(
     return null;
   }
 
-  console.log('[DEBUG exploration]', JSON.stringify({ scene: state.scene, input, depth: state.depth, stepsLeft: state.stepsLeft, theme: state.player?.currentLocationTheme }));
-
   switch (state.scene) {
     case SCENES.JOURNEY: {
       const stepsLeft =
         state.stepsLeft - 1;
-
-      console.log('[DEBUG exploration] JOURNEY countdown:', state.stepsLeft, '->', stepsLeft);
 
       if (
         stepsLeft > 0
@@ -1648,8 +1650,6 @@ async function handleExploration(
         cache,
         resourceNode,
       } = state;
-
-      console.log('[DEBUG exploration] JOURNEY_CONTINUE state:', JSON.stringify({ input, zone, depth, isBossContext, hasSectorResident: !!sectorResident, hasMicroDiscovery: !!microDiscovery, hasCache: !!cache, hasResourceNode: !!resourceNode }));
 
       if (
         microDiscovery &&
@@ -2005,8 +2005,6 @@ async function handleExploration(
         depth,
         event,
       } = state;
-
-      console.log('[DEBUG exploration] EXPLORATION_EVENT_CHOICE input:', input, '| event.type:', event?.type, '| event.choices:', JSON.stringify(event?.choices));
 
       const choice =
         (event.choices || [])
