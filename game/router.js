@@ -132,6 +132,11 @@ const SCENE_HANDLERS = {
   [SCENES.GUILD_DONATE_CREDITS]: handleGuild,
   [SCENES.GUILD_DONATE_RESOURCE]: handleGuild,
   [SCENES.GUILD_WITHDRAW_RESOURCE]: handleGuild,
+  [SCENES.GUILD_UPGRADE]: handleGuild,
+  [SCENES.GUILD_PROJECTS_LIST]: handleGuild,
+  [SCENES.GUILD_PROJECT_DETAIL]: handleGuild,
+  [SCENES.GUILD_PROJECT_DONATE_CREDITS]: handleGuild,
+  [SCENES.GUILD_PROJECT_DONATE_RESOURCE]: handleGuild,
   [SCENES.SHIP_PRE_COMBAT]: handleTravel,
   [SCENES.SHIP_COMBAT]: handleTravel,
   [SCENES.SHIP_TRADER]: handleTravel,
@@ -151,6 +156,11 @@ const SCENE_HANDLERS = {
   ['volny_port_blackmarket']: handleVolnyPort,
   ['volny_port_pilots']: handleVolnyPort,
   ['volny_port_mercs']: handleVolnyPort,
+  ['volny_port_redsector']: handleVolnyPort,
+  ['volny_port_uppercity']: handleVolnyPort,
+  ['volny_port_olddock']: handleVolnyPort,
+
+  ['people_in_city']: handleHub,
 };
 
 const RESET_REPLY = {
