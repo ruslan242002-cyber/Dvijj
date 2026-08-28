@@ -827,7 +827,7 @@ function resolveExplorationEvent(
   };
 
   if (
-    event.type === 'loot' &&
+    event.type === 'find' &&
     event.loot
   ) {
     const loot = {
