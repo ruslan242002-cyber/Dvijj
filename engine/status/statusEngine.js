@@ -170,9 +170,13 @@ function applyOverheat(state, { intensity = 1, severity = STATUS_SEVERITY.LOW, d
   return addStatus(state, { type: 'overheat', source: STATUS_SOURCES.EQUIPMENT, severity, intensity, duration, effects, metadata });
 }
 
+function applyDetected(state, { duration = 3, effects = { stealthEffectiveness: -50 }, metadata = {} } = {}) {
+  return addStatus(state, { type: 'detected', source: STATUS_SOURCES.ENVIRONMENT, severity: STATUS_SEVERITY.LOW, intensity: 1, duration, effects, metadata });
+}
+
 module.exports = {
   createStatus, createStatusState, addStatus, getStatus, getStatusesByCategory, hasStatus,
   removeStatus, reduceStatus, modifyStatus, updateStatuses, calculateStatusEffects, clearStatuses,
   serializeStatusState, deserializeStatusState,
-  applyInjury, applyBleeding, applyRadiation, applyOverheat,
+  applyInjury, applyBleeding, applyRadiation, applyOverheat, applyDetected,
 };
