@@ -34,14 +34,47 @@ function createUpstashRedisClient({ url, token } = {}) {
     async del(key) {
       return execute(['DEL', key]);
     },
+    async expire(key, seconds) {
+      return execute(['EXPIRE', key, String(seconds)]);
+    },
+    async setnx(key, value) {
+      return execute(['SETNX', key, value]);
+    },
+    async hget(key, field) {
+      return execute(['HGET', key, field]);
+    },
+    async hset(key, fieldValues) {
+      const args = [];
+      for (const [field, value] of Object.entries(fieldValues)) {
+        args.push(field, String(value));
+      }
+      return execute(['HSET', key, ...args]);
+    },
+    async hdel(key, field) {
+      return execute(['HDEL', key, field]);
+    },
+    async hlen(key) {
+      return execute(['HLEN', key]);
+    },
+    async lpush(key, value) {
+      return execute(['LPUSH', key, value]);
+    },
+    async lrange(key, start, stop) {
+      return execute(['LRANGE', key, String(start), String(stop)]);
+    },
+    async ltrim(key, start, stop) {
+      return execute(['LTRIM', key, String(start), String(stop)]);
+    },
     async zadd(key, { score, member }) {
       return execute(['ZADD', key, String(score), String(member)]);
     },
     async zrem(key, member) {
       return execute(['ZREM', key, String(member)]);
     },
-    async zrange(key, start, stop, { rev } = {}) {
-      return execute([rev ? 'ZREVRANGE' : 'ZRANGE', key, String(start), String(stop)]);
+    async zrange(key, start, stop, { rev, withScores } = {}) {
+      const cmd = [rev ? 'ZREVRANGE' : 'ZRANGE', key, String(start), String(stop)];
+      if (withScores) cmd.push('WITHSCORES');
+      return execute(cmd);
     },
     async sadd(key, member) {
       return execute(['SADD', key, String(member)]);
@@ -54,6 +87,18 @@ function createUpstashRedisClient({ url, token } = {}) {
     },
     async incrby(key, delta) {
       return execute(['INCRBY', key, String(delta)]);
+    },
+    async hincrby(key, field, delta) {
+      return execute(['HINCRBY', key, field, String(delta)]);
+    },
+    async hgetall(key) {
+      const flat = await execute(['HGETALL', key]);
+      if (!flat) return {};
+      const obj = {};
+      for (let i = 0; i < flat.length; i += 2) {
+        obj[flat[i]] = flat[i + 1];
+      }
+      return obj;
     },
     async eval(script, keys, args) {
       return execute(['EVAL', script, String(keys.length), ...keys, ...args]);
