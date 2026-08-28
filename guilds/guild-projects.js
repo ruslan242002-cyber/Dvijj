@@ -23,7 +23,7 @@ class GuildProjectError extends Error {
  *  создаёт запись, без проверки "уже что-то идёт". Только офицер/лидер —
  *  та же роль, что и для гильд-апгрейда. */
 async function startProject(deps, player, projectId) {
-  const { store } = deps;
+  const { guildStore: store } = deps;
   if (!player.guildId) throw new GuildProjectError('NOT_IN_GUILD');
   const project = findProject(projectId);
   if (!project) throw new GuildProjectError('PROJECT_NOT_FOUND');
@@ -43,7 +43,7 @@ async function startProject(deps, player, projectId) {
  *  проекта атомарная. contribution points начисляются тем же вызовом,
  *  для личного рейтинга (не для награды — см. заметку в data-файле). */
 async function contributeResource(deps, player, projectId, resource, tier, qty) {
-  const { store } = deps;
+  const { guildStore: store } = deps;
   if (!player.guildId) throw new GuildProjectError('NOT_IN_GUILD');
   const project = findProject(projectId);
   if (!project) throw new GuildProjectError('PROJECT_NOT_FOUND');
@@ -64,7 +64,7 @@ async function contributeResource(deps, player, projectId, resource, tier, qty) 
 
 /** Вносит вклад КРЕДИТАМИ. */
 async function contributeCredits(deps, player, projectId, amount) {
-  const { store } = deps;
+  const { guildStore: store } = deps;
   if (!player.guildId) throw new GuildProjectError('NOT_IN_GUILD');
   if (amount <= 0 || (player.credits || 0) < amount) throw new GuildProjectError('INSUFFICIENT_CREDITS');
   const project = findProject(projectId);
@@ -83,7 +83,7 @@ async function contributeCredits(deps, player, projectId, amount) {
  *  проверка идемпотентна (повторный вызов после завершения просто вернёт
  *  ALREADY_COMPLETED, не сломает состояние). */
 async function tryCompleteProject(deps, player, projectId) {
-  const { store } = deps;
+  const { guildStore: store } = deps;
   const project = findProject(projectId);
   if (!project) throw new GuildProjectError('PROJECT_NOT_FOUND');
   const progress = await store.getGuildProject(player.guildId, projectId);
@@ -115,7 +115,7 @@ async function tryCompleteProject(deps, player, projectId) {
  *  ОТДЕЛЬНЫЙ, дополнительный источник бонусов (проекты и уровни не
  *  конкурируют, складываются). */
 async function getActiveGuildProjectEffects(deps, guildId) {
-  const { store } = deps;
+  const { guildStore: store } = deps;
   if (!guildId) return { repairDiscountPct: 0, rareDiscoveryBonusPct: 0, ambushRiskReductionPct: 0 };
   const completedIds = await store.getCompletedGuildProjectIds(guildId);
   const merged = { repairDiscountPct: 0, rareDiscoveryBonusPct: 0, ambushRiskReductionPct: 0 };
