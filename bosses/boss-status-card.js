@@ -14,6 +14,8 @@
  * применить к боссам через отдельный image-manifest по bossId.
  */
 
+const { renderCard } = require('./status-card.js');
+
 function progressBar(current, max, width = 20) {
   const pct = max > 0 ? Math.max(0, Math.min(1, current / max)) : 0;
   const filled = Math.round(pct * width);
@@ -28,23 +30,18 @@ const PHASE_LABEL = { normal: null, rage: 'ЯРОСТЬ' };
  */
 function formatBossStatusCard(bossDef, instance) {
   const lines = [];
-  lines.push(`👹 ${bossDef.name.toUpperCase()}`);
-  if (bossDef.lore) lines.push(bossDef.subtitle || bossDef.lore);
-  lines.push('');
+  if (bossDef.lore) lines.push(bossDef.subtitle || bossDef.lore, '');
   lines.push(`❤ HP: ${Math.max(0, instance.hp)} / ${instance.hpMax}`);
   lines.push(progressBar(instance.hp, instance.hpMax));
 
   const phaseLabel = PHASE_LABEL[instance.bossPhase];
   if (phaseLabel) {
-    lines.push('');
-    lines.push(`⚠ ${phaseLabel}: ${bossDef.name}`);
+    lines.push('', `⚠ ${phaseLabel}: ${bossDef.name}`);
   }
 
-  lines.push('');
-  lines.push(`Уровень угрозы: ${bossDef.threatLevel}.`);
-  lines.push(`Локация: ${bossDef.location}.`);
+  lines.push('', `Угроза: ${bossDef.threatLevel}`, `Локация: ${bossDef.location}`);
 
-  return lines.join('\n');
+  return renderCard(`👹 ${bossDef.name}`, lines);
 }
 
 /** Краткая строка для превью в списке/хабе — не полная карточка. */
