@@ -12,6 +12,66 @@ const { logWorldEvent } = require('../../lib/world-feed.js');
 const { logEconomyEvent, EVENT_TYPES } = require('../../lib/economy-audit.js');
 const { notifyPlayer } = require('../../lib/notifications.js');
 const { SCENES } = require('./ids.js');
+const { BOSS_IMAGE_MANIFEST } = require('../../engine/travel-images/boss-image-manifest.js');
+const { formatBossStatusCard } = require('../../lib/boss-status-card.js');
+
+// Тема именной локации (lib/named-locations.js) -> id боссов, которые
+// там водятся (engine/world-bosses/boss-data.js:location). Несколько
+// боссов на одну тему — при встрече выбирается случайный среди них.
+// Кузня Забытых (industrial), Кладбище Флота (wreckage), Некрополь Ксарн
+// (ruins) и Бездна Оррин (abyss) — все 4 красные локации; Ярмарка Теней
+// (smuggle) — единственная жёлтая, поэтому и босс там послабже.
+const BOSS_LOCATION_THEMES = {
+  abyss: ['guardian_unnamed_horizons', 'abyss_firstborn'],
+  ruins: ['ksarn_praxid', 'ksarn_memorist', 'ksarn_echo_keeper'],
+  industrial: ['forge_archon', 'oblivion_engineer'],
+  wreckage: ['echo_destroyer', 'void_keeper', 'vexar_chronofallen'],
+  smuggle: ['shadow_auctioneer'],
+};
+
+// Небольшой шанс на каждом шаге вылазки по подходящей локации — не
+// гарантия при каждом визите (иначе локация превратится в "комнату
+// босса", а не место с шансом на редкую опасную встречу).
+const BOSS_ENCOUNTER_CHANCE = 0.06;
+
+/** Вызывать из exploration.js на каждый шаг вылазки (после броска
+ * обычного события) — если тема локации подходит и шанс сработал,
+ * возвращает bossId для встречи, иначе null. Не трогает bossStore —
+ * только решает, "срабатывает" ли сама встреча. */
+function rollBossEncounter(locationTheme, rng = Math.random) {
+  const candidates = BOSS_LOCATION_THEMES[locationTheme];
+  if (!candidates || !candidates.length) return null;
+  if (rng() >= BOSS_ENCOUNTER_CHANCE) return null;
+  return candidates[Math.floor(rng() * candidates.length)];
+}
+
+/** Экран встречи с конкретным именным боссом — загружает существующий
+ * активный инстанс (если кто-то уже начал бой) или спавнит новый (если
+ * прошёл кулдаун респавна). imageKey подхватывается автоматически уже
+ * существующим механизмом (vk/photo-cache.js через deps.resolveEnemyImage,
+ * см. vk/webhook-handler.js) — здесь только нужно его правильно указать. */
+async function bossEncounterScreen(deps, player, playerId, bossId, prefixText = '') {
+  const boss = findBoss(bossId);
+  if (!boss || !deps.bossStore) return null;
+
+  let instance = await deps.bossStore.getActiveBoss(bossId);
+  if (!instance || instance.defeated) {
+    const lastDefeatedAt = (await deps.bossStore.getLastDefeatedAt(bossId)) || 0;
+    if (!shouldSpawnBoss(bossId, lastDefeatedAt)) return null;
+    instance = spawnBossInstance(bossId);
+    await deps.bossStore.saveBoss(instance, bossId);
+  }
+
+  return {
+    reply: {
+      text: `${prefixText}${formatBossStatusCard(boss, instance)}`,
+      buttons: ['⚔️ Атаковать', '🏃 Уйти'],
+      imageKey: BOSS_IMAGE_MANIFEST[bossId]?.file,
+    },
+    nextState: { scene: SCENES.BOSS_HUB, player, activeBossId: bossId },
+  };
+}
+
 
 const BOSS_SLOT = 'default';
 // Раньше — единственный ACTIVE_BOSS_ID='test_colossus'. Теперь 11 реальных
@@ -40,11 +100,6 @@ async function pickReadyBoss(deps) {
   return { bossId: ready[Math.floor(Math.random() * ready.length)], soonestHoursLeft: null };
 }
 
-function hpBar(current, max, width = 20) {
-  const filled = Math.round((current / max) * width);
-  return `[${'■'.repeat(Math.max(0, filled))}${'□'.repeat(Math.max(0, width - filled))}] ${Math.max(0, current)}/${max}`;
-}
-
 /** Гильдейский бонус к урону по мировому боссу (3-й уровень гильд-
  *  апгрейда) — читается здесь явно и передаётся в resolvePlayerVsBoss,
  *  сам движок босса не знает о гильдиях (тот же принцип, что feeDiscount
@@ -69,49 +124,6 @@ async function bossHub(deps, player, playerId, prefixText = '') {
   };
 }
 
-async function _unusedLegacyBossHub(deps, player, playerId, prefixText = '') {
-  if (!deps.bossStore) {
-    return {
-      reply: { text: `${prefixText}👹 МИРОВОЙ БОСС\n\nСистема групповых боссов пока не подключена.`, buttons: ['⬅️ Назад'] },
-      nextState: { scene: 'station', player }
-    };
-  }
-
-  let instance = await deps.bossStore.getActiveBoss(BOSS_SLOT);
-  if (!instance) {
-    const { bossId, soonestHoursLeft } = await pickReadyBoss(deps);
-    if (bossId) {
-      instance = spawnBossInstance(bossId);
-      await deps.bossStore.saveBoss(instance, BOSS_SLOT);
-    } else {
-      return {
-        reply: { text: `${prefixText}👹 МИРОВОЙ БОСС\n\nСейчас никто не потревожил Периферию. Ожидаемое появление — не раньше чем через ~${soonestHoursLeft ?? '?'} ч.`, buttons: ['⬅️ Назад'] },
-        nextState: { scene: 'station', player }
-      };
-    }
-  }
-
-  const boss = findBoss(instance.bossId);
-  if (instance.defeated) {
-    return {
-      reply: { text: `${prefixText}💀 ${boss.name} уже повержен — награды разошлись участникам. Загляни позже, когда появится новый.`, buttons: ['⬅️ Назад'] },
-      nextState: { scene: 'station', player }
-    };
-  }
-
-  const participantLines = Object.values(instance.participants)
-    .sort((a, b) => b.damageDealt - a.damageDealt)
-    .map((p) => `${p.name}: ${p.damageDealt} урона`);
-  const uniqueCount = Object.keys(instance.participants).length;
-  const floorNote = uniqueCount < boss.minParticipants
-    ? `\n\n⚠️ Нужно минимум ${boss.minParticipants} разных участников, чтобы добить босса (сейчас ${uniqueCount}).`
-    : '';
-  const text = `${prefixText}👹 ${boss.name}\n${boss.lore}\n\n${hpBar(instance.hp, instance.hpMax)}${floorNote}\n\n${participantLines.length ? 'Участники:\n' + participantLines.join('\n') : 'Пока никто не атаковал.'}`;
-  return {
-    reply: { text, buttons: ['⚔️ Атаковать', '⬅️ Назад'] },
-    nextState: { scene: SCENES.BOSS_HUB, player }
-  };
-}
 
 async function handleBoss(state, input, rng, deps, playerId) {
   if (state.scene === SCENES.BOSS_HUB) {
@@ -119,17 +131,17 @@ async function handleBoss(state, input, rng, deps, playerId) {
       return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
     }
     if (input === '⚔️ Атаковать') {
-      const instance = await deps.bossStore.getActiveBoss(BOSS_SLOT);
+      const instance = await deps.bossStore.getActiveBoss(state.activeBossId);
       if (!instance || instance.defeated) return bossHub(deps, state.player, playerId, 'Босс уже недоступен.\n\n');
       const buttons = ['⚔️ Обычная атака', ...skillButtons(state.player, state.bossCooldowns || {}), '🏃 Уйти'];
-      return { reply: { text: 'Выбери действие:', buttons }, nextState: { scene: SCENES.BOSS_COMBAT, player: state.player, bossCooldowns: state.bossCooldowns || {} } };
+      return { reply: { text: 'Выбери действие:', buttons }, nextState: { scene: SCENES.BOSS_COMBAT, player: state.player, bossCooldowns: state.bossCooldowns || {}, activeBossId: state.activeBossId } };
     }
     return bossHub(deps, state.player, playerId);
   }
 
   if (state.scene === SCENES.BOSS_COMBAT) {
     if (input === '🏃 Уйти') {
-      const instance = await deps.bossStore.getActiveBoss(BOSS_SLOT);
+      const instance = await deps.bossStore.getActiveBoss(state.activeBossId);
       const boss = instance ? findBoss(instance.bossId) : null;
       // Переменный шанс — база 40%, растёт с reaction игрока (та же
       // характеристика, что уже отвечает за уклонение/скорость реакции
@@ -143,7 +155,7 @@ async function handleBoss(state, input, rng, deps, playerId) {
       }
       return {
         reply: { text: `🏃 Не получилось оторваться — ${boss?.name || 'противник'} остаётся на хвосте, бой продолжается.`, buttons: ['⚔️ Обычная атака', ...skillButtons(state.player, state.bossCooldowns || {}), '🏃 Уйти'] },
-        nextState: { scene: SCENES.BOSS_COMBAT, player: state.player, bossCooldowns: state.bossCooldowns || {} }
+        nextState: { scene: SCENES.BOSS_COMBAT, player: state.player, bossCooldowns: state.bossCooldowns || {}, activeBossId: state.activeBossId }
       };
     }
     const skillId = input === '⚔️ Обычная атака' ? null : skillIdByName(input);
@@ -153,7 +165,7 @@ async function handleBoss(state, input, rng, deps, playerId) {
       return { reply: { text: 'Выбери действие кнопкой ниже.', buttons }, nextState: state };
     }
 
-    const instance = await deps.bossStore.getActiveBoss(BOSS_SLOT);
+    const instance = await deps.bossStore.getActiveBoss(state.activeBossId);
     if (!instance || instance.defeated) return bossHub(deps, state.player, playerId, 'Босс уже недоступен.\n\n');
 
     const guildBonusPct = await guildDamageBonusFor(deps, state.player);
@@ -165,7 +177,7 @@ async function handleBoss(state, input, rng, deps, playerId) {
     let player = result.player;
 
     if (result.bossDefeated) {
-      await deps.bossStore.saveBoss(instance, BOSS_SLOT);
+      await deps.bossStore.saveBoss(instance, instance.bossId);
       await deps.bossStore.setLastDefeatedAt(instance.bossId, Date.now());
       const rewards = distributeRewards(instance);
       for (const [pid, reward] of Object.entries(rewards)) {
@@ -202,7 +214,7 @@ async function handleBoss(state, input, rng, deps, playerId) {
       };
     }
 
-    await deps.bossStore.saveBoss(instance, BOSS_SLOT);
+    await deps.bossStore.saveBoss(instance, instance.bossId);
 
     if (result.playerDefeated) {
       const defeatedPlayer = { ...player, hp: Math.round(player.hpMax * 0.3) };
@@ -216,12 +228,12 @@ async function handleBoss(state, input, rng, deps, playerId) {
     const cdNote = skillCooldownNote(player, tickedCooldowns);
     const cdLine = cdNote ? `\n\n${cdNote}` : '';
     return {
-      reply: { text: `⚔️ ${result.log.join(' ')} (нанёс ${result.dmgDealt})\n\n${hpBar(instance.hp, findBoss(instance.bossId).hpMax)}${cdLine}`, buttons },
-      nextState: { scene: SCENES.BOSS_COMBAT, player, bossCooldowns: tickedCooldowns }
+      reply: { text: `⚔️ ${result.log.join(' ')} (нанёс ${result.dmgDealt})\n\n${formatBossStatusCard(findBoss(instance.bossId), instance)}${cdLine}`, buttons },
+      nextState: { scene: SCENES.BOSS_COMBAT, player, bossCooldowns: tickedCooldowns, activeBossId: state.activeBossId }
     };
   }
 
   return null;
 }
 
-module.exports = { bossHub, handleBoss };
+module.exports = { bossHub, handleBoss, rollBossEncounter, bossEncounterScreen, BOSS_LOCATION_THEMES };
