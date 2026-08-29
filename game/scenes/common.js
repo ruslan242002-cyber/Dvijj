@@ -18,6 +18,7 @@ const { DISTRICTS } = require('../../city/districts-data.js');
 const { rollStationEvent } = require('../../city/station-events.js');
 const { trophyProgressText } = require('../../lib/trophies.js');
 const { stormStatusText, isStormActive, STORM_REWARD_MULTIPLIER } = require('../../lib/world-storm.js');
+const { NODES } = require('../../engine/tract-network.js');
 const { applyDerivedStats } = require('../../engine/derived-stats.js');
 const { SHIP_SKILL_BY_FACTION } = require('../../engine/ship-skills.js');
 
@@ -37,15 +38,21 @@ const DANGER_LABEL = {
  * (эта функция сама player не мутирует, только читает).
  */
 function stationArrivalCard(player, rng = Math.random) {
-  const district = DISTRICTS[player.faction];
-  const curator = CURATORS[player.faction] || 'куратор станции';
-  const atmosphere = getDistrictAtmosphere(player.faction);
+  // ⚠️ БАГ-ФИКС: раньше player.faction напрямую (домашняя фракция, не
+  // место, где игрок реально сейчас). При гостевом визите на чужую
+  // станцию (player.visitingStation) это показывало данные родной
+  // станции — "все локации сливались в одну". hubMessage() рядом уже
+  // делал через currentStation() правильно, здесь забыли так же.
+  const station = currentStation(player);
+  const district = DISTRICTS[station];
+  const curator = CURATORS[station] || 'куратор станции';
+  const atmosphere = getDistrictAtmosphere(station);
   const dangerLabel = district
     ? (DANGER_LABEL[district.danger] || district.danger)
     : '—';
 
   let text =
-    `📍 Вы находитесь на станции: ${player.faction}\n` +
+    `📍 Вы находитесь на станции: ${station}\n` +
     `Куратор: ${curator}\n` +
     `Опасность станции: ${dangerLabel}`;
 
@@ -309,6 +316,15 @@ function canJoinFaction(
   };
 }
 
+/** Узел города по названию фракции (для Тракт-сети, engine/tract-network.js) —
+ * города там названы ровно так же, как и сами фракции. */
+function homeNodeIdForFaction(faction) {
+  const cityNode = Object.values(NODES).find(
+    (n) => n.type === 'city' && n.name === faction
+  );
+  return cityNode ? cityNode.id : null;
+}
+
 function switchFaction(
   player,
   newFaction
@@ -358,6 +374,19 @@ function switchFaction(
 
   player.faction =
     newFaction;
+
+  // ⚠️ БАГ-ФИКС: player.currentNodeId раньше НЕ обновлялся при смене
+  // станции приписки — оставался тем узлом Тракта, где игрок физически
+  // был на момент смены (обычно 'priyut', если менял на исходной
+  // станции). currentNodeId(player) в travel.js приоритетно берёт ИМЕННО
+  // это поле, а не домашнюю фракцию — значит "Полёт" продолжал
+  // показывать маршруты СТАРОЙ станции независимо от новой фракции.
+  // Телепортируем на узел новой домашней станции — станция приписки
+  // это не просто бумажка, это то, где реально находится корабль.
+  const newHomeNodeId = homeNodeIdForFaction(newFaction);
+  if (newHomeNodeId) {
+    player.currentNodeId = newHomeNodeId;
+  }
 
   const starterSkills =
     unlockedSkillsForPlayer(
@@ -777,16 +806,29 @@ function stationButtons(
       'Приют'
     ];
 
+  // ⚠️ БАГ-ФИКС: districtGroupsFor() (чуть ниже в этом же файле) уже
+  // фильтрует "⛏️ Жила"/"Врата Тракта" — но это ДРУГАЯ функция,
+  // используется только для подменю конкретной группы района
+  // (game/scenes/hub.js:district_hub), НЕ для главного меню станции!
+  // stationButtons() — вот та функция, что реально строит кнопки, которые
+  // видит игрок сразу на станции — она читала DISTRICT_GROUPS напрямую,
+  // в обход фильтра. Значит фильтр никогда не применялся к тому, что
+  // реально показывается. "⚔️ Мировой босс" добавлен в тот же список —
+  // сама механика ещё не запущена (см. game/scenes/boss.js:bossHub —
+  // честная заглушка "не запущена"), скрывать по тому же принципу.
+  const HIDDEN_STATION_LABELS = new Set(['⛏️ Жила', 'Врата Тракта', '⚔️ Мировой босс']);
+
   const filteredGroups =
-    visiting
-      ? rawGroups.filter(
-          (g) =>
-            g.label !==
+    rawGroups
+      .filter((g) => !HIDDEN_STATION_LABELS.has(g.label))
+      .filter((g) =>
+        visiting
+          ? g.label !==
               'Бар' &&
             g.label !==
               'Контракты'
-        )
-      : rawGroups;
+          : true
+      );
 
   const groups =
     filteredGroups.map(
@@ -951,6 +993,24 @@ function startJourney(
   const isPlanetaryExploration =
     kind === 'explore' &&
     !!payload?.locationId;
+
+  // ⚠️ БАГ-ФИКС: zoneVisits (game/quests-data.js/lore/trakt-mythos.js:
+  // условия "Исследуй в зоне N раз") нигде не увеличивался — счётчик
+  // навсегда оставался на 0, соответствующие квесты/условия мифологии
+  // были математически невозможны. Считаем НАЧАЛО новой вылазки (не
+  // каждый шаг "Углубиться дальше" внутри неё — depth ещё не задан на
+  // самом первом вызове), чтобы "3 раза" значило именно 3 отдельных
+  // похода в зону, а не 3 шага одного похода.
+  if (
+    kind === 'explore' &&
+    payload?.zone &&
+    !payload?.depth
+  ) {
+    player.zoneVisits =
+      player.zoneVisits || {};
+    player.zoneVisits[payload.zone] =
+      (player.zoneVisits[payload.zone] || 0) + 1;
+  }
 
   if (kind === 'explore') {
     if (
@@ -1219,17 +1279,12 @@ const DISTRICT_GROUPS = {
       ],
     },
     {
-      label: 'Декон-камера',
-      buttons: [
-        'Декон-камера',
-      ],
-    },
-    {
       label: 'Палубы',
       buttons: [
         'Бар',
         'Биржа',
         'Жильё',
+        'Декон-камера',
       ],
     },
     {
@@ -1313,17 +1368,12 @@ const DISTRICT_GROUPS = {
       ],
     },
     {
-      label: 'Декон-камера',
-      buttons: [
-        'Декон-камера',
-      ],
-    },
-    {
       label: 'Казармы',
       buttons: [
         'Бар',
         'Биржа',
         'Жильё',
+        'Декон-камера',
       ],
     },
     {
@@ -1405,17 +1455,12 @@ const DISTRICT_GROUPS = {
       ],
     },
     {
-      label: 'Декон-камера',
-      buttons: [
-        'Декон-камера',
-      ],
-    },
-    {
       label: 'Склад',
       buttons: [
         'Бар',
         'Биржа',
         'Жильё',
+        'Декон-камера',
       ],
     },
     {
@@ -1491,17 +1536,12 @@ const DISTRICT_GROUPS = {
       ],
     },
     {
-      label: 'Декон-камера',
-      buttons: [
-        'Декон-камера',
-      ],
-    },
-    {
       label: 'Модуль',
       buttons: [
         'Бар',
         'Биржа',
         'Жильё',
+        'Декон-камера',
       ],
     },
     {
@@ -1577,17 +1617,12 @@ const DISTRICT_GROUPS = {
       ],
     },
     {
-      label: 'Декон-камера',
-      buttons: [
-        'Декон-камера',
-      ],
-    },
-    {
       label: 'Литейный квартал',
       buttons: [
         'Бар',
         'Биржа',
         'Жильё',
+        'Декон-камера',
       ],
     },
     {
@@ -1671,7 +1706,12 @@ function districtGroupsFor(
   );
   return groups.filter((g) => {
     if (g.label === '⚔️ Мировой босс') return !!eventFlags.worldBoss;
-    if (g.label === '⛏️ Жила') return !!eventFlags.vein;
+    // "⛏️ Жила" — временно скрыта из обычного меню независимо от того,
+    // активна ли сейчас жила (eventFlags.vein). По решению пользователя:
+    // код/сцена не трогаются, система остаётся полностью рабочей — просто
+    // пока не готовы показывать её игрокам через обычный интерфейс.
+    // Вернуть — заменить return false на return !!eventFlags.vein.
+    if (g.label === '⛏️ Жила') return false;
     // "Врата Тракта" — старая линейная система перелёта (game/scenes/
     // locations/gates.js), конфликтовала с новой системой Трактов
     // ("Полёт", game/scenes/travel.js) — два параллельных способа
