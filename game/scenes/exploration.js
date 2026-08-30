@@ -1244,6 +1244,21 @@ async function explore(
     player
   );
 
+  // Небольшой шанс встретить именного босса (bosses/boss-data.js), если
+  // локация подходящая — см. game/scenes/boss.js:BOSS_LOCATION_THEMES.
+  // Проверяется РАНЬШЕ обычного броска события (не смешивается с его
+  // весами), но не гарантирует встречу даже при подходящей теме —
+  // rollBossEncounter сам решает по шансу и наличию активного/готового
+  // к респавну босса.
+  if (player.currentLocationTheme) {
+    const { rollBossEncounter, bossEncounterScreen } = require('./boss.js');
+    const bossId = rollBossEncounter(player.currentLocationTheme, rng);
+    if (bossId) {
+      const encounter = await bossEncounterScreen(deps, player, player.id, bossId, '⚠️ Тревога — датчики засекли крупную угрозу.\n\n');
+      if (encounter) return encounter;
+    }
+  }
+
   if (stealthMode) {
     const alreadyDetected = hasStatus(player.statusState || createStatusState(), 'detected');
     const spareRatio = alreadyDetected ? 0.3 : 0.6;
@@ -2110,6 +2125,14 @@ async function handleExploration(
       }
 
       if (
+        choice.credits
+      ) {
+        player.credits =
+          (player.credits || 0) +
+          choice.credits;
+      }
+
+      if (
         choice.reputation
       ) {
         addFactionReputation(
@@ -2118,6 +2141,24 @@ async function handleExploration(
             player.faction,
           choice.reputation
         );
+      }
+
+      // ⚠️ choice.flag/choice.eventFlag — прямая, разовая пометка на
+      // player.flags, БЕЗ прохождения через choices/consequence-engine.js.
+      // Раньше единственным способом поставить флаг из choice было
+      // choice.consequence (запись в CONSEQUENCE_TRIGGERS) — рабочий, но
+      // избыточный путь для простых "просто запомни, что я это видел"
+      // случаев (см. events/dynamic-events.js: curator_message_seen и
+      // подобные раньше ИСКУССТВЕННО заводились как полноценные
+      // consequence-записи именно из-за отсутствия этого прямого пути).
+      const directFlag =
+        choice.flag ||
+        choice.eventFlag;
+      if (directFlag) {
+        player.flags =
+          player.flags || {};
+        player.flags[directFlag] =
+          true;
       }
 
       if (
@@ -2376,19 +2417,37 @@ async function handleExploration(
         result.outcome ===
         'rewarded'
       ) {
+        const rewardCredits =
+          result.reward
+            ?.credits || 0;
+        const rewardReputation =
+          result.reward
+            ?.reputation || 0;
+
         player.credits =
           (player.credits || 0) +
-          (
-            result.reward
-              ?.credits || 0
-          );
+          rewardCredits;
 
         addFactionReputation(
           player,
           player.faction,
-          result.reward
-            ?.reputation || 0
+          rewardReputation
         );
+
+        // ⚠️ БАГ-ФИКС: награда УЖЕ применялась к игроку выше, но текст
+        // подтверждения никогда не показывался — resolveInteractiveOutcome
+        // (общая функция ниже) проверяет плоское result.credits, а тут
+        // сумма лежит во вложенном result.reward.credits, так что общая
+        // проверка её не видела. Игрок получал кредиты молча, не видя
+        // подтверждения.
+        if (rewardCredits) {
+          result.text +=
+            `\n💰 +${rewardCredits} кредитов.`;
+        }
+        if (rewardReputation) {
+          result.text +=
+            `\n👤 +${rewardReputation} репутации.`;
+        }
       }
 
       return resolveInteractiveOutcome(
@@ -2760,315 +2819,7 @@ async function handleExploration(
       };
     }
 
-    case SCENES.PRE_COMBAT: {
-      const {
-        player,
-        enemy,
-        zone,
-        depth,
-      } = state;
 
-      if (
-        input ===
-        'Отступить'
-      ) {
-        const toShip =
-          returnFromPlanet(
-            deps,
-            player,
-            '🏃 Ты отступаешь и возвращаешься к кораблю.\n\n'
-          );
-
-        if (toShip) {
-          return toShip;
-        }
-
-        return {
-          reply: {
-            text:
-              '🏃 Ты отступаешь.',
-            buttons:
-              stationButtons(
-                deps,
-                player
-              ),
-          },
-          nextState: {
-            scene:
-              SCENES.STATION,
-            player,
-          },
-        };
-      }
-
-      if (
-        input ===
-        '⚔️ Атаковать'
-      ) {
-        return {
-          reply: {
-            text:
-              `⚔️ ${enemy.name} готовится к бою.`,
-            buttons: [
-              '⚔️ Атаковать',
-              'Отступить',
-            ],
-            imageKey:
-              imageForEnemy(
-                enemy.name
-              ),
-          },
-          nextState: {
-            scene:
-              SCENES.COMBAT,
-            player,
-            enemy,
-            zone,
-            depth,
-          },
-        };
-      }
-
-      return {
-        reply: {
-          text:
-            'Выбери действие кнопкой ниже.',
-          buttons: [
-            '⚔️ Атаковать',
-            'Отступить',
-          ],
-        },
-        nextState:
-          state,
-      };
-    }
-
-    case SCENES.COMBAT: {
-      const {
-        player,
-        enemy,
-        zone,
-        depth,
-      } = state;
-
-      if (
-        input ===
-        'Отступить'
-      ) {
-        const toShip =
-          returnFromPlanet(
-            deps,
-            player,
-            '🏃 Ты вырываешься из боя и возвращаешься к кораблю.\n\n'
-          );
-
-        if (toShip) {
-          return toShip;
-        }
-
-        return {
-          reply: {
-            text:
-              '🏃 Ты отступаешь.',
-            buttons:
-              stationButtons(
-                deps,
-                player
-              ),
-          },
-          nextState: {
-            scene:
-              SCENES.STATION,
-            player,
-          },
-        };
-      }
-
-      if (
-        input !==
-        '⚔️ Атаковать'
-      ) {
-        return {
-          reply: {
-            text:
-              'Выбери действие кнопкой ниже.',
-            buttons: [
-              '⚔️ Атаковать',
-              'Отступить',
-            ],
-          },
-          nextState:
-            state,
-        };
-      }
-
-      const attacker =
-        buildBestiaryFighter(
-          {
-            name:
-              player.name ||
-              'Игрок',
-            hp:
-              player.hp,
-            hpMax:
-              player.hpMax,
-            attack:
-              player.attack ||
-              10,
-            defense:
-              player.defense ||
-              5,
-          },
-          player.level || 1
-        );
-
-      const result =
-        require(
-          '../../engine/combat-engine.js'
-        ).resolveTurn(
-          attacker,
-          enemy,
-          rng
-        );
-
-      if (
-        result.defender.hp <=
-        0
-      ) {
-        const xp =
-          enemy.xp ||
-          enemy.reward?.xp ||
-          0;
-
-        const credits =
-          enemy.credits ||
-          enemy.reward?.credits ||
-          0;
-
-        grantXp(
-          player,
-          xp
-        );
-
-        player.credits =
-          (player.credits || 0) +
-          credits;
-
-        if (
-          enemy.loot
-        ) {
-          addToInventory(
-            player,
-            enemy.loot.resource,
-            enemy.loot.tier,
-            enemy.loot.qty
-          );
-        }
-
-        const toShip =
-          returnFromPlanet(
-            deps,
-            player,
-            `⚔️ ${result.log?.join(' ') || 'Противник повержен.'}\n\n` +
-              `💥 ${enemy.name} уничтожен.\n\n` +
-              `✨ +${xp} XP.\n` +
-              `💰 +${credits} кредитов.\n\n`
-          );
-
-        if (toShip) {
-          return toShip;
-        }
-
-        return {
-          reply: {
-            text:
-              `⚔️ ${enemy.name} уничтожен.`,
-            buttons:
-              stationButtons(
-                deps,
-                player
-              ),
-          },
-          nextState: {
-            scene:
-              SCENES.STATION,
-            player,
-          },
-        };
-      }
-
-      if (
-        result.attacker.hp <=
-        0
-      ) {
-        const defeatedPlayer = {
-          ...player,
-          hp:
-            Math.round(
-              player.hpMax * 0.3
-            ),
-        };
-
-        const toShip =
-          returnFromPlanet(
-            deps,
-            defeatedPlayer,
-            `☠️ ${result.log?.join(' ') || 'Ты потерпел поражение.'}\n\n`
-          );
-
-        if (toShip) {
-          return toShip;
-        }
-
-        return {
-          reply: {
-            text:
-              '☠️ Ты потерпел поражение.',
-            buttons:
-              stationButtons(
-                deps,
-                defeatedPlayer
-              ),
-          },
-          nextState: {
-            scene:
-              SCENES.STATION,
-            player:
-              defeatedPlayer,
-          },
-        };
-      }
-
-      player.hp =
-        result.attacker.hp;
-
-      return {
-        reply: {
-          text:
-            result.log?.join(
-              '\n'
-            ) ||
-            '⚔️ Бой продолжается.',
-          buttons: [
-            '⚔️ Атаковать',
-            'Отступить',
-          ],
-          imageKey:
-            imageForEnemy(
-              enemy.name
-            ),
-        },
-        nextState: {
-          scene:
-            SCENES.COMBAT,
-          player,
-          enemy:
-            result.defender,
-          zone,
-          depth,
-        },
-      };
-    }
 
     case SCENES.PACK_COMBAT: {
       if (
