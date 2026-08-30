@@ -1265,21 +1265,21 @@ function stormRewardMult() {
 const DISTRICT_GROUPS = {
   Приют: [
     {
-      label: 'Штаб',
+      label: '🎖️ Штаб',
       buttons: [
         'Мостик',
         '📊 Статус',
       ],
     },
     {
-      label: 'Отсек',
+      label: '🔧 Отсек',
       buttons: [
         'Отсек',
         'Мастерская',
       ],
     },
     {
-      label: 'Палубы',
+      label: '🏠 Палубы',
       buttons: [
         'Бар',
         'Биржа',
@@ -1288,7 +1288,7 @@ const DISTRICT_GROUPS = {
       ],
     },
     {
-      label: 'Периферийный сектор',
+      label: '🌌 Периферийный сектор',
       buttons: [
         'Терраса памяти',
         'Мастерская новичка',
@@ -1296,19 +1296,13 @@ const DISTRICT_GROUPS = {
       ],
     },
     {
-      label: 'Дуэль',
-      buttons: [
-        'Дуэль',
-      ],
-    },
-    {
-      label: 'Контракты',
+      label: '📋 Контракты',
       buttons: [
         'Контракты',
       ],
     },
     {
-      label: 'Гильдия',
+      label: '🏰 Гильдия',
       buttons: [
         'Гильдия',
       ],
@@ -1333,7 +1327,7 @@ const DISTRICT_GROUPS = {
       ],
     },
     {
-      label: 'Полёт',
+      label: '🚀 Полёт',
       buttons: [
         'Полёт',
       ],
@@ -1354,21 +1348,21 @@ const DISTRICT_GROUPS = {
 
   Терминус: [
     {
-      label: 'Гарнизон',
+      label: '🎖️ Гарнизон',
       buttons: [
         'Мостик',
         '📊 Статус',
       ],
     },
     {
-      label: 'Отсек',
+      label: '🔧 Отсек',
       buttons: [
         'Отсек',
         'Мастерская',
       ],
     },
     {
-      label: 'Казармы',
+      label: '🏠 Казармы',
       buttons: [
         'Бар',
         'Биржа',
@@ -1377,25 +1371,19 @@ const DISTRICT_GROUPS = {
       ],
     },
     {
-      label: 'Рубеж',
+      label: '🛰️ Рубеж',
       buttons: [
         'Архив теней',
       ],
     },
     {
-      label: 'Дуэль',
-      buttons: [
-        'Дуэль',
-      ],
-    },
-    {
-      label: 'Контракты',
+      label: '📋 Контракты',
       buttons: [
         'Контракты',
       ],
     },
     {
-      label: 'Гильдия',
+      label: '🏰 Гильдия',
       buttons: [
         'Гильдия',
       ],
@@ -1420,7 +1408,7 @@ const DISTRICT_GROUPS = {
       ],
     },
     {
-      label: 'Полёт',
+      label: '🚀 Полёт',
       buttons: [
         'Полёт',
       ],
@@ -1441,21 +1429,22 @@ const DISTRICT_GROUPS = {
 
   Арсенал: [
     {
-      label: 'Штаб',
+      label: '🎖️ Штаб',
       buttons: [
         'Мостик',
         '📊 Статус',
       ],
     },
     {
-      label: 'Отсек',
+      label: '🔧 Отсек',
       buttons: [
         'Отсек',
         'Мастерская',
+        'Дуэль',
       ],
     },
     {
-      label: 'Склад',
+      label: '🏠 Склад',
       buttons: [
         'Бар',
         'Биржа',
@@ -1464,19 +1453,13 @@ const DISTRICT_GROUPS = {
       ],
     },
     {
-      label: 'Дуэль',
-      buttons: [
-        'Дуэль',
-      ],
-    },
-    {
-      label: 'Контракты',
+      label: '📋 Контракты',
       buttons: [
         'Контракты',
       ],
     },
     {
-      label: 'Гильдия',
+      label: '🏰 Гильдия',
       buttons: [
         'Гильдия',
       ],
@@ -1501,7 +1484,7 @@ const DISTRICT_GROUPS = {
       ],
     },
     {
-      label: 'Полёт',
+      label: '🚀 Полёт',
       buttons: [
         'Полёт',
       ],
@@ -1522,21 +1505,21 @@ const DISTRICT_GROUPS = {
 
   Вуаль: [
     {
-      label: 'Штаб',
+      label: '🎖️ Штаб',
       buttons: [
         'Мостик',
         '📊 Статус',
       ],
     },
     {
-      label: 'Цех',
+      label: '🔧 Цех',
       buttons: [
         'Отсек',
         'Мастерская',
       ],
     },
     {
-      label: 'Модуль',
+      label: '🏠 Модуль',
       buttons: [
         'Бар',
         'Биржа',
@@ -1545,19 +1528,13 @@ const DISTRICT_GROUPS = {
       ],
     },
     {
-      label: 'Дуэль',
-      buttons: [
-        'Дуэль',
-      ],
-    },
-    {
-      label: 'Контракты',
+      label: '📋 Контракты',
       buttons: [
         'Контракты',
       ],
     },
     {
-      label: 'Гильдия',
+      label: '🏰 Гильдия',
       buttons: [
         'Гильдия',
       ],
@@ -1582,7 +1559,7 @@ const DISTRICT_GROUPS = {
       ],
     },
     {
-      label: 'Полёт',
+      label: '🚀 Полёт',
       buttons: [
         'Полёт',
       ],
@@ -1603,21 +1580,21 @@ const DISTRICT_GROUPS = {
 
   Кузница: [
     {
-      label: 'Плавильня',
+      label: '🎖️ Плавильня',
       buttons: [
         'Мостик',
         '📊 Статус',
       ],
     },
     {
-      label: 'Отсек',
+      label: '🔧 Отсек',
       buttons: [
         'Отсек',
         'Мастерская',
       ],
     },
     {
-      label: 'Литейный квартал',
+      label: '🏠 Литейный квартал',
       buttons: [
         'Бар',
         'Биржа',
@@ -1626,19 +1603,13 @@ const DISTRICT_GROUPS = {
       ],
     },
     {
-      label: 'Дуэль',
-      buttons: [
-        'Дуэль',
-      ],
-    },
-    {
-      label: 'Контракты',
+      label: '📋 Контракты',
       buttons: [
         'Контракты',
       ],
     },
     {
-      label: 'Гильдия',
+      label: '🏰 Гильдия',
       buttons: [
         'Гильдия',
       ],
@@ -1663,7 +1634,7 @@ const DISTRICT_GROUPS = {
       ],
     },
     {
-      label: 'Полёт',
+      label: '🚀 Полёт',
       buttons: [
         'Полёт',
       ],
