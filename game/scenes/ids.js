@@ -57,6 +57,7 @@ const SCENES = Object.freeze({
   RAID_BATTLE: 'raid_battle',
   NPC_PEOPLE: 'npc_people',
   NPC_QUEST: 'npc_quest',
+  NAMED_CHARACTER: 'named_character',
   QUEST_SHYOPOT: 'quest_shyopot',
   LOC_REPAIR: 'loc_repair',
   LOC_DECON: 'loc_decon',
