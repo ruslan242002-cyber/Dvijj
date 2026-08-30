@@ -396,6 +396,11 @@ async function resolveStationAction(input, state, deps, rng, playerId) {
     return peopleInCityScreen(deps, state.player, playerId);
   }
 
+  if (input === '🤝 Пати') {
+    const { partyCombatMenuScreen } = require('./party-combat.js');
+    return partyCombatMenuScreen(deps, state.player, playerId);
+  }
+
   if (input === 'Биржа') {
     return marketHub(
       deps,
@@ -421,6 +426,16 @@ async function resolveStationAction(input, state, deps, rng, playerId) {
 
   if (input === 'Мастерская') {
     return workshopScreen(state.player);
+  }
+
+  if (input === 'Мара Кейн') {
+    const { characterScreen } = require('./named-character.js');
+    return characterScreen('mara_keyn', state.player, 'station');
+  }
+
+  if (input === 'Доктор Ворн') {
+    const { characterScreen } = require('./named-character.js');
+    return characterScreen('doktor_vorn', state.player, 'station');
   }
 
   if (input === 'Архив теней') {
