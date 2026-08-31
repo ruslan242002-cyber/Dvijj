@@ -36,7 +36,7 @@ const {
 } = require('./common.js');
 const { SCENES } = require('./ids.js');
 
-function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prevEnemyHp = null, usedSkillId = null, playerId = null } = {}) {
+async function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prevEnemyHp = null, usedSkillId = null, playerId = null } = {}) {
   // Контракт "применить стим 2 раза" — засчитываем именно в момент, когда
   // стим реально применился в этот ход (false -> true), а не при каждом
   // ходе после этого.
@@ -154,12 +154,12 @@ function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prev
       if (survival) {
         const survivedPlayer = { ...result.attacker, hp: Math.round(result.attacker.hpMax * survival.hpPct) };
         return {
-          reply: { text: `💥 ${result.log.join(' ')}\n\n${survival.note}`, buttons: ['🗡️ Обычная атака', ...skillButtons(survivedPlayer, state.skillCooldowns || {})] },
+          reply: { text: `💥 ${result.log.join(' ')}\n\n${survival.note}`, buttons: ['⚔️ Обычная атака', ...skillButtons(survivedPlayer, state.skillCooldowns || {})] },
           nextState: { scene: state.scene, player: survivedPlayer, enemy: result.defender, zone: state.zone, depth: state.depth, skillCooldowns: state.skillCooldowns, survivalUsedThisFight: true }
         };
       }
       const defeatedPlayer = { ...result.attacker, hp: Math.round(result.attacker.hpMax * 0.5) };
-      const toShip = returnFromPlanet(deps, defeatedPlayer, '');
+      const toShip = await returnFromPlanet(deps, defeatedPlayer, '');
       if (toShip) {
         toShip.reply.text = `💥 ${result.log.join(' ')}\n\n💀 Скафандр пробит. Аварийная капсула тянет тебя обратно к кораблю.\n\n${toShip.reply.text}`;
         return toShip;
@@ -194,12 +194,12 @@ function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prev
       if (survival) {
         const survivedPlayer = { ...enemyTurn.defender, hp: Math.round(enemyTurn.defender.hpMax * survival.hpPct) };
         return {
-          reply: { text: `💥 ${log}\n\n${survival.note}`, buttons: ['🗡️ Обычная атака', ...skillButtons(survivedPlayer, state.skillCooldowns || {})] },
+          reply: { text: `💥 ${log}\n\n${survival.note}`, buttons: ['⚔️ Обычная атака', ...skillButtons(survivedPlayer, state.skillCooldowns || {})] },
           nextState: { scene: state.scene, player: survivedPlayer, enemy: enemyTurn.attacker, zone: state.zone, depth: state.depth, skillCooldowns: state.skillCooldowns, survivalUsedThisFight: true }
         };
       }
       const defeatedPlayer = { ...enemyTurn.defender, hp: Math.round(enemyTurn.defender.hpMax * 0.5) };
-      const toShip = returnFromPlanet(deps, defeatedPlayer, '');
+      const toShip = await returnFromPlanet(deps, defeatedPlayer, '');
       if (toShip) {
         toShip.reply.text = `💥 ${log}\n\n💀 Скафандр пробит. Аварийная капсула тянет тебя обратно к кораблю.\n\n${toShip.reply.text}`;
         return toShip;
@@ -217,7 +217,7 @@ function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prev
   }
   cooldowns = tickCooldowns(cooldowns);
 
-  const buttons = ['🗡️ Обычная атака', ...skillButtons(enemyTurn.defender, cooldowns)];
+  const buttons = ['⚔️ Обычная атака', ...skillButtons(enemyTurn.defender, cooldowns)];
   if (!result.stimUsedThisFight) buttons.push('Стим');
 
   // Прокачка от использования (не в тренировочном бою — там статы и так
@@ -246,25 +246,25 @@ function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null, prev
   };
 }
 
-function handleCombat(state, input, rng, deps, playerId) {
+async function handleCombat(state, input, rng, deps, playerId) {
   switch (state.scene) {
     case SCENES.PRE_COMBAT: {
       if (input === 'Отступить') {
-        const toShip = returnFromPlanet(deps, state.player, '');
+        const toShip = await returnFromPlanet(deps, state.player, '');
         if (toShip) {
           toShip.reply.text = `Ты отступаешь на безопасное расстояние.\n\n${toShip.reply.text}`;
           return toShip;
         }
         return { reply: { text: 'Ты отступаешь на безопасное расстояние.', buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
       }
-      const buttons = ['🗡️ Обычная атака', ...skillButtons(state.player, {}), 'Стим'];
+      const buttons = ['⚔️ Обычная атака', ...skillButtons(state.player, {}), 'Стим'];
       return {
         reply: { text: `${combatFullCard(state.player, state.enemy)}\n\nВыбери действие:`, buttons, imageKey: imageForEnemy(state.enemy.name) },
         nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: false, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident, skillCooldowns: {} }
       };
     }
     case SCENES.COMBAT_STIM_SELECT: {
-      const backButtons = ['🗡️ Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
+      const backButtons = ['⚔️ Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
       if (!state.stimUsedThisFight) backButtons.push('Стим');
       if (input === '⬅️ Назад') {
         return {
@@ -284,7 +284,7 @@ function handleCombat(state, input, rng, deps, playerId) {
     case SCENES.COMBAT: {
       if (input === 'Стим') {
         if (state.stimUsedThisFight) {
-          const buttons = ['🗡️ Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
+          const buttons = ['⚔️ Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
           return { reply: { text: 'Стим уже использован в этом бою.', buttons }, nextState: state };
         }
         return {
@@ -292,15 +292,15 @@ function handleCombat(state, input, rng, deps, playerId) {
           nextState: { scene: 'combat_stim_select', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident, skillCooldowns: state.skillCooldowns }
         };
       }
-      const skillId = input === '🗡️ Обычная атака' ? null : skillIdByName(input);
+      const skillId = input === '⚔️ Обычная атака' ? null : skillIdByName(input);
       const skill = skillId ? SKILLS[skillId] : null;
-      if (input !== '🗡️ Обычная атака' && !skill) {
-        const buttons = ['🗡️ Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
+      if (input !== '⚔️ Обычная атака' && !skill) {
+        const buttons = ['⚔️ Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
         if (!state.stimUsedThisFight) buttons.push('Стим');
         return { reply: { text: 'Выбери действие кнопкой ниже.', buttons }, nextState: state };
       }
       if (skillId && state.skillCooldowns?.[skillId] > 0) {
-        const buttons = ['🗡️ Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
+        const buttons = ['⚔️ Обычная атака', ...skillButtons(state.player, state.skillCooldowns)];
         if (!state.stimUsedThisFight) buttons.push('Стим');
         return { reply: { text: `${skill.name} ещё перезаряжается (${state.skillCooldowns[skillId]} х.) — выбери другое действие.`, buttons }, nextState: state };
       }
