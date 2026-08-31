@@ -145,7 +145,7 @@ async function handleVein(state, input, rng, deps, playerId) {
         const boss = nextBossToJoin(vein);
         if (!boss) return veinHubScreen(deps, player, playerId, vein, 'Все боссы уже повержены!\n\n');
         return {
-          reply: { text: `⚔️ ${boss.id}\n❤️ ${boss.hp}/${boss.hpMax}\n\nВыбери действие — ход разрешится, как только все участники команды сходят в этом раунде.`, buttons: ['Атаковать', ...skillButtons(player, {})] },
+          reply: { text: `⚔️ ${boss.id}\n❤️ ${boss.hp}/${boss.hpMax}\n\nВыбери действие — ход разрешится, как только все участники команды сходят в этом раунде.`, buttons: ['⚔️ Атаковать', ...skillButtons(player, {})] },
           nextState: { scene: SCENES.VEIN_BOSS_COMBAT, player, bossId: boss.id }
         };
       }
@@ -163,16 +163,16 @@ async function handleVein(state, input, rng, deps, playerId) {
         return { reply: { text: 'Цель уже покинула жилу.', buttons: ['⬅️ Назад'] }, nextState: { scene: SCENES.VEIN_HUB, player: state.player } };
       }
       return {
-        reply: { text: `⚔️ Атакуешь ${victimState.player.name || 'соперника'} (ур. ${victimState.player.level || 1}) прямо на жиле.`, buttons: ['Атаковать', ...skillButtons(state.player, {})] },
+        reply: { text: `⚔️ Атакуешь ${victimState.player.name || 'соперника'} (ур. ${victimState.player.level || 1}) прямо на жиле.`, buttons: ['⚔️ Атаковать', ...skillButtons(state.player, {})] },
         nextState: { scene: SCENES.VEIN_PVP_COMBAT, player: state.player, victimId, victimSnapshot: victimState.player }
       };
     }
 
     case SCENES.VEIN_PVP_COMBAT: {
-      const skillId = input === 'Атаковать' ? null : skillIdByName(input);
+      const skillId = input === '⚔️ Атаковать' ? null : skillIdByName(input);
       const skill = skillId ? SKILLS[skillId] : null;
-      if (input !== 'Атаковать' && !skill) {
-        return { reply: { text: 'Выбери действие кнопкой ниже.', buttons: ['Атаковать', ...skillButtons(state.player, {})] }, nextState: state };
+      if (input !== '⚔️ Атаковать' && !skill) {
+        return { reply: { text: 'Выбери действие кнопкой ниже.', buttons: ['⚔️ Атаковать', ...skillButtons(state.player, {})] }, nextState: state };
       }
       const result = resolveVeinAttack({ attacker: state.player, defender: state.victimSnapshot, skill, rng });
       if (result.defender.hp <= 0) {
@@ -196,7 +196,7 @@ async function handleVein(state, input, rng, deps, playerId) {
         };
       }
       return {
-        reply: { text: `💥 ${result.log.join(' ')}\n\n❤️ Ты: ${result.attacker.hp}/${result.attacker.hpMax} — Соперник: ${result.defender.hp}/${result.defender.hpMax}`, buttons: ['Атаковать', ...skillButtons(result.attacker, {})] },
+        reply: { text: `💥 ${result.log.join(' ')}\n\n❤️ Ты: ${result.attacker.hp}/${result.attacker.hpMax} — Соперник: ${result.defender.hp}/${result.defender.hpMax}`, buttons: ['⚔️ Атаковать', ...skillButtons(result.attacker, {})] },
         nextState: { scene: SCENES.VEIN_PVP_COMBAT, player: result.attacker, victimId: state.victimId, victimSnapshot: result.defender }
       };
     }
@@ -223,7 +223,7 @@ async function handleVein(state, input, rng, deps, playerId) {
     }
 
     case SCENES.VEIN_BOSS_COMBAT: {
-      const skillId = input === 'Атаковать' ? null : skillIdByName(input);
+      const skillId = input === '⚔️ Атаковать' ? null : skillIdByName(input);
       const skill = skillId ? SKILLS[skillId] : null;
       if (!veinStore) return veinHubEntry(deps, state.player, playerId);
 
@@ -270,6 +270,12 @@ async function handleVein(state, input, rng, deps, playerId) {
           const myReward = rewards[playerId] || 0;
           player.credits = (player.credits || 0) + myReward;
           rewardNote = `\n\n🏆 Жила полностью зачищена! Твоя доля: 💳${myReward}.`;
+          // Персистентный бонус фракции ПОСЛЕ закрытия — доминирование
+          // (dominantFaction) не должно испаряться мгновенно вместе с
+          // жилой, см. lib/vein-legacy-bonus-store.js.
+          if (deps.veinLegacyBonusStore) {
+            await deps.veinLegacyBonusStore.setLegacyBonus(dominantFaction(vein)).catch(() => {});
+          }
           await veinStore.clearVein();
         } else {
           rewardNote = '\n\n➡️ Твой босс повержен — беги на помощь тем, кто ещё бьётся.';
@@ -282,7 +288,7 @@ async function handleVein(state, input, rng, deps, playerId) {
       }
 
       return {
-        reply: { text: `💥 ${roundResult.log.join(' ')}\n\n❤️ Ты: ${myFighter.hp}/${myFighter.hpMax} — Босс: ${boss.hp}/${boss.hpMax}`, buttons: ['Атаковать', ...skillButtons(myFighter, {})] },
+        reply: { text: `💥 ${roundResult.log.join(' ')}\n\n❤️ Ты: ${myFighter.hp}/${myFighter.hpMax} — Босс: ${boss.hp}/${boss.hpMax}`, buttons: ['⚔️ Атаковать', ...skillButtons(myFighter, {})] },
         nextState: { scene: SCENES.VEIN_BOSS_COMBAT, player: myFighter, bossId: state.bossId }
       };
     }
