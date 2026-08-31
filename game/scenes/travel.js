@@ -6,6 +6,8 @@ const {
   nodeById,
 } = require('../../engine/tract-network.js');
 
+const { availableHiddenRoutesFrom } = require('../../engine/hidden-routes.js');
+
 const {
   findLocationById,
   locationsForZone,
@@ -173,6 +175,18 @@ function resolveLocationZone(location) {
  * Это описание места, из которого после подтверждения
  * высадки создаётся нормальный JOURNEY через startJourney().
  */
+// Картинки посадки на конкретную именную локацию (lib/named-locations.js
+// id) — есть только для части локаций, где реально есть готовые кадры.
+// У остальных просто нет imageKey, ничего не ломается.
+const LANDING_IMAGE_BY_LOCATION = {
+  kovcheg9: 'locations/IMG_5512.jpeg',
+  prichal_pervogo: 'locations/IMG_5514.jpeg',
+};
+const DEPARTURE_IMAGE_BY_LOCATION = {
+  kovcheg9: 'locations/IMG_5513.jpeg',
+  prichal_pervogo: 'locations/IMG_5515.jpeg',
+};
+
 function buildJourneyContext(
   player,
   destinationNodeId
@@ -322,6 +336,12 @@ async function travelScreen(
       activeTracts
     );
 
+  const hiddenRoutes =
+    availableHiddenRoutesFrom(
+      nodeId,
+      player
+    );
+
   const cargo =
     tripCargoUnits(player);
 
@@ -418,7 +438,16 @@ async function travelScreen(
       );
     });
 
+  const hiddenRouteButtons =
+    hiddenRoutes.map((r) => r.label);
+
+  const hiddenRouteLines =
+    hiddenRoutes.map((r) =>
+      `${r.label} — ${r.description}`
+    );
+
   buttons.push(
+    ...hiddenRouteButtons,
     '🕳️ Засада',
     '⬅️ Назад'
   );
@@ -431,7 +460,8 @@ async function travelScreen(
         `⛽ Топливо: ${player.ship.fuel}/${player.ship.fuelMax}\n` +
         `📦 Несданный груз: ${cargo} ед.\n\n` +
         `🗺️ Доступные направления:\n` +
-        lines.join('\n'),
+        lines.join('\n') +
+        (hiddenRouteLines.length ? `\n\n🌫️ Скрытые маршруты:\n${hiddenRouteLines.join('\n')}` : ''),
 
       buttons,
     },
@@ -444,6 +474,8 @@ async function travelScreen(
 
       availableRoutes:
         routes,
+
+      hiddenRoutes,
     },
   };
 }
@@ -548,6 +580,27 @@ function travelToDestination(
       destinationNodeId
     )
   ) {
+    // ⚠️ БАГ-ФИКС: раньше прибытие в ЛЮБОЙ город (включая чужой) просто
+    // ставило scene:'station' с тем же player, НИКОГДА не выставляя
+    // player.visitingStation — currentStation(player)/game/scenes/common.js
+    // существовал только для СТАРОЙ линейной системы (gates.js, теперь
+    // скрыта из меню), у новой системы Трактов не было своей точки
+    // включения гостевого режима вообще. Из-за этого мои более ранние
+    // фиксы (cantina.js/npc.js/repair.js на currentStation) были
+    // технически верны, но не имели эффекта — флаг никогда не
+    // выставлялся. Теперь: город чужой фракции — гость, свой — очищаем
+    // (на случай, если флаг остался от прошлого визита в другое место).
+    const arrivedFactionName = node?.name || null;
+    const isForeignCity =
+      arrivedFactionName &&
+      arrivedFactionName !== player.faction;
+
+    if (isForeignCity) {
+      player.visitingStation = arrivedFactionName;
+    } else {
+      delete player.visitingStation;
+    }
+
     return {
       reply: {
         text:
@@ -1044,6 +1097,11 @@ async function handleTravel(
         buttons: [
           '➡️ Начать исследование',
         ],
+
+        imageKey:
+          LANDING_IMAGE_BY_LOCATION[
+            context.locationId
+          ],
       },
 
       nextState: {
@@ -1250,6 +1308,48 @@ async function handleTravel(
         `🕳️ Засада активна ${Math.round(
           AMBUSH_DURATION_MS / 60000
         )} мин.\n\n`
+      );
+    }
+
+    const hiddenRoute =
+      (state.hiddenRoutes || []).find(
+        (r) => r.label === input
+      );
+
+    if (hiddenRoute) {
+      // Скрытый маршрут — всегда по параметрам "Опасный" варианта
+      // (риск уже заложен в саму идею короткого пути), плюс бонус
+      // кредитов сразу за сам факт короткого пути (rewardMultiplier из
+      // engine/hidden-routes.js) — независимо от того, что случится по
+      // дороге (resolveTransit ниже обрабатывает путь как обычно, тем
+      // же кодом, что и всегда, — не отдельная система).
+      const dangerVariant =
+        ROUTE_VARIANTS.DANGEROUS;
+
+      const syntheticRoute = {
+        id: hiddenRoute.id,
+        from: hiddenRoute.from,
+        to: hiddenRoute.to,
+        variant: dangerVariant.id,
+        speedMult: dangerVariant.speedMult,
+        fuelMult: dangerVariant.fuelMult,
+        pvpAllowed: dangerVariant.pvpAllowed,
+        riskLabel: dangerVariant.riskLabel,
+      };
+
+      const shortcutBonus =
+        Math.round(
+          80 * hiddenRoute.rewardMultiplier
+        );
+      player.credits =
+        (player.credits || 0) +
+        shortcutBonus;
+
+      return resolveTransit(
+        deps,
+        player,
+        syntheticRoute,
+        rng
       );
     }
 
@@ -1614,4 +1714,5 @@ module.exports = {
   buildJourneyContext,
   startPlanetExploration,
   HOME_NODE_BY_FACTION,
+  DEPARTURE_IMAGE_BY_LOCATION,
 };
