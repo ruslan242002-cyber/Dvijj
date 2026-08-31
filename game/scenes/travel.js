@@ -1200,25 +1200,45 @@ async function handleTravel(
         );
       }
 
-      return {
-        reply: {
-          text:
-            hubMessage(player),
+      // ⚠️ БАГ-ФИКС: раньше "Назад" ВСЕГДА вёл в scene:'station' с
+      // домашней станцией игрока (hubMessage/stationButtons), даже если
+      // игрок физически стоит у ЛОКАЦИИ (не города) — currentStation()
+      // там откатывается на player.faction, т.к. visitingStation
+      // выставляется только при прибытии в ГОРОД. Гость на локации типа
+      // Причала Первого Прибытия видел меню своей домашней станции,
+      // хотя рядом никакой станции нет вообще. Теперь: в город — только
+      // если РЕАЛЬНО стоишь у города, иначе просто заново показываем
+      // тот же экран путешествия (некуда больше "возвращаться").
+      if (
+        isCityNode(
+          player.currentNodeId
+        )
+      ) {
+        return {
+          reply: {
+            text:
+              hubMessage(player),
 
-          buttons:
-            stationButtons(
-              deps,
-              player
-            ),
-        },
+            buttons:
+              stationButtons(
+                deps,
+                player
+              ),
+          },
 
-        nextState: {
-          scene:
-            SCENES.STATION,
+          nextState: {
+            scene:
+              SCENES.STATION,
 
-          player,
-        },
-      };
+            player,
+          },
+        };
+      }
+
+      return travelScreen(
+        deps,
+        player
+      );
     }
 
     if (
