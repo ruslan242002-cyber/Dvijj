@@ -1,17 +1,18 @@
 'use strict';
 
 /**
- * ⚠️ ПЕРЕПИСАНО ПОСЛЕ РЕАЛЬНОГО БАГА ЗАЦИКЛИВАНИЯ (найден по скриншоту
- * переписки в ВК — "Слабый сигнал бедствия" повторялся бесконечно даже
- * после "Проигнорировать"). Причина: моя первая версия использовала
+ * ⚠️ ИСТОРИЯ БАГА ЗАЦИКЛИВАНИЯ (найден по скриншоту переписки в ВК —
+ * "Слабый сигнал бедствия" повторялся бесконечно даже после
+ * "Проигнорировать"). Причина: моя первая версия использовала
  * придуманное поле choice.result и event.flag, которые game/scenes/
- * exploration.js вообще не читает — реальный интерфейс choice это ТОЛЬКО
+ * exploration.js не читал — реальный интерфейс на тот момент был ТОЛЬКО
  * choice.combat / choice.loot / choice.consequence / choice.reputation /
- * choice.xp (см. exploration.js: case SCENES.EXPLORATION_EVENT_CHOICE).
- * Флаг можно выставить ТОЛЬКО через choice.consequence (строка-ключ в
- * choices/consequence-engine.js:CONSEQUENCE_TRIGGERS) — прямого
- * "choice.flag" не существует. Теперь каждый выбор с последствием
- * ссылается на реальную запись в consequence-engine.js.
+ * choice.xp. С тех пор в exploration.js ДОБАВЛЕНА прямая поддержка
+ * choice.credits и choice.flag/choice.eventFlag тоже (простая, разовая
+ * пометка на player.flags без записи в consequence-engine.js) — новые
+ * события ниже ей пользуются напрямую, где не нужен полноценный
+ * consequence. Старые события (stranded_signal и т.д.) оставлены как
+ * есть — через consequence, трогать без необходимости незачем.
  */
 const { getFragmentStatus } = require('../lore/trakt-mythos.js');
 const { getArcForFaction, getNextAvailableQuest } = require('../storylines/curator-arcs.js');
@@ -91,21 +92,175 @@ const EVENT_TEMPLATES = {
       ],
     }),
   },
+
+  // ───────── Ниже — 5 новых ambient-событий, без жёсткого гейта по
+  // флагу (могут повторяться — это фоновые встречи в космосе, не
+  // разовые сюжетные события, см. периферия_programmer_handoff.txt:
+  // "Ambient events: сигналы, обломки, помехи..."). Используют прямой
+  // интерфейс choice.credits/choice.flag (добавлен позже в
+  // exploration.js) там, где не нужна полноценная запись в
+  // consequence-engine.js.
+
+  'abandoned_beacon': {
+    zones: ['blue', 'yellow'],
+    weight: 18,
+    generate: () => ({
+      type: 'choice',
+      text: 'Старый навигационный маяк, давно выведенный из реестра. Мигает по инерции — то ли ещё жив, то ли просто не может умереть.',
+      choices: [
+        { text: 'Отключить', xp: 8 },
+        { text: 'Изучить', xp: 20, loot: { resource: 'Изотопы', tier: 1, qty: 3 }, discovery: 'old_shipping_lane' },
+        { text: 'Восстановить', xp: 10, reputation: 5 },
+      ],
+    }),
+  },
+
+  'unknown_ship_trail': {
+    zones: ['yellow', 'red'],
+    weight: 15,
+    generate: () => ({
+      type: 'combat_choice',
+      text: 'Тепловой след — кто-то прошёл здесь совсем недавно, курс не станционный. Ещё можно нагнать.',
+      choices: [
+        { text: 'Преследовать', combat: {} },
+        { text: 'Записать координаты', xp: 10, discovery: 'ship_trail_coordinates' },
+        { text: 'Потерять след' },
+      ],
+    }),
+  },
+
+  'pirate_trail': {
+    zones: ['yellow', 'red'],
+    weight: 15,
+    generate: () => ({
+      type: 'combat_choice',
+      text: 'Обломки груза, характерные следы захвата — здесь недавно поработали пираты. Судя по всему, их корабль ещё в секторе.',
+      choices: [
+        { text: 'Засада', combat: {} },
+        { text: 'Избежать', xp: 5 },
+        { text: 'Сообщить фракции', reputation: 8, discovery: 'pirate_intel' },
+      ],
+    }),
+  },
+
+  'ancient_signal': {
+    zones: ['red'],
+    weight: 12,
+    generate: () => ({
+      type: 'combat_choice',
+      text: 'Сигнал старше любой станции в реестре. Формат неизвестен, но упрямо повторяется — как будто ждёт именно ответа, не просто приёма.',
+      choices: [
+        { text: 'Расшифровать', xp: 25, discovery: 'hidden_frequency' },
+        { text: 'Записать', xp: 10, flag: 'ancient_signal_recorded' },
+        { text: 'Ответить', combat: {} },
+      ],
+    }),
+  },
+
+  'damaged_drone': {
+    zones: ['blue', 'yellow'],
+    weight: 18,
+    generate: () => ({
+      type: 'choice',
+      text: 'Дрейфующий разведдрон, корпус пробит, но ядро ещё держит слабый заряд.',
+      choices: [
+        { text: 'Починить', xp: 15, loot: { resource: 'Сплавы', tier: 1, qty: 5 } },
+        { text: 'Разобрать', loot: { resource: 'Полимеры', tier: 1, qty: 8 } },
+        { text: 'Проследить маршрут', xp: 10, discovery: 'drone_relay_location' },
+      ],
+    }),
+  },
+
+  // ───────── ВТОРЫЕ ШАГИ ЦЕПОЧЕК — открываются не по зоне/весу, а по
+  // флагу с ПРЕДЫДУЩЕГО полёта. Условие ловит именно "флаг уже стоит, а
+  // цепочка ещё не завершена" — иначе шаг 2 повторялся бы на каждой
+  // вылазке (та же логика, что уберегла stranded_signal от зацикливания).
+
+  'ship_trail_location': {
+    zones: ['yellow', 'red'],
+    weight: 35, // высокий — раз цепочка начата, шаг 2 не должен теряться среди случайных встреч
+    condition: (player) => !!player.flags?.ship_trail_recorded && !player.flags?.ship_trail_resolved,
+    generate: () => ({
+      type: 'combat_choice',
+      text: 'Координаты, которые ты записал в прошлый раз, ведут сюда. Корабль стоит с погашенными огнями — сломан или прячется. На связь не выходит.',
+      choices: [
+        { text: 'Помочь скрыться', consequence: 'ship_trail_helped_escape' },
+        { text: 'Сообщить координаты фракции', consequence: 'ship_trail_reported' },
+        { text: 'Атаковать и забрать груз', combat: {} },
+      ],
+    }),
+  },
+
+  'drone_origin_found': {
+    zones: ['blue', 'yellow'],
+    weight: 35,
+    condition: (player) => !!player.flags?.drone_route_tracked && !player.flags?.drone_origin_resolved,
+    generate: () => ({
+      type: 'choice',
+      text: 'Маршрут дрона ведёт к скрытой ретрансляционной вышке — не станционной, не фракционной. Кто-то тайно картографирует весь сектор.',
+      choices: [
+        { text: 'Оставить как есть, никому не говорить', consequence: 'drone_origin_kept_secret' },
+        { text: 'Опубликовать координаты открыто', consequence: 'drone_origin_published' },
+      ],
+    }),
+  },
+
+  'pirate_base_located': {
+    zones: ['yellow', 'red'],
+    weight: 35,
+    condition: (player) => !!player.flags?.pirate_report_filed && !player.flags?.pirate_base_resolved,
+    generate: () => ({
+      type: 'combat_choice',
+      text: 'Фракция передала разведданные — судя по перехваченным сигналам, база того самого пиратского экипажа совсем рядом, замаскирована под обычный астероид.',
+      choices: [
+        { text: 'Атаковать базу самостоятельно', combat: {} },
+        { text: 'Навести облаву фракции', consequence: 'pirate_base_raided' },
+        { text: 'Оставить в покое', consequence: 'pirate_base_ignored' },
+      ],
+    }),
+  },
 };
 
 /** Взвешенно выбирает и генерирует одно подходящее событие для зоны,
- * либо null, если ни один шаблон сейчас не подходит. */
-function generateEvent(player, zone, rng = Math.random) {
+ * либо null, если ни один шаблон сейчас не подходит.
+ *
+ * worldState — общее состояние мира (deps.worldStateStore, см.
+ * choices/consequence-engine.js:worldChange). Пока читается только для
+ * unknown_ship_trail (демонстрация первой настоящей обратной связи "мир
+ * помнит" — раньше worldChange только ЗАПИСЫВАЛСЯ цепочками, но ничего
+ * его не читало обратно). Необязательный параметр — если не передан,
+ * ведёт себя как раньше. */
+function generateEvent(player, zone, rng = Math.random, worldState = {}) {
   const candidates = Object.values(EVENT_TEMPLATES).filter((t) => {
     if (!t.zones.includes(zone)) return false;
     if (t.condition && !t.condition(player)) return false;
     return true;
   });
   if (candidates.length === 0) return null;
-  const totalWeight = candidates.reduce((sum, t) => sum + t.weight, 0);
+
+  const weightFor = (template) => {
+    if (template === EVENT_TEMPLATES.unknown_ship_trail && worldState.defectorNetworkActivity === 'growing') {
+      // Сеть беглецов активнее — таких следов на пути объективно больше.
+      return template.weight * 2;
+    }
+    if (template === EVENT_TEMPLATES.damaged_drone && worldState.droneNetworkStatus === 'exposed') {
+      // Координаты сети опубликованы — о дронах теперь знают больше
+      // народу, натыкаются на них чаще (не потому что их физически
+      // больше, а потому что искать стали целенаправленно).
+      return template.weight * 1.6;
+    }
+    if (template === EVENT_TEMPLATES.pirate_trail && worldState.piracyThreatLevel === 'reduced') {
+      // Базу раздавили — но не все пираты сразу исчезают, просто их
+      // объективно меньше остаётся на путях.
+      return template.weight * 0.5;
+    }
+    return template.weight;
+  };
+
+  const totalWeight = candidates.reduce((sum, t) => sum + weightFor(t), 0);
   let roll = rng() * totalWeight;
   for (const template of candidates) {
-    roll -= template.weight;
+    roll -= weightFor(template);
     if (roll <= 0) return template.generate(player, rng);
   }
   return candidates[candidates.length - 1].generate(player, rng);
