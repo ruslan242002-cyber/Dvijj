@@ -58,6 +58,7 @@ const SCENES = Object.freeze({
   NPC_PEOPLE: 'npc_people',
   NPC_QUEST: 'npc_quest',
   NAMED_CHARACTER: 'named_character',
+  MINIGAME_SHIP_DIAGNOSTICS: 'minigame_ship_diagnostics',
   QUEST_SHYOPOT: 'quest_shyopot',
   LOC_REPAIR: 'loc_repair',
   LOC_DECON: 'loc_decon',
