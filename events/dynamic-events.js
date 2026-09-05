@@ -219,6 +219,25 @@ const EVENT_TEMPLATES = {
       ],
     }),
   },
+
+  // K2 «К-17» — periferia_five_voices_character_arcs_v2.txt раздел 7.
+  // Второй шаг арки Крана, но НЕ диалог с ним — случайная встреча в
+  // открытом космосе, гейтится тем, что первый разговор с Краном
+  // (kran_01) уже состоялся. Кран выходит на связь сам, без похода к нему.
+  'k17_distress_signal': {
+    zones: ['blue', 'yellow', 'red'],
+    weight: 20,
+    condition: (player) => !!player.flags?.kran_01_complete && !player.flags?.k17_resolved,
+    generate: () => ({
+      type: 'combat_choice',
+      text: '📡 Слабый аварийный сигнал.\n\nПозывной: K-17.\n\nПо внутренней связи резко встревает голос Крана: «Не отвечай».',
+      choices: [
+        { text: 'Ответить', consequence: 'k17_answered', discovery: 'k17_signal_trace' },
+        { text: 'Записать частоту', xp: 15, discovery: 'k17_signal_trace', flag: 'k17_resolved' },
+        { text: 'Игнорировать', flag: 'k17_resolved' },
+      ],
+    }),
+  },
 };
 
 /** Взвешенно выбирает и генерирует одно подходящее событие для зоны,
