@@ -16,7 +16,12 @@
 const { requiredTool, RESONANCE_DRILL, VEIN_ANNIHILATOR } = require('../../../engine/resource-vein.js');
 const { SHIP_SKINS, skinsAvailableFor, ownedSkins, purchaseSkin } = require('../../../engine/ship-skins.js');
 const { PASSIVE_SKILLS } = require('../../../engine/passive-skills.js');
-const { characterScreen } = require('../named-character.js');
+const { characterScreen, registerFunctionHandler } = require('../named-character.js');
+
+// Регистрация реальной функции Кайра (не заглушка) — при загрузке
+// модуля, один раз. game/scenes/character-functions/kayr.js.
+registerFunctionHandler('kayr', 'restore_coordinates', require('../character-functions/kayr.js').restoreCoordinates);
+
 const { buildBestiaryFighter, BESTIARY } = require('../../../engine/bestiary.js');
 const { resolveTurn } = require('../../../engine/combat-engine.js');
 const { hubMessage, stationButtons, addToInventory } = require('../common.js');
@@ -42,7 +47,7 @@ function volnyPortHub(player, prefixText = '') {
     reply: {
       text: `${prefixText}🏴‍☠️ ВОЛЬНЫЙ ПОРТ\n\n«Здесь закон заканчивается там, где начинается договор».\n\nСтанция без единой юрисдикции — территория Пяти Швартовых. Куда пойдёшь?`,
       buttons: ['⚓ Нижние доки', '🏪 Рынок «Шлак»', '🛌 Пилотский квартал', '🔴 Красный сектор', '🏙️ Верхний город', '🗿 Старый док', '🔫 Наёмники', '🕶️ Чёрный рынок', '⬅️ Назад'],
-      imageKey: 'locations/hub.jpg',
+      imageKey: 'locations/IMG_5507.jpeg',
     },
     nextState: { scene: 'volny_port_hub', player },
   };
@@ -51,11 +56,12 @@ function volnyPortHub(player, prefixText = '') {
 function docksScreen(player, prefixText = '') {
   const missingHp = Math.max(0, player.ship.hpMax - player.ship.hp);
   const cost = Math.round(missingHp * 4); // дороже честной станции — плата за отсутствие вопросов
+  const buttons = missingHp > 0 ? ['🔧 Починить без вопросов', 'Поговорить с Краном', '⬅️ Назад'] : ['Поговорить с Краном', '⬅️ Назад'];
   return {
     reply: {
       text: `${prefixText}⚓ НИЖНИЕ ДОКИ\n\nМатрос Гейл, не поднимая глаз от чертежей: «Чиню что угодно, без вопросов о происхождении. Дороже, чем на станции — зато без документов».\n\n${missingHp > 0 ? `Ремонт корпуса: 💳${cost}` : 'Корабль и так цел.'}`,
-      buttons: missingHp > 0 ? ['🔧 Починить без вопросов', '⬅️ Назад'] : ['⬅️ Назад'],
-      imageKey: 'locations/nizhnie-doki.jpg',
+      buttons,
+      imageKey: 'locations/IMG_5508.jpeg',
     },
     nextState: { scene: 'volny_port_docks', player },
   };
@@ -69,7 +75,7 @@ function shlakMarketScreen(player, prefixText = '') {
   const buttons = SHLAK_OFFERS.map((o) => `Купить: ${o.resource} T${o.tier}`);
   buttons.push('⬅️ Назад');
   return {
-    reply: { text: `${prefixText}🏪 РЫНОК «ШЛАК»\n\nДама Ренци держит рынок целиком — каждая лавка платит ей за право торговать. Вежлива, расчётлива, никогда не повышает голос.\n\n${lines.join('\n')}`, buttons, imageKey: 'locations/rynok-shalak.jpg' },
+    reply: { text: `${prefixText}🏪 РЫНОК «ШЛАК»\n\nДама Ренци держит рынок целиком — каждая лавка платит ей за право торговать. Вежлива, расчётлива, никогда не повышает голос.\n\n${lines.join('\n')}`, buttons, imageKey: 'locations/IMG_5509.jpeg' },
     nextState: { scene: 'volny_port_market', player },
   };
 }
@@ -101,9 +107,9 @@ function pilotQuarterScreen(player, prefixText = '') {
   const neutralSkins = SHIP_SKINS.filter((s) => !s.faction && !s.dropOnly && s.cost > 0);
   const lines = neutralSkins.map((s) => `${s.name} — 💳${s.cost}${owned.includes(s.id) ? ' (уже есть)' : ''}`);
   const buttons = neutralSkins.filter((s) => !owned.includes(s.id)).map((s) => `Купить скин: ${s.name}`);
-  buttons.push('⬅️ Назад');
+  buttons.push('Поговорить с диспетчером', '⬅️ Назад');
   return {
-    reply: { text: `${prefixText}🛌 ПИЛОТСКИЙ КВАРТАЛ\n\nДешёвые гостиницы, бары, симуляторы полётов. Здесь — нейтральные окраски корабля, без привязки к станции.\n\n${lines.join('\n')}`, buttons, imageKey: 'locations/pilotskiy-kvartal.jpg' },
+    reply: { text: `${prefixText}🛌 ПИЛОТСКИЙ КВАРТАЛ\n\nДешёвые гостиницы, бары, симуляторы полётов. Здесь — нейтральные окраски корабля, без привязки к станции.\n\n${lines.join('\n')}`, buttons, imageKey: 'locations/IMG_5510.jpeg' },
     nextState: { scene: 'volny_port_pilots', player },
   };
 }
@@ -147,7 +153,7 @@ function upperCityScreen(player, prefixText = '') {
     reply: {
       text: `${prefixText}🏙️ ВЕРХНИЙ ГОРОД\n\nВысотные здания, дорогие рестораны, панорамные окна с видом на космос — самая неожиданная часть Вольного Порта.\n\nЗдесь продают нейрочипы напрямую — то, что обычно достаётся только удачей на вылазках.\n\n${lines.length ? lines.join('\n') : 'Сейчас нечего предложить.'}`,
       buttons,
-      imageKey: 'locations/verhniy-gorod.jpg',
+      imageKey: 'locations/IMG_5511.jpeg',
     },
     nextState: { scene: 'volny_port_uppercity', player },
   };
@@ -161,7 +167,7 @@ function oldDockScreen(player, prefixText = '') {
     reply: {
       text: `${prefixText}🗿 СТАРЫЙ ДОК\n\nИменно вокруг этого причала когда-то и вырос весь Вольный Порт — задолго до неоновых улиц и рынка «Шлак». Обшивка здесь старше самой станции, латана десятками разных рук.\n\nНикто уже не помнит, кто пристыковался первым. Но каждый Швартовый в этом сходится: без Старого дока не было бы ничего остального.`,
       buttons: ['Поговорить с Кайром', '⬅️ Назад'],
-      imageKey: 'npc/kayr.jpg',
+      imageKey: 'npc/IMG_5516.jpeg',
     },
     nextState: { scene: 'volny_port_olddock', player },
   };
@@ -218,6 +224,9 @@ function handleVolnyPort(state, input, rng, deps) {
 
     case 'volny_port_docks': {
       if (input === '⬅️ Назад') return volnyPortHub(state.player);
+      if (input === 'Поговорить с Краном') {
+        return characterScreen('kran', state.player, 'volny_port_docks');
+      }
       if (input === '🔧 Починить без вопросов') {
         const player = { ...state.player, ship: { ...state.player.ship } };
         const missingHp = Math.max(0, player.ship.hpMax - player.ship.hp);
@@ -268,6 +277,9 @@ function handleVolnyPort(state, input, rng, deps) {
 
     case 'volny_port_pilots': {
       if (input === '⬅️ Назад') return volnyPortHub(state.player);
+      if (input === 'Поговорить с диспетчером') {
+        return characterScreen('dispatcher', state.player, 'volny_port_pilots');
+      }
       const match = /^Купить скин: (.+)$/.exec(input);
       if (match) {
         const skin = SHIP_SKINS.find((s) => s.name === match[1]);
@@ -292,4 +304,4 @@ function handleVolnyPort(state, input, rng, deps) {
   }
 }
 
-module.exports = { handleVolnyPort, volnyPortHub };
+module.exports = { handleVolnyPort, volnyPortHub, docksScreen, oldDockScreen, upperCityScreen, pilotQuarterScreen };
