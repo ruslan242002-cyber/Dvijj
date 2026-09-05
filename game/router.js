@@ -31,6 +31,7 @@ const { handleWorkshop } = require('./scenes/locations/workshop.js');
 const { handleCuratorQuest } = require('./scenes/quests/curator.js');
 const { handleNpc } = require('./scenes/quests/npc.js');
 const { handleNamedCharacter } = require('./scenes/named-character.js');
+const { handleMinigame } = require('./scenes/minigame.js');
 const { handleBoss } = require('./scenes/boss.js');
 const { handleRaid } = require('./scenes/raid.js');
 const { handleMarket } = require('./scenes/market.js');
@@ -98,6 +99,7 @@ const SCENE_HANDLERS = {
   [SCENES.NPC_PEOPLE]: handleNpc,
   [SCENES.NPC_QUEST]: handleNpc,
   [SCENES.NAMED_CHARACTER]: handleNamedCharacter,
+  [SCENES.MINIGAME_SHIP_DIAGNOSTICS]: handleMinigame,
   [SCENES.BOSS_HUB]: handleBoss,
   [SCENES.BOSS_COMBAT]: handleBoss,
   [SCENES.RAID_LOBBY]: handleRaid,
