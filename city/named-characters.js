@@ -2,27 +2,34 @@
 
 /**
  * ЭКРАН ИМЕННОГО ПЕРСОНАЖА — общий для всех city/named-characters.js
- * записей. Не по одному файлу на персонажа (чтобы не плодить монолиты
- * и не дублировать один и тот же каркас 4+ раза) — один переиспользуемый
- * экран, данные берутся из карточки персонажа.
- *
- * Пока status==='stub' у персонажа, клик по любой его функции отвечает
- * честной заглушкой "в разработке" — ничего не ломает, просто пока
- * нечего показать по-настоящему.
+ * записей. Один переиспользуемый экран, данные берутся из карточки
+ * персонажа.
  */
 const { getCharacter } = require('../../city/named-characters.js');
-const { hubMessage, stationButtons } = require('./common.js');
+const { hubMessage, stationButtons, addToInventory } = require('./common.js');
 const { SCENES } = require('./ids.js');
+const { getAvailableStage, completeStage } = require('../../lib/npc-arcs.js');
+const { grantXp } = require('../../engine/leveling.js');
+const { recordDiscovery } = require('../../lib/discoveries.js');
+const { addFactionReputation } = require('../../engine/reputation.js');
 
-// backScene -> как правильно перерисовать экран, откуда пришли (не общее
-// "🛰️ станция", а именно тот же экран с его текстом/картинкой). Ленивый
-// require внутри функций (не на верху файла) — volny-port.js сам
-// require'ит characterScreen отсюда, обратный require на верху файла
-// создал бы цикл при загрузке модуля; внутри функции он безопасен, т.к.
-// к моменту вызова оба модуля уже полностью загружены.
+// Реальные обработчики функций — отдельно от city/named-characters.js.
+// Ключ: "characterId:functionId". Если для функции здесь нет записи —
+// handleNamedCharacter сам показывает честную заглушку "в разработке".
+const FUNCTION_HANDLERS = {};
+
+function registerFunctionHandler(characterId, functionId, handler) {
+  FUNCTION_HANDLERS[`${characterId}:${functionId}`] = handler;
+}
+
+// backScene -> как правильно перерисовать экран, откуда пришли. Ленивый
+// require внутри функций (не на верху файла) — во избежание циклов при
+// загрузке модуля.
 const BACK_SCREEN_BUILDERS = {
   volny_port_olddock: () => require('./locations/volny-port.js').oldDockScreen,
   volny_port_uppercity: () => require('./locations/volny-port.js').upperCityScreen,
+  volny_port_docks: () => require('./locations/volny-port.js').docksScreen,
+  volny_port_pilots: () => require('./locations/volny-port.js').pilotQuarterScreen,
 };
 
 function rebuildBackScreen(backScene, player) {
@@ -42,8 +49,22 @@ function characterScreen(characterId, player, backScene = 'station', prefixText 
     };
   }
 
+  if (character.hasArc) {
+    const stage = getAvailableStage(characterId, player);
+    if (stage) {
+      return {
+        reply: {
+          text: `${prefixText}${character.name}\n\n${stage.intro}`,
+          buttons: [stage.acceptButton, '⬅️ Назад'],
+          imageKey: character.imageKey,
+        },
+        nextState: { scene: SCENES.NAMED_CHARACTER, player, characterId, backScene, stageId: stage.id },
+      };
+    }
+  }
+
   const text =
-    `${prefixText}${character.name} ${character.title}\n` +
+    `${prefixText}${character.name} ${character.title || ''}\n` +
     `${character.role} · ${character.location}\n\n` +
     `${character.description}\n\n` +
     `${character.quote}`;
@@ -69,11 +90,69 @@ function handleNamedCharacter(state, input, rng, deps) {
     return rebuildBackScreen(state.backScene, state.player);
   }
 
+  if (state.stageId) {
+    const { findStage } = require('../../lib/npc-arcs.js');
+    const stage = findStage(state.characterId, state.stageId);
+    if (stage) {
+      if (input === stage.acceptButton) {
+        if (stage.launchesMinigame === 'ship_diagnostics') {
+          const { shipDiagnosticsScreen } = require('./minigame.js');
+          return shipDiagnosticsScreen(state.player, state.backScene, {
+            arcCharacterId: state.characterId,
+            arcStageId: state.stageId,
+          });
+        }
+
+        return {
+          reply: {
+            text: `${character.name}\n\nВыбери, как подойти к делу:`,
+            buttons: stage.choices.map((c) => c.text),
+            imageKey: character.imageKey,
+          },
+          nextState: { scene: SCENES.NAMED_CHARACTER, player: state.player, characterId: state.characterId, backScene: state.backScene, stageId: state.stageId, choosing: true },
+        };
+      }
+
+      if (state.choosing) {
+        const choice = stage.choices.find((c) => c.text === input);
+        if (choice) {
+          const player = state.player;
+          if (choice.loot) {
+            addToInventory(player, choice.loot.resource, choice.loot.tier, choice.loot.qty);
+          }
+          if (choice.xp) {
+            grantXp(player, choice.xp);
+          }
+          if (choice.credits) {
+            player.credits = (player.credits || 0) + choice.credits;
+          }
+          if (choice.discovery) {
+            recordDiscovery(player, choice.discovery);
+          }
+          if (choice.reputation) {
+            addFactionReputation(player, player.faction, choice.reputation);
+          }
+          completeStage(player, state.characterId, state.stageId);
+
+          return {
+            reply: {
+              text: `${choice.flavor}\n\n${stage.closingLine}`,
+              buttons: ['⬅️ Назад'],
+              imageKey: character.imageKey,
+            },
+            nextState: { scene: SCENES.NAMED_CHARACTER, player, characterId: state.characterId, backScene: state.backScene },
+          };
+        }
+      }
+    }
+  }
+
   const func = character.functions.find((f) => f.name === input);
   if (func) {
-    // ⚠️ status==='stub' — честная заглушка, не притворяется рабочей
-    // функцией. Когда для персонажа появится реальная логика — эта
-    // ветка заменяется на настоящий обработчик конкретной функции.
+    const realHandler = FUNCTION_HANDLERS[`${state.characterId}:${func.id}`];
+    if (realHandler) {
+      return realHandler(state.player, state.backScene, rng, deps);
+    }
     return characterScreen(
       state.characterId,
       state.player,
@@ -85,4 +164,4 @@ function handleNamedCharacter(state, input, rng, deps) {
   return characterScreen(state.characterId, state.player, state.backScene);
 }
 
-module.exports = { characterScreen, handleNamedCharacter };
+module.exports = { characterScreen, handleNamedCharacter, registerFunctionHandler };
