@@ -13,6 +13,44 @@ const { addFactionReputation } = require('../../engine/reputation.js');
 const { checkDailyLogin } = require('../../lib/daily-streak.js');
 const { DISTRICTS } = require('../../city/districts-data.js');
 const { rollStationEvent } = require('../../city/station-events.js');
+
+// Регистрация реальной функции Мары (не заглушка) — при загрузке
+// модуля, один раз.
+require('./named-character.js').registerFunctionHandler(
+  'mara_keyn',
+  'repair',
+  require('./character-functions/mara_keyn.js').maraRepair
+);
+require('./named-character.js').registerFunctionHandler(
+  'mara_keyn',
+  'rumors',
+  require('./character-functions/mara_keyn.js').maraRumors
+);
+require('./named-character.js').registerFunctionHandler(
+  'mara_keyn',
+  'shelter',
+  require('./character-functions/mara_keyn.js').maraShelter
+);
+require('./named-character.js').registerFunctionHandler(
+  'ayrin_velmor',
+  'reputation_check',
+  require('./character-functions/ayrin_velmor.js').ayrinReputationCheck
+);
+require('./named-character.js').registerFunctionHandler(
+  'ayrin_velmor',
+  'archives',
+  require('./character-functions/ayrin_velmor.js').ayrinArchivesAccess
+);
+require('./named-character.js').registerFunctionHandler(
+  'doktor_vorn',
+  'trade',
+  require('./character-functions/doktor_vorn.js').vornTrade
+);
+require('./named-character.js').registerFunctionHandler(
+  'doktor_vorn',
+  'modifications',
+  require('./character-functions/doktor_vorn.js').vornModification
+);
 const { imageForLocation } = require('../location-images.js');
 const { marketHub } = require('./market.js');
 const { pvpHub } = require('./pvp.js');
