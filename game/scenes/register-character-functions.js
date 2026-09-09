@@ -2,32 +2,18 @@
 
 /**
  * ЕДИНЫЙ РЕЕСТР всех реальных функций именных персонажей — все 18
- * регистраций в одном месте, вызываются ОДНОЙ функцией
- * registerAllCharacterFunctions() из game/router.js, ПОСЛЕ того как
- * router.js уже завершил СВОИ собственные top-level require (то есть
- * все нужные модули к этому моменту гарантированно полностью
- * загружены).
+ * регистраций в одном месте.
  *
- * ⚠️ БАГ-ФИКС: раньше каждая регистрация была разбросана по top-level
- * коду hub.js/volny-port.js — `require('./named-character.js')
- * .registerFunctionHandler(...)` выполнялось СРАЗУ при загрузке ЭТИХ
- * файлов. Проблема: если router.js требует hub.js РАНЬШЕ, чем сам
- * named-character.js (что и происходит — hub.js на строке 21,
- * named-character.js на строке 33) — hub.js триггерит ПЕРВУЮ загрузку
- * named-character.js прямо во время своей собственной. Если у
- * named-character.js (через свою цепочку require) существует хоть
- * один путь, пусть даже косвенный, обратно к какому-то ещё
- * не полностью загруженному модулю — Node вернёт НЕПОЛНЫЙ exports
- * (то, что успело присвоиться к module.exports к этому моменту), и
- * registerFunctionHandler окажется undefined. Именно так упало в
- * проде: "require(...).registerFunctionHandler is not a function".
- * Вынос ВСЕХ регистраций в отдельную функцию, вызываемую ПОСЛЕ
- * загрузки всего router.js — полностью убирает эту хрупкость,
- * независимо от точного порядка require где бы то ни было.
+ * ⚠️ ВАЖНО: этот файл НЕ требует ('./named-character.js') САМ —
+ * получает registerFunctionHandler ПАРАМЕТРОМ снаружи. Вызывается
+ * ЛЕНИВО, изнутри самого named-character.js, при первом реальном
+ * обращении игрока (см. ensureFunctionsRegistered() там) — не при
+ * загрузке модулей вообще. Это полностью убирает любую возможную
+ * зависимость от порядка require где бы то ни было в проекте: к
+ * моменту, когда обрабатывается реальный ввод игрока, весь граф
+ * require уже гарантированно полностью разрешён.
  */
-function registerAllCharacterFunctions() {
-  const { registerFunctionHandler } = require('./named-character.js');
-
+function registerAllCharacterFunctions(registerFunctionHandler) {
   const mara = require('./character-functions/mara_keyn.js');
   registerFunctionHandler('mara_keyn', 'repair', mara.maraRepair);
   registerFunctionHandler('mara_keyn', 'rumors', mara.maraRumors);
