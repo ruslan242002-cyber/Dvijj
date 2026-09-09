@@ -3,7 +3,7 @@
 /**
  * АЙРИН ВЕЛЬМОР — реальные функции. Держим обе в одном файле.
  */
-const { getFactionReputation, getReputationTitle } = require('../../../engine/reputation.js');
+const { getFactionReputation, getReputationTitle, addFactionReputation } = require('../../../engine/reputation.js');
 const { FACTIONS } = require('../common.js');
 
 /** «Проверка репутации» — показывает игроку настоящий статус со всеми
@@ -51,4 +51,66 @@ async function ayrinArchivesAccess(player, backScene, rng, deps) {
   return characterScreen('ayrin_velmor', player, backScene, `Айрин открывает один файл из закрытого доступа.\n\n📁 «${entry}»\n\nСписано 💳${ARCHIVE_COST}.\n\n`);
 }
 
-module.exports = { ayrinReputationCheck, ayrinArchivesAccess };
+/** «Легализация» — "помогает узаконить некоторые действия и скрыть
+ * следы в официальных системах" (её же карточка). Реально: сглаживает
+ * САМУЮ плохую репутацию игрока с одной фракцией, ближе к нейтральной
+ * — не строит отдельную систему "незаконных действий", просто честно
+ * работает с уже существующей репутацией. Цена растёт с тем, насколько
+ * плохо всё было. */
+async function ayrinLegalization(player, backScene, rng, deps) {
+  const { characterScreen } = require('../named-character.js');
+
+  let worstFaction = null;
+  let worstValue = 0;
+  for (const faction of FACTIONS) {
+    const value = getFactionReputation(player, faction);
+    if (value < worstValue) {
+      worstValue = value;
+      worstFaction = faction;
+    }
+  }
+
+  if (!worstFaction) {
+    return characterScreen('ayrin_velmor', player, backScene, 'Айрин проверяет твоё досье и качает головой: «У тебя пока нет ничего, что стоило бы легализовать. Приятная редкость».\n\n');
+  }
+
+  const cost = Math.min(2000, Math.abs(worstValue) * 15);
+  if ((player.credits || 0) < cost) {
+    return characterScreen('ayrin_velmor', player, backScene, `Айрин сверяется с расчётом: «Легализация твоих дел с ${worstFaction} — 💳${cost}. Дёшево не бывает».\n\n`);
+  }
+
+  player.credits -= cost;
+  const restored = Math.round(Math.abs(worstValue) * 0.6);
+  addFactionReputation(player, worstFaction, restored);
+  return characterScreen(
+    'ayrin_velmor',
+    player,
+    backScene,
+    `Айрин что-то долго правит в системе, не поднимая головы. «Готово. Формально — ты чист перед ${worstFaction}, по крайней мере на бумаге». Списано 💳${cost}.\n\n`
+  );
+}
+
+/** «Особые поручения» — вариативный разовый результат (как у Кайра/
+ * Ворна), не многошаговый квест. */
+async function ayrinSpecialMission(player, backScene, rng, deps) {
+  const { characterScreen } = require('../named-character.js');
+  const { addToInventory } = require('../common.js');
+
+  const roll = rng();
+  let resultText;
+  if (roll < 0.35) {
+    player.credits = (player.credits || 0) + 250;
+    resultText = 'Найденный документ оказался достаточно ценным, чтобы продать его нужным людям. Айрин делится долей — 💳250.';
+  } else if (roll < 0.7) {
+    addToInventory(player, 'Полимеры', 2, 5);
+    resultText = 'Артефакт, который ты принёс, разобрали на образцы для дальнейшего изучения — тебе досталась своя доля материалов.';
+  } else {
+    const { grantXp } = require('../../../engine/leveling.js');
+    grantXp(player, 35);
+    resultText = 'Документ оказался важнее по смыслу, чем по цене — Айрин учит тебя читать между строк официальных формулировок. +35 опыта.';
+  }
+
+  return characterScreen('ayrin_velmor', player, backScene, `${resultText}\n\n`);
+}
+
+module.exports = { ayrinReputationCheck, ayrinArchivesAccess, ayrinLegalization, ayrinSpecialMission };
