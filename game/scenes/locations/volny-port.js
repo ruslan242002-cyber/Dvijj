@@ -21,6 +21,8 @@ const { characterScreen, registerFunctionHandler } = require('../named-character
 // Регистрация реальной функции Кайра (не заглушка) — при загрузке
 // модуля, один раз. game/scenes/character-functions/kayr.js.
 registerFunctionHandler('kayr', 'restore_coordinates', require('../character-functions/kayr.js').restoreCoordinates);
+registerFunctionHandler('kayr', 'old_routes_quests', require('../character-functions/kayr.js').oldRoutesLead);
+registerFunctionHandler('kayr', 'old_dock_reputation', require('../character-functions/kayr.js').oldDockReputationStatus);
 
 const { buildBestiaryFighter, BESTIARY } = require('../../../engine/bestiary.js');
 const { resolveTurn } = require('../../../engine/combat-engine.js');
