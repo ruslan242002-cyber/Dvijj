@@ -49,6 +49,13 @@ function characterScreen(characterId, player, backScene = 'station', prefixText 
     };
   }
 
+  // Общий флаг "уже встречал этого персонажа" — не привязан к
+  // прохождению квеста/функции, просто факт визита. Пригождается для
+  // подсказок вроде "Поиск людей" у Мары (game/scenes/character-
+  // functions/mara_keyn.js), не для геймплейных условий.
+  player.flags = player.flags || {};
+  player.flags[`${characterId}_met`] = true;
+
   if (character.hasArc) {
     const stage = getAvailableStage(characterId, player);
     if (stage) {
