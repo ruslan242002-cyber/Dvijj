@@ -32,6 +32,21 @@ require('./named-character.js').registerFunctionHandler(
   require('./character-functions/mara_keyn.js').maraShelter
 );
 require('./named-character.js').registerFunctionHandler(
+  'mara_keyn',
+  'find_people',
+  require('./character-functions/mara_keyn.js').maraFindPeople
+);
+require('./named-character.js').registerFunctionHandler(
+  'mara_keyn',
+  'crew',
+  require('./character-functions/mara_keyn.js').maraCrew
+);
+require('./named-character.js').registerFunctionHandler(
+  'mara_keyn',
+  'special_quests',
+  require('./character-functions/mara_keyn.js').maraSpecialQuest
+);
+require('./named-character.js').registerFunctionHandler(
   'ayrin_velmor',
   'reputation_check',
   require('./character-functions/ayrin_velmor.js').ayrinReputationCheck
@@ -42,6 +57,16 @@ require('./named-character.js').registerFunctionHandler(
   require('./character-functions/ayrin_velmor.js').ayrinArchivesAccess
 );
 require('./named-character.js').registerFunctionHandler(
+  'ayrin_velmor',
+  'legalization',
+  require('./character-functions/ayrin_velmor.js').ayrinLegalization
+);
+require('./named-character.js').registerFunctionHandler(
+  'ayrin_velmor',
+  'special_missions',
+  require('./character-functions/ayrin_velmor.js').ayrinSpecialMission
+);
+require('./named-character.js').registerFunctionHandler(
   'doktor_vorn',
   'trade',
   require('./character-functions/doktor_vorn.js').vornTrade
@@ -50,6 +75,21 @@ require('./named-character.js').registerFunctionHandler(
   'doktor_vorn',
   'modifications',
   require('./character-functions/doktor_vorn.js').vornModification
+);
+require('./named-character.js').registerFunctionHandler(
+  'doktor_vorn',
+  'research',
+  require('./character-functions/doktor_vorn.js').vornResearch
+);
+require('./named-character.js').registerFunctionHandler(
+  'doktor_vorn',
+  'quests',
+  require('./character-functions/doktor_vorn.js').vornQuest
+);
+require('./named-character.js').registerFunctionHandler(
+  'doktor_vorn',
+  'risk_reward',
+  require('./character-functions/doktor_vorn.js').vornRiskReward
 );
 const { imageForLocation } = require('../location-images.js');
 const { marketHub } = require('./market.js');
