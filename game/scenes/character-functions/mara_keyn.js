@@ -80,4 +80,86 @@ async function maraShelter(player, backScene, rng, deps) {
   );
 }
 
-module.exports = { maraRepair, maraRumors, maraShelter };
+// "Уже встречал" теперь единый флаг {id}_met (проставляется автоматически
+// в characterScreen() при любом визите, см. named-character.js) — не
+// зависит от того, прошёл ли квест, просто факт знакомства.
+const OTHER_PEOPLE = [
+  { id: 'doktor_vorn', name: 'Доктор Элиан Ворн', location: 'Вуаль' },
+  { id: 'ayrin_velmor', name: 'Айрин Вельмор', location: 'Верхний город Вольного Порта' },
+  { id: 'kran', name: 'Кран', location: 'Нижние доки Вольного Порта' },
+  { id: 'dispatcher', name: 'Диспетчер', location: 'Пилотский квартал Вольного Порта' },
+  { id: 'kayr', name: 'Кайр', location: 'Старый док Вольного Порта' },
+];
+
+/** «Поиск людей» — подсказывает, где найти одного из остальных именных
+ * персонажей, которого игрок ещё не встречал. Если все уже найдены —
+ * честно об этом говорит, не повторяет одну и ту же подсказку. */
+async function maraFindPeople(player, backScene, rng, deps) {
+  const { characterScreen } = require('../named-character.js');
+
+  const unmet = OTHER_PEOPLE.filter((p) => !player.flags?.[`${p.id}_met`]);
+  if (unmet.length === 0) {
+    return characterScreen('mara_keyn', player, backScene, 'Мара качает головой: «Всех, кого я знаю и кто стоит внимания, ты уже нашёл сам. Дальше — сам справишься».\n\n');
+  }
+
+  const pick = unmet[Math.floor(rng() * unmet.length)];
+  return characterScreen(
+    'mara_keyn',
+    player,
+    backScene,
+    `Мара задумывается. «Ищешь кого-то конкретного? Есть один человек, ${pick.name} — найдёшь в районе: ${pick.location}. Скажи, что от меня, если что».\n\n`
+  );
+}
+
+const CREW_COST = 400;
+const CREW_STATS = ['power', 'mind', 'reaction', 'endurance'];
+const CREW_NAMES = { power: 'силу', mind: 'разум', reaction: 'реакцию', endurance: 'выносливость' };
+
+/** «Экипаж» — в отличие от "Модификаций" Ворна, здесь БЕЗ риска: Мара
+ * не экспериментирует на людях, она реально находит толкового человека
+ * в команду. Постоянный маленький плюс, гарантированно положительный —
+ * матчит её защитную, а не рискованную природу. */
+async function maraCrew(player, backScene, rng, deps) {
+  const { characterScreen } = require('../named-character.js');
+
+  if ((player.credits || 0) < CREW_COST) {
+    return characterScreen('mara_keyn', player, backScene, `Мара разводит руками: «Толковый человек в команду — 💳${CREW_COST}. Хороших людей на улице не найти».\n\n`);
+  }
+
+  player.credits -= CREW_COST;
+  player.stats = player.stats || {};
+  const stat = CREW_STATS[Math.floor(rng() * CREW_STATS.length)];
+  player.stats[stat] = (player.stats[stat] || 0) + 2;
+
+  return characterScreen(
+    'mara_keyn',
+    player,
+    backScene,
+    `Мара сводит тебя с одним из своих людей — толковый, проверенный, без сюрпризов. ${CREW_NAMES[stat]} +2, постоянно. Списано 💳${CREW_COST}.\n\n`
+  );
+}
+
+/** «Особые задания» — вариативный разовый результат (как у остальных
+ * персонажей), не многошаговый квест. */
+async function maraSpecialQuest(player, backScene, rng, deps) {
+  const { characterScreen } = require('../named-character.js');
+  const { addToInventory } = require('../common.js');
+
+  const roll = rng();
+  let resultText;
+  if (roll < 0.4) {
+    player.credits = (player.credits || 0) + 180;
+    resultText = 'Мара просит помочь с должником — обошлось без драки, деньги вернули. Доля — 💳180.';
+  } else if (roll < 0.75) {
+    addToInventory(player, 'Сплавы', 1, 10);
+    resultText = 'Нужно было тихо забрать груз со склада, пока не нашли другие. Часть груза — твоя, за скорость.';
+  } else {
+    const { grantXp } = require('../../../engine/leveling.js');
+    grantXp(player, 25);
+    resultText = 'Задание оказалось сложнее, чем казалось — но опыт того стоил. +25 опыта.';
+  }
+
+  return characterScreen('mara_keyn', player, backScene, `${resultText}\n\n`);
+}
+
+module.exports = { maraRepair, maraRumors, maraShelter, maraFindPeople, maraCrew, maraSpecialQuest };
