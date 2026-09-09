@@ -16,13 +16,7 @@
 const { requiredTool, RESONANCE_DRILL, VEIN_ANNIHILATOR } = require('../../../engine/resource-vein.js');
 const { SHIP_SKINS, skinsAvailableFor, ownedSkins, purchaseSkin } = require('../../../engine/ship-skins.js');
 const { PASSIVE_SKILLS } = require('../../../engine/passive-skills.js');
-const { characterScreen, registerFunctionHandler } = require('../named-character.js');
-
-// Регистрация реальной функции Кайра (не заглушка) — при загрузке
-// модуля, один раз. game/scenes/character-functions/kayr.js.
-registerFunctionHandler('kayr', 'restore_coordinates', require('../character-functions/kayr.js').restoreCoordinates);
-registerFunctionHandler('kayr', 'old_routes_quests', require('../character-functions/kayr.js').oldRoutesLead);
-registerFunctionHandler('kayr', 'old_dock_reputation', require('../character-functions/kayr.js').oldDockReputationStatus);
+const { characterScreen } = require('../named-character.js');
 
 const { buildBestiaryFighter, BESTIARY } = require('../../../engine/bestiary.js');
 const { resolveTurn } = require('../../../engine/combat-engine.js');
