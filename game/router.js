@@ -48,6 +48,18 @@ const {
   rollTractDuration, rollDeadEndOrigin,
 } = require('../engine/tract-spawn-timer.js');
 
+// ⚠️ БАГ-ФИКС: раньше регистрация реальных функций именных персонажей
+// (Мара/Айрин/Ворн/Кайр) была разбросана по top-level коду hub.js и
+// volny-port.js — `require('./named-character.js').registerFunctionHandler(...)`
+// выполнялось СРАЗУ при загрузке этих файлов. router.js требует hub.js
+// РАНЬШЕ named-character.js (см. порядок require выше) — из-за этого
+// в проде падало "registerFunctionHandler is not a function" (классика
+// циклической зависимости: hub.js триггерил первую загрузку
+// named-character.js прямо посреди своей собственной, exports
+// оказывались неполными). Вызов здесь — ПОСЛЕ того как router.js уже
+// закончил ВСЕ свои require — полностью убирает эту хрупкость.
+require('./scenes/register-character-functions.js').registerAllCharacterFunctions();
+
 // scene -> обработчик. Несколько сцен могут указывать на один и тот же
 // модуль (например STATION и DISTRICT_HUB оба идут в handleHub) — каждый
 // модуль сам разбирается, какая именно сцена пришла, через свой switch
