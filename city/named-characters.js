@@ -22,6 +22,28 @@ function registerFunctionHandler(characterId, functionId, handler) {
   FUNCTION_HANDLERS[`${characterId}:${functionId}`] = handler;
 }
 
+// ⚠️ БАГ-ФИКС №2 (первый — вынос регистраций в register-character-
+// functions.js — не решил проблему целиком в полном дереве проекта на
+// проде, там всё ещё "registerFunctionHandler is not a function" при
+// require('./named-character.js') ИЗВНЕ). Настоящая причина шире, чем
+// одна конкретная цепочка — в достаточно большом графе require ЛЮБОЙ
+// внешний require('./named-character.js') потенциально мог поймать
+// module.exports в процессе заполнения. Радикальное решение: регистрация
+// теперь происходит ЛЕНИВО и ИЗНУТРИ этого же модуля — не через внешний
+// require() named-character.js откуда-то ещё, а сам named-character.js
+// при первом реальном вызове (не при загрузке!) подтягивает функции
+// персонажей и регистрирует их НАПРЯМУЮ в свой же FUNCTION_HANDLERS,
+// без какого-либо require() САМОГО СЕБЯ откуда-либо. К моменту, когда
+// реально обрабатывается ввод игрока, ВСЕ модули уже гарантированно
+// загружены целиком — Node не выполняет прикладной код, пока весь
+// граф require не разрешится.
+let _functionsRegistered = false;
+function ensureFunctionsRegistered() {
+  if (_functionsRegistered) return;
+  _functionsRegistered = true;
+  require('./register-character-functions.js').registerAllCharacterFunctions(registerFunctionHandler);
+}
+
 // backScene -> как правильно перерисовать экран, откуда пришли. Ленивый
 // require внутри функций (не на верху файла) — во избежание циклов при
 // загрузке модуля.
@@ -41,6 +63,7 @@ function rebuildBackScreen(backScene, player) {
 }
 
 function characterScreen(characterId, player, backScene = 'station', prefixText = '') {
+  ensureFunctionsRegistered();
   const character = getCharacter(characterId);
   if (!character) {
     return {
@@ -86,6 +109,7 @@ function characterScreen(characterId, player, backScene = 'station', prefixText 
 }
 
 function handleNamedCharacter(state, input, rng, deps) {
+  ensureFunctionsRegistered();
   if (state.scene !== SCENES.NAMED_CHARACTER) return null;
 
   const character = getCharacter(state.characterId);
