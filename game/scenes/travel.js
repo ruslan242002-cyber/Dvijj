@@ -1529,7 +1529,9 @@ async function handleTravel(
           combatFullCard(
             shipToFighter(
               player.ship,
-              'Твой корабль'
+              'Твой корабль',
+              null,
+              player
             ),
             state.enemy
           ),
@@ -1568,8 +1570,15 @@ async function handleTravel(
     const attacker =
       shipToFighter(
         player.ship,
-        'Твой корабль'
+        'Твой корабль',
+        null,
+        player
       );
+
+    // Патроны расходуются по выстрелу — сразу после того, как их бонус
+    // уже учтён в shipToFighter() выше (через aggregateShipEquipmentEffects),
+    // не раньше — иначе бонус не применился бы к ЭТОМУ же выстрелу.
+    require('../../engine/ship-equipment.js').consumeShipAmmo(player);
 
     const defender =
       state.enemy;
@@ -1689,7 +1698,9 @@ async function handleTravel(
           combatFullCard(
             shipToFighter(
               player.ship,
-              'Твой корабль'
+              'Твой корабль',
+              null,
+              player
             ),
             defender
           ) + overheatNote,
