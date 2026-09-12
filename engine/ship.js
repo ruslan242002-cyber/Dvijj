@@ -1,6 +1,6 @@
 'use strict';
-
 const { SHIP_SKILL_BY_FACTION } = require('./ship-skills.js');
+const { systemEffects, freshShipSystems, applySystemDamage } = require('./ship-systems.js');
 
 /**
  * КОРАБЛЬ — отдельная от персонажа боевая сущность. Персонаж (player.stats/
@@ -15,18 +15,15 @@ function freshShip(faction) {
   const starterSkill = SHIP_SKILL_BY_FACTION[faction];
   return {
     hp: 300, hpMax: 300,
-    armor: 20,       // плоское снижение входящего урона — аналог shielding у персонажа
-    firepower: 30,   // базовый урон корабля в бою
+    armor: 20,
+    firepower: 30,
     fuel: 100, fuelMax: 100,
     level: 1,
     equippedSkills: starterSkill ? [starterSkill] : [],
+    systems: freshShipSystems(),
   };
 }
 
-/** Прокачка корабля — сейчас привязана к решению вызывающего кода (когда
- * именно давать левел-ап кораблю: за каждый N-й уровень персонажа, за
- * отдельный опыт корабля, за кредиты у корабела — не фиксирую здесь,
- * это отдельный разговор). Сама механика прокачки — вот она. */
 function shipLevelUp(ship) {
   ship.level += 1;
   ship.hpMax += 30;
@@ -49,27 +46,34 @@ function refuelFull(ship) {
 
 /**
  * Превращает корабль в объект формы "Fighter" (то, что реально понимает
- * engine/combat-engine.js: name/hp/hpMax/stats{power,mind,reaction,
- * endurance,firepower,shielding}/luck/accuracy/dodge/focus/periodic) — без
- * этого пришлось бы писать ВТОРОЙ боевой движок только для кораблей.
- * armor корабля становится shielding бойца, firepower — firepower;
- * power/mind/reaction/endurance у корабля нет как отдельных понятий, так
- * что все четыре берутся как та же огневая мощь/броня — этого достаточно,
- * потому что модули корабля (engine/ship-skills.js) сами не используют
- * все 4 стата так разнообразно, как личные умения персонажа.
+ * engine/combat-engine.js) — без этого пришлось бы писать ВТОРОЙ боевой
+ * движок только для кораблей. armor корабля становится shielding бойца,
+ * firepower — firepower; power/mind/reaction/endurance у корабля нет как
+ * отдельных понятий, так что все четыре берутся как та же огневая мощь/
+ * броня.
  */
-function shipToFighter(ship, name, bestiaryId = null) {
+function shipToFighter(ship, name, bestiaryId = null, player = null) {
+  const effects = systemEffects(ship);
+  // ⚠️ Бонусы от корабельного снаряжения (engine/ship-equipment.js) —
+  // ДОБАВЛЯЮТСЯ поверх базовых ship.firepower/ship.armor, не заменяют
+  // их. Если player не передан или ничего не экипировано — бонус 0,
+  // поведение полностью прежнее (обратная совместимость).
+  const equipBonus = player
+    ? require('./ship-equipment.js').aggregateShipEquipmentEffects(player)
+    : { firepowerBonus: 0, armorBonus: 0 };
+  const effectiveFirepower = Math.round((ship.firepower + equipBonus.firepowerBonus) * effects.firepowerMult);
+  const effectiveArmor = Math.round((ship.armor + equipBonus.armorBonus) * effects.shieldingMult);
   return {
     name,
     hp: ship.hp,
     hpMax: ship.hpMax,
     stats: {
-      power: ship.firepower,
-      mind: ship.firepower,
-      reaction: ship.armor,
-      endurance: ship.armor,
-      firepower: ship.firepower,
-      shielding: ship.armor,
+      power: effectiveFirepower,
+      mind: effectiveFirepower,
+      reaction: effectiveArmor,
+      endurance: effectiveArmor,
+      firepower: effectiveFirepower,
+      shielding: effectiveArmor,
     },
     luck: 5,
     accuracy: 0.75,
@@ -83,10 +87,13 @@ function shipToFighter(ship, name, bestiaryId = null) {
 
 /** Обратное преобразование — после боя переносит итоговые hp обратно в
  * сам объект корабля (combat-engine.js не мутирует переданные объекты
- * напрямую, а возвращает НОВЫЕ через spread — см. заметку про это же в
- * game/scenes/combat.js при подключении дельты HP). */
-function applyFighterResultToShip(ship, fighterAfterCombat) {
+ * напрямую, а возвращает НОВЫЕ через spread). */
+function applyFighterResultToShip(ship, fighterAfterCombat, rng = null) {
+  const tookDamage = fighterAfterCombat.hp < ship.hp;
   ship.hp = Math.max(0, Math.round(fighterAfterCombat.hp));
+  if (tookDamage && rng) {
+    applySystemDamage(ship, rng);
+  }
   return ship;
 }
 
