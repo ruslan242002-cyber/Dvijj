@@ -13,6 +13,8 @@ const { addFactionReputation } = require('../../engine/reputation.js');
 const { checkDailyLogin } = require('../../lib/daily-streak.js');
 const { DISTRICTS } = require('../../city/districts-data.js');
 const { rollStationEvent } = require('../../city/station-events.js');
+const { achievementsText } = require('../../lib/achievements.js');
+const { getInbox, clearInbox } = require('../../lib/notifications.js');
 
 const { imageForLocation } = require('../location-images.js');
 const { marketHub } = require('./market.js');
@@ -91,6 +93,65 @@ async function resolveStationAction(input, state, deps, rng, playerId) {
     return {
       reply: {
         text: statusText(state.player),
+        buttons: stationButtons(deps, state.player),
+      },
+      nextState: {
+        scene: 'station',
+        player: state.player,
+      },
+    };
+  }
+
+  if (input === '🏆 Достижения') {
+    // ⚠️ QA-НАХОДКА: achievementsText() существовала в lib/achievements.js
+    // с самого начала (checkAchievements() САМ вызывается по всей игре,
+    // достижения РЕАЛЬНО открываются) — но посмотреть полный список,
+    // открытые/закрытые, было негде, только всплывающее уведомление в
+    // момент получения.
+    return {
+      reply: {
+        text: `🏆 ДОСТИЖЕНИЯ\n\n${achievementsText(state.player)}`,
+        buttons: stationButtons(deps, state.player),
+      },
+      nextState: {
+        scene: 'station',
+        player: state.player,
+      },
+    };
+  }
+
+  if (input === '📬 Уведомления') {
+    // ⚠️ QA-НАХОДКА: комментарий в самом lib/notifications.js прямо
+    // говорит "📬 Уведомления на хабе станции" — кнопка была задумана,
+    // но никогда не построена. notifyPlayer() уже кладёт КАЖДОЕ
+    // уведомление в Redis-инбокс параллельно с push — раньше это было
+    // мёртвым складом без выхода, если push не доходил (бот заблокирован
+    // у игрока, лимиты ВК на частоту) — уведомление просто терялось.
+    const entries = await getInbox(deps, playerId, 20);
+    const lines = entries.length
+      ? entries.map((e) => {
+          const date = new Date(e.ts);
+          const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+          return `[${time}] ${e.text}`;
+        })
+      : ['Пусто — новых уведомлений нет.'];
+    return {
+      reply: {
+        text: `📬 УВЕДОМЛЕНИЯ\n\n${lines.join('\n\n')}`,
+        buttons: entries.length ? ['🗑️ Очистить', ...stationButtons(deps, state.player)] : stationButtons(deps, state.player),
+      },
+      nextState: {
+        scene: 'station',
+        player: state.player,
+      },
+    };
+  }
+
+  if (input === '🗑️ Очистить') {
+    await clearInbox(deps, playerId);
+    return {
+      reply: {
+        text: '📬 Уведомления очищены.',
         buttons: stationButtons(deps, state.player),
       },
       nextState: {
