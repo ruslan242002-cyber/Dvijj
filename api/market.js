@@ -1,107 +1,394 @@
 'use strict';
 
-/*
- * Вход сайта биржи (VK Mini App), по аналогии с api/profile.js.
- *
- * ДОПУЩЕНИЯ (подгоните под реальные сигнатуры, у меня нет исходников
- * vk-launch-params.js / upstash-store.js / profile-handler.js, только
- * их описание в архиве):
- *   - vk/vk-launch-params.js экспортирует verifyLaunchParams(query) -> { vkUserId } | null
- *   - state/upstash-store.js экспортирует loadPlayer(vkUserId) / savePlayer(player)
- *   - для кредитов используется отдельный атомарный ключ credits:{playerId}
- *     (см. market-store-upstash.js) — здесь при отдаче профиля покупателя
- *     кредиты читаются ИМЕННО оттуда, а не из player.credits в блобе,
- *     иначе после первой же покупки/продажи цифры разъедутся.
- *
- * Если что-то из этого называется иначе — поправьте require() и вызовы,
- * остальная логика (действия биржи) от этого не зависит.
+const { createListing, cancelListing, purchaseListing, listActiveListings, createBuyOrder, cancelBuyOrder, fillBuyOrder, MarketError } = require('../../market/market-engine.js');
+const { getMarketFeeDiscount } = require('../../lib/housing.js');
+const { activeGuildBonuses } = require('../../guilds/guild-levels.js');
+const { imageForLocation } = require('../location-images.js');
+const { hubMessage, stationButtons, addToInventory, currentStation } = require('./common.js');
+const { SCENES } = require('./ids.js');
+const { routesFrom, findRoute, acceptRoute, completeRoute } = require('../../engine/trade-routes.js');
+const { addFactionReputation } = require('../../engine/reputation.js');
+const { checkAchievements } = require('../../lib/achievements.js');
+const { logEconomyEvent, EVENT_TYPES } = require('../../lib/economy-audit.js');
+
+function marketItemId(resource, tier) { return `${resource}__T${tier}`; }
+function marketItemName(resource, tier) { return `${resource} T${tier}`; }
+function parseMarketItemId(itemId) {
+  const m = /^(.+)__T(\d+)$/.exec(itemId || '');
+  return m ? { resource: m[1], tier: Number(m[2]) } : null;
+}
+function suggestedListingPrice(tier) {
+  // За ЕДИНИЦУ — market-engine.js сам умножает на qty при покупке
+  // (purchaseListing: totalCost = listing.price * qty). Передавать сюда
+  // уже умноженную на qty сумму — баг, из-за которого покупатель платит
+  // в qty раз больше, чем должен.
+  return Math.max(1, Math.round(tier * 8 * 1.5));
+}
+
+/** Скидка на комиссию биржи — жильё Приюта (lib/housing.js) + гильд-
+ *  апгрейд 1-го уровня (guilds/guild-levels.js: marketDiscountPct),
+ *  складываются. Гильдейская часть читается через deps.guildStore, если
+ *  он подключён (тот же паттерн деградации, что у остальных мировых
+ *  систем — при отсутствии стора просто не добавляет бонус, не падает). */
+async function totalMarketFeeDiscount(deps, player) {
+  const housingDiscount = getMarketFeeDiscount(player);
+  if (!player.guildId || !deps.guildStore) return housingDiscount;
+  const guildLevel = await deps.guildStore.getGuildUpgradeLevel(player.guildId);
+  const guildDiscount = activeGuildBonuses(guildLevel).marketDiscountPct;
+  return housingDiscount + guildDiscount;
+}
+
+async function buyFromMarket(deps, player, playerId, listing, qty = listing.qty) {
+  const feeDiscount = await totalMarketFeeDiscount(deps, player);
+  const proxyBuyer = { id: playerId, credits: player.credits || 0, inventory: [] };
+  const { purchase } = await purchaseListing({ store: deps.marketStore, redis: deps.redis }, proxyBuyer, listing.id, qty, feeDiscount);
+  const nextPlayer = { ...player, credits: proxyBuyer.credits };
+  const parsed = parseMarketItemId(listing.itemId);
+  if (parsed) addToInventory(nextPlayer, parsed.resource, parsed.tier, purchase.qtyBought);
+  nextPlayer.marketTradeCount = (nextPlayer.marketTradeCount || 0) + 1; // для lib/achievements.js:market_trader — нигде не велось в архиве, завожу здесь
+  logEconomyEvent(deps, { type: EVENT_TYPES.MARKET_BUY, playerId, credits: -(listing.price * qty), resource: parsed?.resource, tier: parsed?.tier, qty: purchase.qtyBought }).catch(() => {});
+  if (deps.knownPlayersStore) deps.knownPlayersStore.giveReputation(playerId, listing.sellerId, 'trader').catch(() => {});
+  return nextPlayer;
+}
+
+async function sellToMarket(deps, player, playerId, resource, tier, qty, price) {
+  const proxySeller = { id: playerId, inventory: [{ id: marketItemId(resource, tier), name: marketItemName(resource, tier), qty }] };
+  const { listing } = await createListing({ store: deps.marketStore }, proxySeller, {
+    itemId: marketItemId(resource, tier), itemName: marketItemName(resource, tier), qty, price,
+  });
+  const inv = player.inventory || [];
+  const item = inv.find((i) => i.resource === resource && i.tier === tier);
+  if (item) {
+    item.qty -= qty;
+    player.inventory = item.qty > 0 ? inv : inv.filter((i) => i !== item);
+  }
+  logEconomyEvent(deps, { type: EVENT_TYPES.MARKET_SELL, playerId, resource, tier, qty: -qty, note: `listed_at_${price}` }).catch(() => {});
+  player.marketTradeCount = (player.marketTradeCount || 0) + 1;
+  return listing;
+}
+
+async function cancelFromMarket(deps, player, playerId, listing) {
+  const proxySeller = { id: playerId, inventory: [] };
+  await cancelListing({ store: deps.marketStore }, proxySeller, listing.id);
+  const nextPlayer = { ...player };
+  const parsed = parseMarketItemId(listing.itemId);
+  if (parsed) addToInventory(nextPlayer, parsed.resource, parsed.tier, listing.qty);
+  return nextPlayer;
+}
+
+async function myListingsScreen(deps, player, playerId) {
+  const ids = await deps.marketStore.getPlayerListingIds(playerId);
+  const listings = (await Promise.all(ids.map((id) => deps.marketStore.getListing(id)))).filter(Boolean);
+  const lines = listings.length
+    ? listings.map((l) => `${l.itemName} ×${l.qty} — 💳${l.price}/шт (итого 💳${l.price * l.qty})`)
+    : ['У тебя нет активных лотов.'];
+  const buttons = [...listings.map((l) => `Снять: ${l.itemName}`), '⬅️ Назад'];
+  return {
+    reply: { text: `📋 МОИ ЛОТЫ\n\n${lines.join('\n')}`, buttons },
+    nextState: { scene: 'market_my_listings', player, listings }
+  };
+}
+
+/** ⚠️ QA-НАХОДКА: createBuyOrder/cancelBuyOrder/fillBuyOrder/
+ * listActiveBuyOrders существовали ПОЛНОСТЬЮ в market/market-engine.js
+ * (включая реальное удержание кредитов в депозите при размещении
+ * заявки — не игрушечная реализация), но НИ ОДИН UI-экран их не вызывал
+ * — заявки на покупку были невозможны в игре целиком. Экран построен
+ * по образцу уже рабочего myListingsScreen выше — тот же принцип, не
+ * вторая система.
  */
+async function myBuyOrdersScreen(deps, player, playerId, prefixText = '') {
+  const ids = await deps.marketStore.getPlayerBuyOrderIds(playerId);
+  const orders = (await Promise.all(ids.map((id) => deps.marketStore.getBuyOrder(id)))).filter(Boolean);
+  const lines = orders.length
+    ? orders.map((o) => `${o.itemName} ×${o.qty} — заявка по 💳${o.price}/шт (в депозите 💳${o.price * o.qty})`)
+    : ['У тебя нет активных заявок на покупку.'];
+  const buttons = [...orders.map((o) => `Снять заявку: ${o.itemName}`), '➕ Разместить заявку', '⬅️ Назад'];
+  return {
+    reply: { text: `${prefixText}📥 МОИ ЗАЯВКИ НА ПОКУПКУ\n\n${lines.join('\n')}`, buttons },
+    nextState: { scene: SCENES.MARKET_BUY_ORDERS_HUB, player, orders },
+  };
+}
 
-const { verifyLaunchParams } = require('../vk/vk-launch-params');
-const { loadPlayer, savePlayer } = require('../state/upstash-store');
-const { createUpstashMarketStore } = require('../market/market-store-upstash');
-const {
-  createListing,
-  cancelListing,
-  purchaseListing,
-  listActiveListings,
-  MarketError,
-} = require('../market/market-engine');
-const { redis } = require('../state/upstash-store'); // предполагаемый экспорт клиента
-
-module.exports = async function marketHandler(req, res) {
-  const auth = verifyLaunchParams(req.query || req.body);
-  if (!auth) {
-    res.status(401).json({ error: 'INVALID_LAUNCH_PARAMS' });
-    return;
+async function marketHub(deps, player, playerId) {
+  if (!deps.marketStore || !playerId) {
+    return { reply: { text: '📈 Биржа сейчас недоступна.', buttons: ['🚚 Маршруты', ...stationButtons(deps, player)] }, nextState: { scene: 'market_hub', player, allListings: [] } };
   }
+  const listings = await listActiveListings({ store: deps.marketStore }, { limit: 30 });
+  const buyable = listings.filter((l) => l.sellerId !== playerId);
 
-  const player = await loadPlayer(auth.vkUserId);
-  if (!player) {
-    res.status(404).json({ error: 'PLAYER_NOT_FOUND' });
-    return;
+  // Группировка по товару — в стиле EVE: одна строка на предмет, с лучшей
+  // (минимальной) ценой среди всех продавцов и суммарной доступностью, а
+  // не вперемешку все лоты сразу. Полная "книга заявок" по конкретному
+  // товару — на следующем экране (market_item_book).
+  const byItem = new Map();
+  for (const l of buyable) {
+    const entry = byItem.get(l.itemName) || { itemName: l.itemName, bestPrice: Infinity, totalQty: 0 };
+    entry.bestPrice = Math.min(entry.bestPrice, l.price);
+    entry.totalQty += l.qty;
+    byItem.set(l.itemName, entry);
   }
+  const items = [...byItem.values()].sort((a, b) => a.bestPrice - b.bestPrice);
 
-  const marketStore = createUpstashMarketStore(redis);
-  const deps = { store: marketStore };
+  const lines = items.length
+    ? items.map((it) => `${it.itemName} — от 💳${it.bestPrice}/шт, доступно ×${it.totalQty}`)
+    : ['Пока пусто.'];
+  const buttons = [...items.map((it) => `Купить: ${it.itemName}`), 'Выставить из трюма', 'Мои лоты', '📥 Заявки на покупку', '🚚 Маршруты', '⬅️ Назад'];
+  return {
+    reply: { text: `📈 БИРЖА\n\n${lines.join('\n')}`, buttons },
+    nextState: { scene: 'market_hub', player, allListings: listings }
+  };
+}
 
-  const action = (req.query && req.query.action) || (req.body && req.body.action);
-
-  try {
-    switch (action) {
-      case 'list': {
-        const cursor = req.query && req.query.cursor;
-        const listings = await listActiveListings(deps, { cursor });
-        res.status(200).json({ listings });
-        return;
+async function handleMarket(state, input, rng, deps, playerId) {
+  switch (state.scene) {
+    case SCENES.MARKET_HUB: {
+      if (input === '⬅️ Назад') {
+        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', currentStation(state.player)) }, nextState: { scene: 'station', player: state.player } };
       }
-
-      case 'myListings': {
-        const ids = await marketStore.getPlayerListingIds(player.id);
-        const listings = await Promise.all(ids.map((id) => marketStore.getListing(id)));
-        res.status(200).json({ listings: listings.filter(Boolean) });
-        return;
+      if (input === '🚚 Маршруты') {
+        return tradeRoutesScreen(state.player);
       }
-
-      case 'create': {
-        const { itemId, itemName, qty, price } = req.body;
-        const { listing } = await createListing(deps, player, {
-          itemId,
-          itemName,
-          qty: Number(qty),
-          price: Number(price),
-        });
-        await savePlayer(player);
-        res.status(200).json({ listing, inventory: player.inventory });
-        return;
+      if (input === 'Выставить из трюма') {
+        const inv = state.player.inventory || [];
+        if (!inv.length) {
+          return { reply: { text: 'Трюм пуст — нечего выставлять.', buttons: ['⬅️ Назад'] }, nextState: { scene: 'market_hub', player: state.player, allListings: state.allListings || [] } };
+        }
+        const buttons = inv.map((i) => `Лот: ${i.resource} T${i.tier} ×${i.qty}`).concat('⬅️ Назад');
+        return { reply: { text: 'Что выставить целиком?', buttons }, nextState: { scene: 'market_sell_pick', player: state.player } };
       }
-
-      case 'cancel': {
-        const { listingId } = req.body;
-        await cancelListing(deps, player, listingId);
-        await savePlayer(player);
-        res.status(200).json({ inventory: player.inventory });
-        return;
+      if (input === 'Мои лоты') {
+        return myListingsScreen(deps, state.player, playerId);
       }
-
-      case 'buy': {
-        const { listingId, qty } = req.body;
-        const { purchase } = await purchaseListing(deps, player, listingId, Number(qty));
-        await savePlayer(player);
-        res.status(200).json({ purchase, credits: player.credits, inventory: player.inventory });
-        return;
+      if (input === '📥 Заявки на покупку') {
+        return myBuyOrdersScreen(deps, state.player, playerId);
       }
-
-      default:
-        res.status(400).json({ error: 'UNKNOWN_ACTION' });
+      const buyMatch = /^Купить: (.+)$/.exec(input);
+      if (buyMatch) {
+        const itemName = buyMatch[1];
+        const bookListings = (state.allListings || [])
+          .filter((l) => l.itemName === itemName && l.sellerId !== playerId)
+          .sort((a, b) => a.price - b.price);
+        if (!bookListings.length) return marketHub(deps, state.player, playerId);
+        const lines = bookListings.map((l, i) => `${i + 1}. 💳${l.price}/шт × ${l.qty} доступно`);
+        const buttons = bookListings.map((_, i) => `${i + 1}`).concat('⬅️ Назад');
+        return {
+          reply: { text: `📖 ${itemName} — книга заявок (от дешёвых к дорогим)\n\n${lines.join('\n')}\n\nВыбери позицию цифрой.`, buttons },
+          nextState: { scene: 'market_item_book', player: state.player, bookListings, itemName }
+        };
+      }
+      return marketHub(deps, state.player, playerId);
     }
-  } catch (err) {
-    if (err instanceof MarketError) {
-      res.status(400).json({ error: err.code });
-      return;
+
+    case SCENES.MARKET_ITEM_BOOK: {
+      if (input === '⬅️ Назад') return marketHub(deps, state.player, playerId);
+      const idx = parseInt(input, 10) - 1;
+      const listing = (state.bookListings || [])[idx];
+      if (!listing) {
+        const buttons = (state.bookListings || []).map((_, i) => `${i + 1}`).concat('⬅️ Назад');
+        return { reply: { text: 'Выбери позицию цифрой из списка.', buttons }, nextState: state };
+      }
+      return {
+        reply: { text: `${listing.itemName} по 💳${listing.price}/шт, доступно ×${listing.qty}.\n\nСколько купить? Напиши число от 1 до ${listing.qty}.`, buttons: ['⬅️ Назад'] },
+        nextState: { scene: 'market_buy_qty', player: state.player, listing }
+      };
     }
-    // eslint-disable-next-line no-console
-    console.error('market handler error:', err);
-    res.status(500).json({ error: 'INTERNAL_ERROR' });
+
+    case SCENES.MARKET_BUY_QTY: {
+      if (input === '⬅️ Назад') return marketHub(deps, state.player, playerId);
+      const qty = parseInt(input, 10);
+      if (!Number.isInteger(qty) || qty <= 0 || qty > state.listing.qty || String(qty) !== input.trim()) {
+        return { reply: { text: `Введи целое число от 1 до ${state.listing.qty}.`, buttons: ['⬅️ Назад'] }, nextState: state };
+      }
+      try {
+        const player = await buyFromMarket(deps, state.player, playerId, state.listing, qty);
+        const total = state.listing.price * qty;
+        return { reply: { text: `Куплено: ${state.listing.itemName} ×${qty} за 💳${total}.`, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
+      } catch (e) {
+        if (e instanceof MarketError) {
+          return { reply: { text: `Не удалось купить: ${e.code}`, buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
+        }
+        throw e;
+      }
+    }
+
+    case SCENES.MARKET_MY_LISTINGS: {
+      if (input === '⬅️ Назад') return marketHub(deps, state.player, playerId);
+      const cancelMatch = /^Снять: (.+)$/.exec(input);
+      if (cancelMatch) {
+        const listing = (state.listings || []).find((l) => l.itemName === cancelMatch[1]);
+        if (!listing) return myListingsScreen(deps, state.player, playerId);
+        try {
+          const player = await cancelFromMarket(deps, state.player, playerId, listing);
+          return { reply: { text: `Лот снят: ${listing.itemName} ×${listing.qty} вернулись в трюм.`, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
+        } catch (e) {
+          if (e instanceof MarketError) {
+            return { reply: { text: `Не удалось снять лот: ${e.code}`, buttons: ['⬅️ Назад'] }, nextState: { scene: 'market_my_listings', player: state.player, listings: state.listings || [] } };
+          }
+          throw e;
+        }
+      }
+      return myListingsScreen(deps, state.player, playerId);
+    }
+
+    case SCENES.MARKET_SELL_PICK: {
+      if (input === '⬅️ Назад') return marketHub(deps, state.player, playerId);
+      const match = /^Лот: (.+) T(\d+) ×(\d+)$/.exec(input);
+      if (!match) return marketHub(deps, state.player, playerId);
+      const [, resource, tierStr, qtyStr] = match;
+      const tier = Number(tierStr), qty = Number(qtyStr);
+      const suggested = suggestedListingPrice(tier);
+      return {
+        reply: { text: `${resource} T${tier} ×${qty}\n\nПо какой цене за штуку выставить? Рекомендуем 💳${suggested} (или впиши своё число — так и работает конкуренция цен на бирже).`, buttons: [String(suggested), '⬅️ Назад'] },
+        nextState: { scene: 'market_sell_price', player: state.player, resource, tier, qty }
+      };
+    }
+
+    case SCENES.MARKET_SELL_PRICE: {
+      if (input === '⬅️ Назад') return marketHub(deps, state.player, playerId);
+      const price = parseInt(input, 10);
+      if (!Number.isInteger(price) || price <= 0 || String(price) !== input.trim()) {
+        return { reply: { text: 'Введи целое положительное число — цену за штуку.', buttons: ['⬅️ Назад'] }, nextState: state };
+      }
+      const player = { ...state.player, inventory: (state.player.inventory || []).map((i) => ({ ...i })) };
+      try {
+        await sellToMarket(deps, player, playerId, state.resource, state.tier, state.qty, price);
+        return { reply: { text: `Выставлено: ${state.resource} T${state.tier} ×${state.qty} по 💳${price}/шт (итого 💳${price * state.qty} за весь стек).`, buttons: stationButtons(deps, player) }, nextState: { scene: 'station', player } };
+      } catch (e) {
+        if (e instanceof MarketError) {
+          return { reply: { text: `Не удалось выставить: ${e.code}`, buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
+        }
+        throw e;
+      }
+    }
+
+    case SCENES.MARKET_BUY_ORDERS_HUB: {
+      if (input === '⬅️ Назад') return marketHub(deps, state.player, playerId);
+      if (input === '➕ Разместить заявку') {
+        return {
+          reply: { text: 'На какой товар разместить заявку? Напиши точное название (например: Сплавы T2).', buttons: ['⬅️ Назад'] },
+          nextState: { scene: SCENES.MARKET_BUY_ORDER_ITEM, player: state.player },
+        };
+      }
+      const cancelOrderMatch = /^Снять заявку: (.+)$/.exec(input);
+      if (cancelOrderMatch) {
+        const order = (state.orders || []).find((o) => o.itemName === cancelOrderMatch[1]);
+        if (!order) return myBuyOrdersScreen(deps, state.player, playerId);
+        try {
+          const player = { ...state.player };
+          await cancelBuyOrder({ store: deps.marketStore }, player, order.id);
+          return myBuyOrdersScreen(deps, player, playerId, `Заявка снята: ${order.itemName} ×${order.qty}, 💳${order.price * order.qty} вернулись на счёт.\n\n`);
+        } catch (e) {
+          if (e instanceof MarketError) return myBuyOrdersScreen(deps, state.player, playerId, `Не удалось снять заявку: ${e.code}\n\n`);
+          throw e;
+        }
+      }
+      return myBuyOrdersScreen(deps, state.player, playerId);
+    }
+
+    case SCENES.MARKET_BUY_ORDER_ITEM: {
+      if (input === '⬅️ Назад') return myBuyOrdersScreen(deps, state.player, playerId);
+      const itemName = input.trim();
+      if (!itemName) {
+        return { reply: { text: 'Напиши название товара текстом.', buttons: ['⬅️ Назад'] }, nextState: state };
+      }
+      return {
+        reply: { text: `${itemName}\n\nСколько штук хочешь купить? Напиши целое число.`, buttons: ['⬅️ Назад'] },
+        nextState: { scene: SCENES.MARKET_BUY_ORDER_QTY, player: state.player, itemName },
+      };
+    }
+
+    case SCENES.MARKET_BUY_ORDER_QTY: {
+      if (input === '⬅️ Назад') return myBuyOrdersScreen(deps, state.player, playerId);
+      const qty = parseInt(input, 10);
+      if (!Number.isInteger(qty) || qty <= 0 || String(qty) !== input.trim()) {
+        return { reply: { text: 'Введи целое положительное число.', buttons: ['⬅️ Назад'] }, nextState: state };
+      }
+      return {
+        reply: { text: `${state.itemName} ×${qty}\n\nПо какой цене за штуку? Кредиты спишутся сразу, в депозит, до исполнения или отмены заявки.`, buttons: ['⬅️ Назад'] },
+        nextState: { scene: SCENES.MARKET_BUY_ORDER_PRICE, player: state.player, itemName: state.itemName, qty },
+      };
+    }
+
+    case SCENES.MARKET_BUY_ORDER_PRICE: {
+      if (input === '⬅️ Назад') return myBuyOrdersScreen(deps, state.player, playerId);
+      const price = parseInt(input, 10);
+      if (!Number.isInteger(price) || price <= 0 || String(price) !== input.trim()) {
+        return { reply: { text: 'Введи целое положительное число — цену за штуку.', buttons: ['⬅️ Назад'] }, nextState: state };
+      }
+      const player = { ...state.player };
+      try {
+        const itemId = state.itemName.replace(/\s+/g, '_');
+        await createBuyOrder({ store: deps.marketStore }, player, { itemId, itemName: state.itemName, qty: state.qty, price });
+        return myBuyOrdersScreen(deps, player, playerId, `Заявка размещена: ${state.itemName} ×${state.qty} по 💳${price}/шт (списано 💳${price * state.qty} в депозит).\n\n`);
+      } catch (e) {
+        if (e instanceof MarketError) return myBuyOrdersScreen(deps, state.player, playerId, `Не удалось разместить заявку: ${e.code}\n\n`);
+        throw e;
+      }
+    }
+
+    case SCENES.TRADE_ROUTES: {
+      if (input === '⬅️ Назад') {
+        return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', currentStation(state.player)) }, nextState: { scene: 'station', player: state.player } };
+      }
+      if (input === '✅ Сдать маршрут') {
+        const player = { ...state.player };
+        const result = completeRoute(player, currentStation(player));
+        if (!result.success) {
+          const reasonText = result.reason === 'WRONG_DESTINATION' ? 'ты ещё не долетел до места назначения.' : 'не получилось сдать маршрут.';
+          return tradeRoutesScreen(state.player, `Не вышло: ${reasonText}\n\n`);
+        }
+        const newAchievements = checkAchievements(player);
+        const achievementsNote = newAchievements.length ? `\n\n${newAchievements.map((a) => `🏆 Достижение: «${a.title}»`).join('\n')}` : '';
+        addFactionReputation(player, player.faction, result.reward.reputation);
+        logEconomyEvent(deps, { type: EVENT_TYPES.TRADE_ROUTE_REWARD, playerId, credits: result.reward.credits, note: result.route.id }).catch(() => {});
+        return tradeRoutesScreen(player, `🚚 Маршрут сдан! 💳+${result.reward.credits}, ⭐+${result.reward.reputation}.${achievementsNote}\n\n`);
+      }
+      const takeMatch = /^Взять: → (.+)$/.exec(input);
+      if (takeMatch) {
+        const station = currentStation(state.player);
+        const route = routesFrom(station).find((r) => r.to === takeMatch[1]);
+        if (!route) return tradeRoutesScreen(state.player);
+        const player = { ...state.player, inventory: (state.player.inventory || []).map((i) => ({ ...i })) };
+        const result = acceptRoute(player, route.id, station);
+        if (!result.success) {
+          const reasonText = result.reason === 'NOT_ENOUGH_CARGO' ? `не хватает груза (нужно ${route.qty}× ${route.resource} T${route.tier}).` : 'не получилось взять маршрут.';
+          return tradeRoutesScreen(state.player, `Не вышло: ${reasonText}\n\n`);
+        }
+        return tradeRoutesScreen(player, `🚚 Маршрут принят — груз погружен. Лети в «${route.to}» и сдай его там.\n\n`);
+      }
+      return tradeRoutesScreen(state.player);
+    }
+
+    default:
+      return null;
   }
-};
+}
+
+/** Экран торговых маршрутов — либо статус активного маршрута (со
+ * сдачей, если игрок уже на месте назначения), либо список доступных
+ * маршрутов ОТСЮДА (currentStation, не обязательно родная фракция —
+ * можно набрать груз и в гостях, если стоишь на нужной станции). */
+function tradeRoutesScreen(player, prefixText = '') {
+  const station = currentStation(player);
+  if (player.activeRoute) {
+    const route = findRoute(player.activeRoute.routeId);
+    if (!route) {
+      const cleanPlayer = { ...player, activeRoute: null };
+      return tradeRoutesScreen(cleanPlayer, 'Маршрут больше не существует — сброшен.\n\n');
+    }
+    const canComplete = station === route.to;
+    const text = `🚚 АКТИВНЫЙ МАРШРУТ\n\nВезёшь: ${route.qty}× ${route.resource} T${route.tier}\nИз «${route.from}» в «${route.to}»\nНаграда: 💳${route.reward.credits}, ⭐${route.reward.reputation}\n\n${canComplete ? '✅ Ты на месте — можно сдать!' : `Нужно долететь до «${route.to}» (Врата Тракта).`}`;
+    const buttons = canComplete ? ['✅ Сдать маршрут', '⬅️ Назад'] : ['⬅️ Назад'];
+    return { reply: { text: `${prefixText}${text}`, buttons }, nextState: { scene: SCENES.TRADE_ROUTES, player } };
+  }
+  const available = routesFrom(station);
+  if (!available.length) {
+    return { reply: { text: `${prefixText}🚚 МАРШРУТЫ\n\nОтсюда сейчас нет доступных маршрутов.`, buttons: ['⬅️ Назад'] }, nextState: { scene: SCENES.TRADE_ROUTES, player } };
+  }
+  const lines = available.map((r) => `→ «${r.to}»: ${r.qty}× ${r.resource} T${r.tier} — награда 💳${r.reward.credits}, ⭐${r.reward.reputation}`);
+  const buttons = [...available.map((r) => `Взять: → ${r.to}`), '⬅️ Назад'];
+  return { reply: { text: `${prefixText}🚚 МАРШРУТЫ ИЗ «${station}»\n\n${lines.join('\n')}`, buttons }, nextState: { scene: SCENES.TRADE_ROUTES, player } };
+}
+
+module.exports = { handleMarket, marketHub, tradeRoutesScreen, MarketError };
