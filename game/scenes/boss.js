@@ -14,6 +14,8 @@ const { notifyPlayer } = require('../../lib/notifications.js');
 const { SCENES } = require('./ids.js');
 const { BOSS_IMAGE_MANIFEST } = require('../../engine/travel-images/boss-image-manifest.js');
 const { formatBossStatusCard } = require('../../lib/boss-status-card.js');
+const { rollBossGearDrop, grantGearDrop, rarityName } = require('../../engine/gear-engine.js');
+const { aggregatePassiveEffects } = require('../../engine/passive-skills.js');
 
 // Тема именной локации (lib/named-locations.js) -> id боссов, которые
 // там водятся (engine/world-bosses/boss-data.js:location). Несколько
@@ -169,7 +171,14 @@ async function handleBoss(state, input, rng, deps, playerId) {
     if (!instance || instance.defeated) return bossHub(deps, state.player, playerId, 'Босс уже недоступен.\n\n');
 
     const guildBonusPct = await guildDamageBonusFor(deps, state.player);
-    const result = resolvePlayerVsBoss(instance, state.player, playerId, skill, rng, guildBonusPct);
+    // ⚠️ Уникальный эффект мифического оружия (Нихрон-резонатор) —
+    // легендарное оружие должно ощущаться особенным именно против
+    // легендарных угроз, не просто быть числом покрупнее. Тот же
+    // процентный механизм, что уже используется для гильдейского
+    // бонуса (bosses/boss-engine.js:resolvePlayerVsBoss) — не строим
+    // отдельную систему уникальных эффектов предметов.
+    const mythicWeaponBonus = state.player.equippedGear?.weapon === 'weapon_mythic' ? 20 : 0;
+    const result = resolvePlayerVsBoss(instance, state.player, playerId, skill, rng, guildBonusPct + mythicWeaponBonus);
     if (result.error) return bossHub(deps, state.player, playerId);
 
     const cooldownsAfterUse = skillId ? startCooldown(state.bossCooldowns || {}, skillId, skill) : (state.bossCooldowns || {});
@@ -180,36 +189,54 @@ async function handleBoss(state, input, rng, deps, playerId) {
       await deps.bossStore.saveBoss(instance, instance.bossId);
       await deps.bossStore.setLastDefeatedAt(instance.bossId, Date.now());
       const rewards = distributeRewards(instance);
+      const boss = findBoss(instance.bossId);
+      let myGearDrop = null;
+      let myActualCreditsGranted = 0;
       for (const [pid, reward] of Object.entries(rewards)) {
         logEconomyEvent(deps, { type: EVENT_TYPES.BOSS_REWARD, playerId: pid, credits: reward.credits, note: 'world_boss_victory' }).catch(() => {});
+        // ⚠️ Дроп снаряжения — по одному независимому броску на каждого
+        // участника (не общий на группу), см. engine/gear-engine.js:
+        // rollBossGearDrop(). Не каждая победа даёт лут — это ожидаемо.
+        const dropItem = rollBossGearDrop(boss.threatLevel, rng);
         if (pid === playerId) {
-          player.credits = (player.credits || 0) + reward.credits;
+          const myPassiveEffects = aggregatePassiveEffects(player.equippedPassives || []);
+          myActualCreditsGranted = Math.round(reward.credits * (myPassiveEffects.creditMultiplier || 1));
+          player.credits = (player.credits || 0) + myActualCreditsGranted;
           grantXp(player, reward.xp);
+          if (dropItem) {
+            const dropResult = grantGearDrop(player, dropItem.id);
+            if (dropResult.success) myGearDrop = dropItem;
+          }
           continue;
         }
         const otherState = await deps.store.get(pid).catch(() => null);
         if (otherState?.player) {
           otherState.player.credits = (otherState.player.credits || 0) + reward.credits;
           grantXp(otherState.player, reward.xp);
+          let dropNote = '';
+          if (dropItem) {
+            const dropResult = grantGearDrop(otherState.player, dropItem.id);
+            if (dropResult.success) dropNote = `\n💎 Выпало: [${rarityName(dropItem.rarity)}] ${dropItem.name}!`;
+          }
           await deps.store.set(pid, otherState).catch(() => {});
           // Уведомляем именно тех, кто не в игре прямо сейчас (текущий
           // playerId уже видит результат в основном ответе ниже, дублировать
           // ему push бессмысленно).
-          notifyPlayer(deps, pid, `🎉 Мировой босс повержен! Твоя доля: +${reward.credits} кредитов, +${reward.xp} опыта.`).catch(() => {});
+          notifyPlayer(deps, pid, `🎉 Мировой босс повержен! Твоя доля: +${reward.credits} кредитов, +${reward.xp} опыта.${dropNote}`).catch(() => {});
         }
       }
       const myReward = rewards[playerId];
       const newAchievements = checkAchievements(player);
       const achNote = newAchievements.length ? `\n\n${newAchievements.map((a) => `🏆 Достижение: «${a.title}»`).join('\n')}` : '';
+      const dropText = myGearDrop ? `\n\n💎 Выпало снаряжение: [${rarityName(myGearDrop.rarity)}] ${myGearDrop.name}!` : '';
 
       // Лента мира — победа над мировым боссом видна всем, не только
       // участникам боя (см. lib/world-feed.js). Не блокирует ответ
       // игроку (fire-and-forget), не падает, если Redis недоступен.
-      const boss = findBoss(instance.bossId);
       logWorldEvent(deps, { type: 'world_boss_defeated', text: `Отряд из ${Object.keys(instance.participants).length} игроков повергает ${boss.name}!` }).catch(() => {});
 
       return {
-        reply: { text: `⚔️ ${result.log.join(' ')}\n\n🎉 БОСС ПОВЕРЖЕН!\nТвоя доля (по вкладу в урон): 💳+${myReward ? myReward.credits : 0}, опыт +${myReward ? myReward.xp : 0}.${achNote}`, buttons: stationButtons(deps, player) },
+        reply: { text: `⚔️ ${result.log.join(' ')}\n\n🎉 БОСС ПОВЕРЖЕН!\nТвоя доля (по вкладу в урон): 💳+${myActualCreditsGranted}, опыт +${myReward ? myReward.xp : 0}.${dropText}${achNote}`, buttons: stationButtons(deps, player) },
         nextState: { scene: 'station', player }
       };
     }
