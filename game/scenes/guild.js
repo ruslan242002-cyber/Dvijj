@@ -6,6 +6,7 @@ const {
 } = require('../../guilds/guild-engine.js');
 const { GUILD_LIMITS, GUILD_ROLES } = require('../../guilds/guild-data.js');
 const { levelDef, nextUpgradeCost, activeGuildBonuses } = require('../../guilds/guild-levels.js');
+const { makeGuildReputationStore, dominantDirection, DIRECTION_LABEL } = require('../../guilds/guild-reputation.js');
 const {
   GuildProjectError, startProject, contributeResource: contributeProjectResource,
   contributeCredits: contributeProjectCredits, tryCompleteProject,
@@ -71,18 +72,63 @@ async function guildHub(deps, player, playerId, prefixText = '') {
     ? `\n\n🏗️ Уровень гильдии: ${upgradeLevel} (${levelDef(upgradeLevel)?.name || ''})\nБонусы: −${currentBonus.marketDiscountPct}% комиссия биржи, +${currentBonus.explorationYieldPct}% добыча, +${currentBonus.worldBossDamagePct}% урон по боссу`
     : '\n\n🏗️ Уровень гильдии: 0 — апгрейдов ещё нет.';
 
+  const directionLabel = deps.redis
+    ? DIRECTION_LABEL[dominantDirection(await makeGuildReputationStore(deps.redis).getReputation(player.guildId))]
+    : null;
+  const directionLine = directionLabel ? ` (${directionLabel})` : '';
+
   const buttons = ['💳 Пожертвовать кредиты', '📦 Пожертвовать ресурс', '🗂️ Проекты гильдии'];
   if (role === GUILD_ROLES.LEADER || role === GUILD_ROLES.OFFICER) {
-    buttons.push('📤 Забрать ресурс', '🏗️ Апгрейд гильдии');
+    buttons.push('📤 Забрать ресурс', '🏗️ Апгрейд гильдии', '👥 Управление участниками');
   }
   buttons.push('🚪 Выйти из гильдии', '⬅️ Назад');
 
   return {
     reply: {
-      text: `${prefixText}🏰 ${guild.name}\n\n👤 Твоя роль: ${ROLE_LABEL[role] || 'Участник'}\n👥 Участников: ${memberCount}/${GUILD_LIMITS.MAX_MEMBERS}\n💳 Банк: ${bankCredits}\n📦 Ресурсы банка: ${resourcesLine}${bonusLine}`,
+      text: `${prefixText}🏰 ${guild.name}${directionLine}\n\n👤 Твоя роль: ${ROLE_LABEL[role] || 'Участник'}\n👥 Участников: ${memberCount}/${GUILD_LIMITS.MAX_MEMBERS}\n💳 Банк: ${bankCredits}\n📦 Ресурсы банка: ${resourcesLine}${bonusLine}`,
       buttons,
     },
     nextState: { scene: SCENES.GUILD_HUB, player }
+  };
+}
+
+/** ⚠️ QA-НАХОДКА: transferLeadership/kickMember давно существовали в
+ * guilds/guild-engine.js и даже были ИМПОРТИРОВАНЫ в этот файл, но
+ * НИКОГДА не вызывались — не было экрана, откуда их вообще можно
+ * нажать. UNREACHABLE_FEATURE, теперь подключено. */
+async function guildMembersScreen(deps, player, playerId, prefixText = '') {
+  if (playerId && player.id !== playerId) player = { ...player, id: playerId };
+  const guildId = player.guildId;
+  const myRole = await deps.guildStore.getGuildMemberRole(guildId, playerId);
+  const memberIds = await deps.guildStore.getGuildMemberIds(guildId);
+
+  const lines = [];
+  const buttons = [];
+  for (const id of memberIds) {
+    const theirRole = await deps.guildStore.getGuildMemberRole(guildId, id);
+    const otherState = id === playerId ? null : await deps.store.get(id).catch(() => null);
+    const name = id === playerId ? `${player.name} (ты)` : (otherState?.player?.name || id);
+    lines.push(`${ROLE_LABEL[theirRole] || 'Участник'}: ${name}`);
+
+    if (id === playerId) continue;
+    if (myRole === GUILD_ROLES.LEADER || myRole === GUILD_ROLES.OFFICER) {
+      buttons.push(`🚫 Исключить: ${name}`);
+    }
+    if (myRole === GUILD_ROLES.LEADER) {
+      buttons.push(`👑 Передать лидерство: ${name}`);
+    }
+  }
+  buttons.push('⬅️ Назад');
+
+  return {
+    reply: {
+      text: `${prefixText}👥 УЧАСТНИКИ ГИЛЬДИИ\n\n${lines.join('\n')}`,
+      buttons,
+    },
+    nextState: { scene: SCENES.GUILD_MEMBERS, player, memberIdByName: Object.fromEntries(await Promise.all(memberIds.filter((id) => id !== playerId).map(async (id) => {
+      const otherState = await deps.store.get(id).catch(() => null);
+      return [otherState?.player?.name || id, id];
+    }))) },
   };
 }
 
@@ -256,10 +302,47 @@ async function handleGuild(state, input, rng, deps, playerId) {
     if (input === '🏗️ Апгрейд гильдии') {
       return guildUpgradeScreen(deps, state.player, playerId);
     }
+    if (input === '👥 Управление участниками') {
+      return guildMembersScreen(deps, state.player, playerId);
+    }
     if (input === '🗂️ Проекты гильдии') {
       return guildProjectsListScreen(deps, state.player, playerId);
     }
     return guildHub(deps, state.player, playerId);
+  }
+
+  if (state.scene === SCENES.GUILD_MEMBERS) {
+    if (input === '⬅️ Назад') return guildHub(deps, state.player, playerId);
+
+    const kickMatch = /^🚫 Исключить: (.+)$/.exec(input);
+    if (kickMatch) {
+      const targetId = state.memberIdByName?.[kickMatch[1]];
+      if (!targetId) return guildMembersScreen(deps, state.player, playerId);
+      try {
+        const player = { ...state.player };
+        await kickMember({ store: deps.guildStore }, player, targetId);
+        return guildMembersScreen(deps, player, playerId, `${kickMatch[1]} исключён(а) из гильдии.\n\n`);
+      } catch (err) {
+        const text = err instanceof GuildError ? (GUILD_ERROR_TEXT[err.code] || err.code) : 'Не получилось исключить.';
+        return guildMembersScreen(deps, state.player, playerId, `${text}\n\n`);
+      }
+    }
+
+    const transferMatch = /^👑 Передать лидерство: (.+)$/.exec(input);
+    if (transferMatch) {
+      const targetId = state.memberIdByName?.[transferMatch[1]];
+      if (!targetId) return guildMembersScreen(deps, state.player, playerId);
+      try {
+        const player = { ...state.player };
+        await transferLeadership({ store: deps.guildStore }, player, targetId);
+        return guildHub(deps, player, playerId, `Лидерство передано игроку ${transferMatch[1]}.\n\n`);
+      } catch (err) {
+        const text = err instanceof GuildError ? (GUILD_ERROR_TEXT[err.code] || err.code) : 'Не получилось передать лидерство.';
+        return guildMembersScreen(deps, state.player, playerId, `${text}\n\n`);
+      }
+    }
+
+    return guildMembersScreen(deps, state.player, playerId);
   }
 
   if (state.scene === SCENES.GUILD_UPGRADE) {
