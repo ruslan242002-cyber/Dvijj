@@ -3,6 +3,7 @@ const { applyDerivedStats } = require('./derived-stats.js');
 const { shipLevelUp } = require('./ship.js');
 const { maxTierForLevel } = require('./tier-bands.js');
 const { maybeSpeak, levelTriggerFor } = require('../lib/fifth-voice.js');
+const { aggregatePassiveEffects } = require('./passive-skills.js');
 
 // Раньше: 50 + (level-1)*25 — линейно, до 100 уровня набегало бы всего
 // ~124 000 опыта суммарно, пара недель активной игры. Теперь — растущая
@@ -84,7 +85,13 @@ const TESTING_XP_MULTIPLIER = 500;
 
 function grantXp(player, amount) {
   player.level = player.level || 1;
-  const grantedAmount = TESTING_MODE ? amount * TESTING_XP_MULTIPLIER : amount;
+  // ⚠️ QA-НАХОДКА: aggregatePassiveEffects() существовала полностью, но
+  // НИГДЕ не вызывалась — пассивки экипируются (equipPassive работает),
+  // но их эффект нигде не применялся. xpMultiplier — первый из 10
+  // подключаемых эффектов.
+  const passiveEffects = aggregatePassiveEffects(player.equippedPassives || []);
+  const testingMult = TESTING_MODE ? TESTING_XP_MULTIPLIER : 1;
+  const grantedAmount = amount * testingMult * (passiveEffects.xpMultiplier || 1);
   player.xp = (player.xp || 0) + Math.max(0, grantedAmount);
   let levelsGained = 0;
   while (player.xp >= xpToNext(player.level)) {
