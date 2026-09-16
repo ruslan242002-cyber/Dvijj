@@ -65,12 +65,16 @@ function tierForZone(zone, rng, playerLevel = 1) {
 const TESTING_MODE = true;
 const TESTING_LOOT_MULTIPLIER = 500;
 
-function rollLoot(zone, rng = Math.random, playerLevel = 1, theme = null) {
+function rollLoot(zone, rng = Math.random, playerLevel = 1, theme = null, lootMultiplier = 1) {
   const resource = theme ? pickResourceForTheme(RESOURCES, theme, rng) : RESOURCES[Math.floor(rng() * RESOURCES.length)];
   const tier = tierForZone(zone, rng, playerLevel);
   let qty = 1 + Math.floor(rng() * 4);
   let credits = Math.round((10 + rng() * 40) * tier);
   if (TESTING_MODE) { qty *= TESTING_LOOT_MULTIPLIER; credits *= TESTING_LOOT_MULTIPLIER; }
+  // ⚠️ QA-НАХОДКА: lootMultiplier от пассивок (aggregatePassiveEffects,
+  // engine/passive-skills.js) — раньше нигде не применялся вообще.
+  qty = Math.round(qty * lootMultiplier);
+  credits = Math.round(credits * lootMultiplier);
   return { resource, tier, qty, credits };
 }
 
