@@ -1,28 +1,10 @@
 'use strict';
 
-/**
- * ПРОИЗВОДНЫЕ СТАТЫ — превращает 4 основных стата в реальные боевые числа.
- * Схема — плоское линейное масштабирование (как в Diablo 2/3): каждое
- * очко стата даёт ФИКСИРОВАННУЮ прибавку к конкретному свойству. Просто
- * объяснить игроку ("каждое очко Ловкости — это +0.4% уворота"), легко
- * балансировать (один коэффициент — один рычаг), и полностью прозрачно —
- * никакой скрытой нелинейной кривой, к которой не подобраться.
- *
- * Маппинг на 4 классических стата, о которых просили:
- *   Ловкость   (reaction)  -> уворот + меткость
- *   Выносливость (endurance) -> HP + экранирование ("тип брони")
- *   Сила       (power)     -> огневая мощь (урон оружием)
- *   Интеллект  (mind)      -> фокус (сила/крит навыков) + перезарядка умений
- *
- * Всё имеет мягкий потолок (капы ниже) — иначе на высоких уровнях уворот
- * или меткость улетают к 100% и бой перестаёт быть боем.
- */
-
 const CAPS = {
-  dodge: 0.45,       // максимум 45% уворота
-  accuracy: 0.97,    // максимум 97% меткости — промах должен оставаться возможным
+  dodge: 0.45,
+  accuracy: 0.97,
   focus: 0.97,
-  cooldownReductionPct: 0.5, // максимум -50% к перезарядке
+  cooldownReductionPct: 0.5,
 };
 
 const BASE = {
@@ -32,13 +14,13 @@ const BASE = {
 };
 
 const PER_POINT = {
-  dodgePerReaction: 0.004,       // Ловкость -> уворот
-  accuracyPerReaction: 0.003,    // Ловкость -> меткость
-  hpPerEndurance: 4,             // Выносливость -> HP
-  shieldingPerEndurance: 0.3,    // Выносливость -> экранирование ("тип брони")
-  firepowerPerPower: 0.5,        // Сила -> огневая мощь
-  focusPerMind: 0.004,           // Интеллект -> фокус навыков
-  cooldownReductionPerMind: 0.01, // Интеллект -> % сокращения перезарядки умений
+  dodgePerReaction: 0.004,
+  accuracyPerReaction: 0.003,
+  hpPerEndurance: 4,
+  shieldingPerEndurance: 0.3,
+  firepowerPerPower: 0.5,
+  focusPerMind: 0.004,
+  cooldownReductionPerMind: 0.01,
 };
 
 function clamp(value, min, max) {
@@ -46,10 +28,8 @@ function clamp(value, min, max) {
 }
 
 /**
- * Считает боевые свойства из 4 основных статов. НЕ мутирует ничего — это
- * чистая функция, применение результата (запись в player) — отдельный шаг.
- * @param {object} stats — { power, mind, reaction, endurance }
- * @returns {{ dodge:number, accuracy:number, focus:number, hpBonus:number, firepowerBonus:number, shieldingBonus:number, cooldownReductionPct:number }}
+ * Считает боевые свойства из 4 основных статов. НЕ мутирует ничего —
+ * чистая функция, применение результата — отдельный шаг.
  */
 function computeDerivedStats(stats) {
   const reaction = stats.reaction || 0;
@@ -71,25 +51,16 @@ function computeDerivedStats(stats) {
 const { aggregateModuleEffects } = require('../crafting/crafting-engine.js');
 const { aggregateGearEffects } = require('./gear-engine.js');
 const { aggregateArtifactEffects } = require('../lib/artifacts.js');
-const { activeClassEffects } = require('./mentor-classes.js');
-const { factionCombatBonus } = require('./faction-combat.js');
+const { aggregatePassiveEffects } = require('./passive-skills.js');
 
 /**
- * Применяет производные статы к игроку — пересчитывает accuracy/dodge/focus
- * и добавляет статовые бонусы поверх БАЗОВЫХ firepower/shielding/hpMax
- * (тех, что даёт фракция при создании персонажа). Нужно вызывать после
- * ЛЮБОГО изменения основных статов: левел-ап (см. engine/leveling.js),
- * ручное распределение очков (api/profile.js — allocateStat), экипировка
- * модулей (crafting/crafting-engine.js).
+ * Применяет производные статы к игроку — пересчитывает accuracy/dodge/
+ * focus и добавляет статовые бонусы поверх БАЗОВЫХ firepower/shielding/
+ * hpMax. Вызывать после ЛЮБОГО изменения основных статов.
  *
- * ВАЖНО про идемпотентность: player.baseFirepower/baseShielding/baseHpMax
- * хранят стат-НЕЗАВИСИМУЮ часть (от фракции), а итоговые
- * stats.firepower/stats.shielding/hpMax = база + бонус от статов + бонус
- * от экипированных модулей — пересчитывается заново при каждом вызове, не
- * накапливается. Модули к power/mind/reaction/endurance тоже НЕ мутируют
- * player.stats напрямую (это испортило бы настоящее распределение очков
- * персонажа навсегда) — они складываются только во "временный" набор
- * effectiveStats, который идёт на вход в computeDerivedStats.
+ * player.baseFirepower/baseShielding/baseHpMax хранят стат-НЕЗАВИСИМУЮ
+ * часть (от фракции), итоговые значения пересчитываются заново при
+ * каждом вызове, не накапливаются.
  */
 function applyDerivedStats(player) {
   player.baseFirepower = player.baseFirepower ?? (player.stats.firepower || 0);
@@ -99,29 +70,13 @@ function applyDerivedStats(player) {
   const moduleBonus = aggregateModuleEffects(player);
   const gearBonus = aggregateGearEffects(player);
   const artifactBonus = aggregateArtifactEffects(player);
-  // Класс-наставник — теперь полноценный объект эффектов текущей ступени
-  // (engine/mentor-classes.js), не одно число. Firepower/shielding — тот
-  // же аддитивный принцип, что у модулей/снаряжения/артефактов. Остальные
-  // поля (crit/lifesteal/overcharge/reflect/...) не аддитивные статы —
-  // читаются напрямую из player.classEffects в combat-engine.js, где
-  // именно эти механики реально считаются.
-  const classEffects = activeClassEffects(player);
-  player.classEffects = classEffects; // кэш на этот пересчёт — combat-engine.js читает отсюда
-  // Боевой бонус родной фракции (engine/faction-combat.js) — отдельный
-  // ВСЕГДА включённый источник, складывается с классом-наставником, не
-  // конкурирует с ним (Вуаль + класс Инженера = защита из двух мест разом).
-  const factionBonus = factionCombatBonus(player.faction);
-  const mentorFirepowerBonus = (classEffects.firepowerBonus || 0) + (factionBonus.firepowerBonus || 0);
-  const mentorShieldingBonus = (classEffects.shieldingBonus || 0) + (factionBonus.shieldingBonus || 0);
-  player.critChanceBonus = (classEffects.critChanceBonus || 0) + (factionBonus.critChanceBonus || 0);
-  player.lifestealBonus = (classEffects.selfHealBonus || 0) + (factionBonus.selfHealBonus || 0);
   const combinedBonus = {
     power: (moduleBonus.power || 0) + (gearBonus.power || 0) + (artifactBonus.power || 0),
     mind: (moduleBonus.mind || 0) + (gearBonus.mind || 0) + (artifactBonus.mind || 0),
     reaction: (moduleBonus.reaction || 0) + (gearBonus.reaction || 0) + (artifactBonus.reaction || 0),
     endurance: (moduleBonus.endurance || 0) + (gearBonus.endurance || 0) + (artifactBonus.endurance || 0),
-    firepower: (moduleBonus.firepower || 0) + (gearBonus.firepower || 0) + (artifactBonus.firepower || 0) + mentorFirepowerBonus,
-    shielding: (moduleBonus.shielding || 0) + (gearBonus.shielding || 0) + (artifactBonus.shielding || 0) + mentorShieldingBonus,
+    firepower: (moduleBonus.firepower || 0) + (gearBonus.firepower || 0) + (artifactBonus.firepower || 0),
+    shielding: (moduleBonus.shielding || 0) + (gearBonus.shielding || 0) + (artifactBonus.shielding || 0),
   };
   const effectiveStats = {
     power: (player.stats.power || 0) + combinedBonus.power,
@@ -132,25 +87,27 @@ function applyDerivedStats(player) {
 
   const derived = computeDerivedStats(effectiveStats);
 
-  player.dodge = derived.dodge;
-  player.accuracy = derived.accuracy;
-  player.focus = derived.focus;
+  // ⚠️ QA-НАХОДКА: focusBonus/cooldownReductionBonus от пассивок
+  // (aggregatePassiveEffects) раньше нигде не применялись — оба честные
+  // проценты (не плоские числа, проверено по семантике passive-skills.js
+  // перед добавлением формулы, тот же урок что и с radiationReduction
+  // ранее). Складываются с уже посчитанным derived-значением, те же
+  // существующие лимиты (CAPS.focus/CAPS.cooldownReductionPct), не новые.
+  const passiveEffects = aggregatePassiveEffects(player.equippedPassives || []);
+
+  player.dodge = clamp(derived.dodge + (passiveEffects.evasionBonus || 0), 0, CAPS.dodge);
+  player.accuracy = clamp(derived.accuracy + (passiveEffects.precisionBonus || 0), 0, CAPS.accuracy);
+  player.focus = clamp(derived.focus + (passiveEffects.focusBonus || 0), 0, CAPS.focus);
   player.stats.firepower = player.baseFirepower + derived.firepowerBonus + combinedBonus.firepower;
   player.stats.shielding = player.baseShielding + derived.shieldingBonus + combinedBonus.shielding;
 
-  // +50 HP за каждый уровень сверх первого — раньше прокачка уровня
-  // ощутимо не меняла максимум HP вообще (только statPoints, которые
-  // ещё нужно было руками распределить в Выносливость, чтобы это
-  // сказалось на HP хоть как-то). Теперь level-up сам по себе всегда
-  // заметен, независимо от того, куда пошли очки характеристик.
-  const levelHpBonus = Math.max(0, (player.level || 1) - 1) * 50;
-  const newHpMax = player.baseHpMax + derived.hpBonus + levelHpBonus;
+  const newHpMax = player.baseHpMax + derived.hpBonus;
   const hpDelta = newHpMax - player.hpMax;
   player.hpMax = newHpMax;
   if (hpDelta > 0) player.hp = Math.min(player.hpMax, (player.hp || 0) + hpDelta);
   player.hp = Math.min(player.hp, player.hpMax);
 
-  player.cooldownReductionPct = derived.cooldownReductionPct;
+  player.cooldownReductionPct = clamp(derived.cooldownReductionPct + (passiveEffects.cooldownReductionBonus || 0), 0, CAPS.cooldownReductionPct);
 
   return player;
 }
