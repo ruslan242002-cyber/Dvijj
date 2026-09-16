@@ -207,6 +207,13 @@ async function handleVein(state, input, rng, deps, playerId) {
       }
       const skillId = input === '⚔️ Атаковать' ? null : skillIdByName(input);
       const skill = skillId ? SKILLS[skillId] : null;
+      // ⚠️ БАГ-ФИКС (QA-аудит): раньше нераспознанный ввод тихо считался
+      // "⚔️ Атаковать" — тот же класс уязвимости, что нашли и исправили
+      // в SHIP_COMBAT (game/scenes/travel.js). VEIN_PVP_COMBAT в этом же
+      // файле уже был защищён, эта под-сцена — нет.
+      if (input !== '⚔️ Атаковать' && !skill) {
+        return { reply: { text: 'Выбери действие кнопкой ниже.', buttons: ['⚔️ Атаковать', ...skillButtons(state.player, {}), 'Попытаться уйти'] }, nextState: state };
+      }
       const result = resolveTurn({ attacker: state.player, defender: state.enemy, skill, rng });
       if (result.defender.hp <= 0) {
         const player = { ...result.attacker };
@@ -225,6 +232,12 @@ async function handleVein(state, input, rng, deps, playerId) {
     case SCENES.VEIN_BOSS_COMBAT: {
       const skillId = input === '⚔️ Атаковать' ? null : skillIdByName(input);
       const skill = skillId ? SKILLS[skillId] : null;
+      // ⚠️ БАГ-ФИКС (QA-аудит) — та же уязвимость, что чинили выше в этом
+      // же файле и в SHIP_COMBAT: нераспознанный ввод раньше тихо считался
+      // атакой.
+      if (input !== '⚔️ Атаковать' && !skill) {
+        return { reply: { text: 'Выбери действие кнопкой ниже.', buttons: ['⚔️ Атаковать', ...skillButtons(state.player, {})] }, nextState: state };
+      }
       if (!veinStore) return veinHubEntry(deps, state.player, playerId);
 
       let roundResult = null;
