@@ -8,6 +8,7 @@
  */
 
 const { resolveTurn } = require('../../engine/combat-engine.js');
+const { aggregatePassiveEffects } = require('../../engine/passive-skills.js');
 const { createStatusState, applyInjury, applyBleeding } = require('../../engine/status/statusEngine.js');
 const { STATUS_SEVERITY } = require('../../engine/status/statusTypes.js');
 const { resolvePlayerTurn } = require('../../engine/combat-turn.js');
@@ -57,7 +58,8 @@ async function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null
       }
       const zone = state.zone || 'blue';
       const depth = state.depth || 0;
-      const loot = rollLoot(zone, rng, result.attacker.level || 1);
+      const passiveEffects = aggregatePassiveEffects(result.attacker.equippedPassives || []);
+      const loot = rollLoot(zone, rng, result.attacker.level || 1, null, passiveEffects.lootMultiplier);
       const companionEffect = activeCompanionEffect(result.attacker);
       if (companionEffect?.type === 'resourceFindBonus') {
         loot.qty = Math.round(loot.qty * (1 + companionEffect.amount));
@@ -113,8 +115,15 @@ async function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null
       // обычного восстановления от левел-апа (если он тоже случился).
       let postCombatHealNote = '';
       const classFx = player.classEffects || {};
-      if (classFx.postCombatHealPct && player.hp < player.hpMax) {
-        const healAmount = Math.round(player.hpMax * classFx.postCombatHealPct);
+      // ⚠️ QA-НАХОДКА: regenerationPct от пассивок ("+15/30/50% HP при
+      // возврате на станцию") — базовой механики именно "возврат на
+      // станцию" в игре не нашёл нигде, но ЭТА механика (лечение сразу
+      // после победы, "поверх обычного восстановления") — ближайший и
+      // единственный реальный аналог, туда же добавляю пассивку —
+      // складывается с классовым бонусом, не заменяет его.
+      const healPct = (classFx.postCombatHealPct || 0) + (passiveEffects.regenerationPct || 0);
+      if (healPct > 0 && player.hp < player.hpMax) {
+        const healAmount = Math.round(player.hpMax * healPct);
         const before = player.hp;
         player.hp = Math.min(player.hpMax, player.hp + healAmount);
         if (player.hp > before) postCombatHealNote = `\n💚 Восстановлено ${player.hp - before} HP после боя.`;
