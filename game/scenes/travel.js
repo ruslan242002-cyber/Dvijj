@@ -61,6 +61,25 @@ const {
 
 const { partyAmbushReductionFor, nearbyPartyMemberCount } = require('../../engine/party-bonus.js');
 const { SHIP_SKILLS, SHIP_SKILL_BY_FACTION, shipSkillButtons, shipSkillIdByName } = require('../../engine/ship-skills.js');
+const { SHIP_EMP_DEVICE } = require('../../engine/ship-equipment.js');
+const { aggregatePassiveEffects } = require('../../engine/passive-skills.js');
+
+// ⚠️ ТЕСТОВОЕ значение — 10 секунд, чтобы проверять быстро. Для
+// реального релиза увеличить (минуты, а не секунды) — тот же принцип,
+// что и TESTING_MODE в других местах проекта, явно помечено для замены.
+const EMERGENCY_HELP_WAIT_MS = 10 * 1000;
+
+// EMP-кнопка видна, только если устройство экипировано И в ЭТОМ бою ещё
+// остались заряды (state.empChargesUsed, сбрасывается заново при входе
+// в новый бой — см. ниже). Заряды НЕ переносятся между боями (по
+// документу: "ограниченный заряд — не на каждый бой").
+function empButtonFor(player, state) {
+  const deviceId = (player.shipEquipment || {}).emp;
+  const device = deviceId ? SHIP_EMP_DEVICE[deviceId] : null;
+  if (!device) return [];
+  const used = state.empChargesUsed || 0;
+  return used < device.charges ? ['⚡ EMP'] : [];
+}
 const { createStatusState, applyOverheat, hasStatus, getStatus } = require('../../engine/status/statusEngine.js');
 
 const FUEL_BASE_COST = 8;
@@ -784,21 +803,35 @@ async function resolveTransit(
     );
   }
 
-  const fuelCost =
+  const baseFuelCost =
     fuelCostForVariant(
       variant
     );
+  // ⚠️ QA-НАХОДКА: fuelDiscount от пассивок — несмотря на название,
+  // это ПЛОСКОЕ число (-1/-2/-3 за шаг, см. fuel_efficiency ранги в
+  // passive-skills.js), НЕ процент — проверил семантику перед тем как
+  // писать формулу (тот же урок, что и с radiationReduction раньше).
+  // Пол в 1 — маршрут никогда не становится полностью бесплатным.
+  const fuelDiscount = aggregatePassiveEffects(player.equippedPassives || []).fuelDiscount || 0;
+  const fuelCost = Math.max(1, baseFuelCost - fuelDiscount);
 
   if (
     player.ship.fuel <
     fuelCost
   ) {
+    // ⚠️ БАГ-ФИКС: раньше здесь был честный тупик — "Назад" вёл на тот
+    // же список маршрутов, все из которых требуют топлива, которого
+    // нет. Игрок физически не мог сдвинуться с места. Теперь —
+    // "Вызвать помощь" с реальным таймером (проверяется по настоящему
+    // Date.now(), не имитация): EMERGENCY_HELP_WAIT_MS сейчас 10 секунд
+    // для тестирования, для реального релиза стоит увеличить.
     return {
       reply: {
         text:
-          '⛽ Не хватает топлива.',
+          '⛽ Не хватает топлива, чтобы продолжить путь.',
 
         buttons: [
+          '🆘 Вызвать помощь',
           '⬅️ Назад',
         ],
       },
@@ -1187,6 +1220,40 @@ async function handleTravel(
     state.scene ===
     SCENES.SHIP_TRAVEL
   ) {
+    if (input === '🆘 Вызвать помощь') {
+      player.emergencyCallStartedAt = Date.now();
+      return {
+        reply: {
+          text: '📡 Сигнал бедствия отправлен. Ближайший буксир уже в пути — жди.',
+          buttons: ['🔄 Проверить'],
+        },
+        nextState: { scene: SCENES.SHIP_TRAVEL, player },
+      };
+    }
+
+    if (input === '🔄 Проверить') {
+      const startedAt = player.emergencyCallStartedAt;
+      if (!startedAt || Date.now() - startedAt < EMERGENCY_HELP_WAIT_MS) {
+        const secondsLeft = startedAt ? Math.ceil((EMERGENCY_HELP_WAIT_MS - (Date.now() - startedAt)) / 1000) : '?';
+        return {
+          reply: {
+            text: `📡 Буксир ещё в пути. Осталось примерно ${secondsLeft} сек.`,
+            buttons: ['🔄 Проверить'],
+          },
+          nextState: { scene: SCENES.SHIP_TRAVEL, player },
+        };
+      }
+
+      // Помощь прибыла — восстанавливаем ровно столько топлива, чтобы
+      // можно было доехать хотя бы одним "Опасным" (самым дешёвым)
+      // маршрутом отсюда, не полный бак — это аварийная помощь, не
+      // бесплатная заправка.
+      delete player.emergencyCallStartedAt;
+      const cheapestFuel = fuelCostForVariant(ROUTE_VARIANTS.DANGEROUS);
+      player.ship.fuel = Math.max(player.ship.fuel, cheapestFuel);
+      return travelScreen(deps, player, '📡 Буксир прибыл, перелил немного топлива — этого хватит, чтобы добраться куда-то отсюда.\n\n');
+    }
+
     if (
       input ===
       '⬅️ Назад'
@@ -1539,6 +1606,7 @@ async function handleTravel(
         buttons: [
           '⚔️ Атаковать',
           ...skillButtons,
+          ...empButtonFor(player, state),
           '🏃 Уйти',
         ],
       },
@@ -1567,6 +1635,74 @@ async function handleTravel(
     state.scene ===
     SCENES.SHIP_COMBAT
   ) {
+    if (input === '⚡ EMP') {
+      const deviceId = (player.shipEquipment || {}).emp;
+      const device = deviceId ? SHIP_EMP_DEVICE[deviceId] : null;
+      const used = state.empChargesUsed || 0;
+      if (!device || used >= device.charges) {
+        // Кнопка не должна была показаться в этом случае — просто
+        // игнорируем некорректный клик, ничего не меняя.
+        input = '⚔️ Атаковать';
+      } else {
+
+      const enemy = { ...state.enemy };
+      const empDamage = 8; // "почти не наносит физического урона" — прямая цитата документа
+      enemy.hp = Math.max(0, enemy.hp - empDamage);
+
+      if (enemy.hp <= 0) {
+        return travelToDestination(deps, player, state.destinationNodeId, '⚡ EMP добивает цель.\n\n');
+      }
+
+      const overheatNote2 = hasStatus(player.statusState || createStatusState(), 'overheat')
+        ? `\n🔥 Перегрев: ${getStatus(player.statusState, 'overheat').intensity}%`
+        : '';
+      const equippedShipSkillIdEmp = SHIP_SKILL_BY_FACTION[player.faction];
+      const skillButtonsEmp = shipSkillButtons(equippedShipSkillIdEmp ? [equippedShipSkillIdEmp] : [], player.shipSkillCooldowns || {});
+
+      return {
+        reply: {
+          text:
+            `⚡ Импульсный деструктор бьёт по системам цели — минимум урона, зато на ${device.disableDurationTurns} хода её системы отключены.\n\n` +
+            combatFullCard(shipToFighter(player.ship, 'Твой корабль', null, player), enemy) + overheatNote2,
+          buttons: ['⚔️ Атаковать', ...skillButtonsEmp, ...empButtonFor(player, { empChargesUsed: used + 1 }), '🏃 Уйти'],
+        },
+        nextState: {
+          scene: SCENES.SHIP_COMBAT,
+          player,
+          enemy,
+          destinationNodeId: state.destinationNodeId,
+          shipSkillCooldowns: player.shipSkillCooldowns,
+          ambusherPlayerId: state.ambusherPlayerId,
+          empChargesUsed: used + 1,
+          enemyDisabledTurns: device.disableDurationTurns,
+        },
+      };
+      }
+    }
+
+    // ⚠️ БАГ-ФИКС (найден QA-аудитом): раньше ЛЮБОЙ нераспознанный ввод
+    // в SHIP_COMBAT тихо трактовался как "⚔️ Атаковать" — если у игрока
+    // на экране осталась случайная старая кнопка (например, персонажа,
+    // из-за особенностей клиента ВК), клик по ней МОЛЧА бил противника
+    // вместо честной ошибки. Обычный combat.js эту проверку УЖЕ имел
+    // (см. handleCombat выше по коду) — SHIP_COMBAT её не имел, теперь
+    // тот же принцип здесь. Проверяем ДО расхода патронов — иначе
+    // случайный клик ещё и патрон бы тратил впустую.
+    const isRecognizedShipInput =
+      input === '⚔️ Атаковать' ||
+      shipSkillIdByName(input) != null;
+    if (!isRecognizedShipInput) {
+      const equippedShipSkillIdInvalid = SHIP_SKILL_BY_FACTION[player.faction];
+      const invalidInputButtons = shipSkillButtons(equippedShipSkillIdInvalid ? [equippedShipSkillIdInvalid] : [], player.shipSkillCooldowns || {});
+      return {
+        reply: {
+          text: 'Команда не распознана — выбери действие кнопкой ниже.',
+          buttons: ['⚔️ Атаковать', ...invalidInputButtons, ...empButtonFor(player, state), '🏃 Уйти'],
+        },
+        nextState: state,
+      };
+    }
+
     const attacker =
       shipToFighter(
         player.ship,
@@ -1625,21 +1761,26 @@ async function handleTravel(
       );
     }
 
-    const enemyTurn =
-      resolveTurn({
-        attacker:
-          defender,
+    const disabledTurnsLeft = state.enemyDisabledTurns || 0;
+    // ⚡ EMP-эффект — цель "отключена" на N ходов (см. ветку input==='⚡ EMP'
+    // выше): ответный удар просто не происходит, вместо resolveTurn с
+    // реальным боем — фейковый нулевой результат с честным логом.
+    const enemyTurn = disabledTurnsLeft > 0
+      ? { log: ['Системы цели всё ещё отключены — ответного удара нет.'], defender: attacker, attacker: defender }
+      : resolveTurn({
+          attacker:
+            defender,
 
-        defender:
-          attacker,
+          defender:
+            attacker,
 
-        rng,
+          rng,
 
-        pvpMode:
-          Boolean(
-            state.ambusherPlayerId
-          ),
-      });
+          pvpMode:
+            Boolean(
+              state.ambusherPlayerId
+            ),
+        });
 
     applyFighterResultToShip(
       player.ship,
@@ -1708,6 +1849,7 @@ async function handleTravel(
         buttons: [
           '⚔️ Атаковать',
           ...nextSkillButtons,
+          ...empButtonFor(player, state),
           '🏃 Уйти',
         ],
       },
@@ -1728,6 +1870,9 @@ async function handleTravel(
           state.ambusherPlayerId,
 
         shipSkillCooldowns: player.shipSkillCooldowns || {},
+
+        empChargesUsed: state.empChargesUsed || 0,
+        enemyDisabledTurns: Math.max(0, disabledTurnsLeft - 1),
       },
     };
   }
