@@ -33,6 +33,7 @@ const { handleNpc } = require('./scenes/quests/npc.js');
 const { handleNamedCharacter } = require('./scenes/named-character.js');
 const { handleMinigame } = require('./scenes/minigame.js');
 const { handleMinigamePower } = require('./scenes/minigame-power.js');
+const { handleMinigameSensor } = require('./scenes/minigame-sensor.js');
 const { handleBoss } = require('./scenes/boss.js');
 const { handleRaid } = require('./scenes/raid.js');
 const { handleMarket } = require('./scenes/market.js');
@@ -102,6 +103,7 @@ const SCENE_HANDLERS = {
   [SCENES.NAMED_CHARACTER]: handleNamedCharacter,
   [SCENES.MINIGAME_SHIP_DIAGNOSTICS]: handleMinigame,
   [SCENES.MINIGAME_POWER_CONTROL]: handleMinigamePower,
+  [SCENES.MINIGAME_SENSOR_LAYERS]: handleMinigameSensor,
   [SCENES.BOSS_HUB]: handleBoss,
   [SCENES.BOSS_COMBAT]: handleBoss,
   [SCENES.RAID_LOBBY]: handleRaid,
@@ -110,6 +112,10 @@ const SCENE_HANDLERS = {
   [SCENES.MARKET_HUB]: handleMarket,
   [SCENES.MARKET_SELL_PICK]: handleMarket,
   [SCENES.MARKET_SELL_PRICE]: handleMarket,
+  [SCENES.MARKET_BUY_ORDERS_HUB]: handleMarket,
+  [SCENES.MARKET_BUY_ORDER_ITEM]: handleMarket,
+  [SCENES.MARKET_BUY_ORDER_QTY]: handleMarket,
+  [SCENES.MARKET_BUY_ORDER_PRICE]: handleMarket,
   [SCENES.MARKET_MY_LISTINGS]: handleMarket,
   [SCENES.TRADE_ROUTES]: handleMarket,
   [SCENES.MARKET_ITEM_BOOK]: handleMarket,
@@ -133,6 +139,7 @@ const SCENE_HANDLERS = {
   [SCENES.REACTION_HAZARD_CHOICE]: handleExploration,
   [SCENES.CORRUPTED_AI_CHOICE]: handleExploration,
   [SCENES.GUILD_HUB]: handleGuild,
+  [SCENES.GUILD_MEMBERS]: handleGuild,
   [SCENES.GUILD_CREATE_NAME]: handleGuild,
   [SCENES.GUILD_JOIN_NAME]: handleGuild,
   [SCENES.GUILD_DONATE_CREDITS]: handleGuild,
