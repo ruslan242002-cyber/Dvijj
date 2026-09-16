@@ -22,6 +22,7 @@ const {
   resolveReactionHazard,
   resolveCorruptedAi,
 } = require('../../engine/exploration-engine.js');
+const { aggregatePassiveEffects } = require('../../engine/passive-skills.js');
 
 const TICK_RADIATION_GAIN = 2;
 
@@ -223,7 +224,7 @@ async function applyConsequenceToPlayer(
  *
  * Город не является промежуточной точкой.
  */
-function returnFromPlanet(
+async function returnFromPlanet(
   deps,
   player,
   prefixText = ''
@@ -250,11 +251,17 @@ function returnFromPlanet(
     currentNodeId: distance,
   };
 
-  return travelScreen(
+  const { DEPARTURE_IMAGE_BY_LOCATION } = require('./travel.js');
+  const result = await travelScreen(
     deps,
     cleanPlayer,
     prefixText
   );
+  const departureImage = DEPARTURE_IMAGE_BY_LOCATION[distance];
+  if (departureImage && result?.reply) {
+    result.reply.imageKey = departureImage;
+  }
+  return result;
 }
 
 function applyYieldBonus(
@@ -641,18 +648,25 @@ async function resolveInteractiveOutcome(
   if (
     result.radiationGain
   ) {
-    const discount =
+    const housingDiscount =
       getRadiationDiscount(
         player
       );
+    // ⚠️ QA-НАХОДКА + ИСПРАВЛЕНИЕ: radiationReduction от пассивок — это
+    // ПЛОСКОЕ число (-1/-2/-3 к приросту, см. engine/passive-skills.js:
+    // "radiation_resist" ранги), НЕ процент как housing-скидка выше.
+    // Сначала пытался применить как процент (1-discount) — с рангом 1
+    // это дало бы 100% защиту вместо честного -1, поймал на проверке
+    // самих данных пассивки перед тестом, не после.
+    const passiveFlatReduction = aggregatePassiveEffects(player.equippedPassives || []).radiationReduction || 0;
 
     const gain =
       Math.max(
         0,
         Math.round(
           result.radiationGain *
-            (1 - discount)
-        )
+            (1 - housingDiscount)
+        ) - passiveFlatReduction
       );
 
     player.radiation =
@@ -910,10 +924,11 @@ function resolveExplorationEvent(
     event.type ===
     'radiation'
   ) {
-    const discount =
+    const housingDiscount2 =
       getRadiationDiscount(
         player
       );
+    const passiveFlatReduction2 = aggregatePassiveEffects(player.equippedPassives || []).radiationReduction || 0;
 
     const gain =
       Math.max(
@@ -923,8 +938,8 @@ function resolveExplorationEvent(
             event.amount ||
             TICK_RADIATION_GAIN
           ) *
-            (1 - discount)
-        )
+            (1 - housingDiscount2)
+        ) - passiveFlatReduction2
       );
 
     player.radiation =
@@ -1354,7 +1369,7 @@ async function explore(
   );
 }
 
-function resolvePackAction(
+async function resolvePackAction(
   state,
   targetName,
   skillId,
@@ -1417,7 +1432,7 @@ function resolvePackAction(
     };
 
     const toShip =
-      returnFromPlanet(
+      await returnFromPlanet(
         deps,
         defeatedPlayer,
         ''
@@ -1455,11 +1470,14 @@ function resolvePackAction(
   if (
     result.packDefeated
   ) {
+    const passiveEffects = aggregatePassiveEffects(player.equippedPassives || []);
     const loot =
       rollLoot(
         state.zone,
         rng,
-        player.level || 1
+        player.level || 1,
+        null,
+        passiveEffects.lootMultiplier
       );
 
     const mult =
@@ -1893,7 +1911,7 @@ async function handleExploration(
         'Вернуться на станцию'
       ) {
         const toShip =
-          returnFromPlanet(
+          await returnFromPlanet(
             deps,
             player,
             '🪐 Ты возвращаешься к кораблю. Весь добытый груз остаётся в трюме рейса.\n\n'
@@ -1962,7 +1980,7 @@ async function handleExploration(
           result.success
         ) {
           const toShip =
-            returnFromPlanet(
+            await returnFromPlanet(
               deps,
               player,
               `🛰️ ${result.text}\n\n`
@@ -2748,7 +2766,7 @@ async function handleExploration(
         'Отступить'
       ) {
         const toShip =
-          returnFromPlanet(
+          await returnFromPlanet(
             deps,
             player,
             '🏃 Ты отступаешь от стаи и возвращаешься к кораблю.\n\n'
@@ -2827,7 +2845,7 @@ async function handleExploration(
         'Отступить'
       ) {
         const toShip =
-          returnFromPlanet(
+          await returnFromPlanet(
             deps,
             state.player,
             '🏃 Ты отступаешь от стаи и возвращаешься к кораблю.\n\n'
