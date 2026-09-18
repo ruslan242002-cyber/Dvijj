@@ -61,7 +61,7 @@ const {
 
 const { partyAmbushReductionFor, nearbyPartyMemberCount } = require('../../engine/party-bonus.js');
 const { SHIP_SKILLS, SHIP_SKILL_BY_FACTION, shipSkillButtons, shipSkillIdByName } = require('../../engine/ship-skills.js');
-const { SHIP_EMP_DEVICE } = require('../../engine/ship-equipment.js');
+const { SHIP_EMP_DEVICE, SHIP_SENSOR } = require('../../engine/ship-equipment.js');
 const { aggregatePassiveEffects } = require('../../engine/passive-skills.js');
 
 // ⚠️ ТЕСТОВОЕ значение — 10 секунд, чтобы проверять быстро. Для
@@ -868,9 +868,17 @@ async function resolveTransit(
       ambusher &&
       ambusher.shipSnapshot
     ) {
-      const ambushReductionPct = await partyAmbushReductionFor(deps, player, player.id);
+      const partyReductionPct = await partyAmbushReductionFor(deps, player, player.id);
+      // ⚠️ Сенсор (engine/ship-equipment.js) — складывается с партийным
+      // бонусом, не заменяет его. SHIP_SENSOR.ambushAvoidBonusPct —
+      // дробь(0.15=15%), партийный бонус уже в целых процентных
+      // пунктах — приводим к общей единице.
+      const sensorId = (player.shipEquipment || {}).sensor;
+      const sensor = sensorId ? SHIP_SENSOR[sensorId] : null;
+      const sensorBonusPct = sensor ? sensor.ambushAvoidBonusPct * 100 : 0;
+      const ambushReductionPct = partyReductionPct + sensorBonusPct;
       if (ambushReductionPct > 0 && rng() < ambushReductionPct / 100) {
-        return travelToDestination(deps, player, route.to, `👀 Товарищи по пати замечают засаду заранее — обходите её стороной.\n\n`);
+        return travelToDestination(deps, player, route.to, `👀 ${sensor ? 'Дальний сканер замечает засаду заранее' : 'Товарищи по пати замечают засаду заранее'} — обходите её стороной.\n\n`);
       }
       const enemy =
         shipToFighter(
