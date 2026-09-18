@@ -15,6 +15,7 @@ const { DISTRICTS } = require('../../city/districts-data.js');
 const { rollStationEvent } = require('../../city/station-events.js');
 const { achievementsText } = require('../../lib/achievements.js');
 const { getInbox, clearInbox } = require('../../lib/notifications.js');
+const { getWorldFeed, formatWorldFeed } = require('../../lib/world-feed.js');
 
 const { imageForLocation } = require('../location-images.js');
 const { marketHub } = require('./market.js');
@@ -152,6 +153,25 @@ async function resolveStationAction(input, state, deps, rng, playerId) {
     return {
       reply: {
         text: '📬 Уведомления очищены.',
+        buttons: stationButtons(deps, state.player),
+      },
+      nextState: {
+        scene: 'station',
+        player: state.player,
+      },
+    };
+  }
+
+  if (input === '🌐 Лента мира') {
+    // ⚠️ QA-НАХОДКА: lib/world-feed.js прямо в шапке файла называет себя
+    // "то, что реально читает игрок, чтобы почувствовать, что сервер
+    // живой прямо сейчас" — logWorldEvent() УЖЕ пишет туда (победы над
+    // мировым боссом, рейд-боссом, создание гильдии и т.д., см.
+    // FEED_EVENT_ICONS), но ни одного экрана для чтения не было.
+    const events = await getWorldFeed(deps, 15);
+    return {
+      reply: {
+        text: `🌐 ЛЕНТА МИРА\n\n${formatWorldFeed(events)}`,
         buttons: stationButtons(deps, state.player),
       },
       nextState: {
@@ -488,6 +508,11 @@ async function resolveStationAction(input, state, deps, rng, playerId) {
 
   if (input === 'Мастерская') {
     return workshopScreen(state.player);
+  }
+
+  if (input === '🚀 Верфь') {
+    const { shipyardScreen } = require('./locations/shipyard.js');
+    return shipyardScreen(state.player);
   }
 
   if (input === 'Мара Кейн') {
