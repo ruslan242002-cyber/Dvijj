@@ -140,21 +140,21 @@ function handleNamedCharacter(state, input, rng, deps) {
     if (stage) {
       if (input === stage.acceptButton) {
         if (stage.launchesMinigame === 'ship_diagnostics') {
-          const { shipDiagnosticsScreen } = require('./minigame.js');
+          const { shipDiagnosticsScreen } = require('./minigames.js');
           return shipDiagnosticsScreen(state.player, state.backScene, {
             arcCharacterId: state.characterId,
             arcStageId: state.stageId,
           });
         }
         if (stage.launchesMinigame === 'sensor_layers') {
-          const { sensorLayersScreen } = require('./minigame-sensor.js');
+          const { sensorLayersScreen } = require('./minigames.js');
           return sensorLayersScreen(state.player, state.backScene, {
             arcCharacterId: state.characterId,
             arcStageId: state.stageId,
           });
         }
         if (stage.launchesMinigame === 'archive_reconstruction') {
-          const { archiveReconstructionScreen } = require('./minigame-archive.js');
+          const { archiveReconstructionScreen } = require('./minigames.js');
           return archiveReconstructionScreen(state.player, state.backScene, {
             arcCharacterId: state.characterId,
             arcStageId: state.stageId,
