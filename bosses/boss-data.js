@@ -39,6 +39,13 @@ for (const [id, boss] of Object.entries(REAL_BOSSES)) {
     hpPool: boss.hp,
     hp: boss.hp,
     hpMax: boss.hp,
+    // ⚠️ БАГ-ФИКС: raidHp никогда не задавался здесь — bosses/raid-
+    // engine.js читает именно ЭТО поле (boss.raidHp) при старте
+    // синхронного рейда, получал undefined всегда, отсюда NaN на
+    // полоске HP босса и физическая невозможность когда-либо победить
+    // (bossHp<=0 никогда не срабатывало с NaN). Тот же пул HP, что и
+    // обычный — раздельного баланса под рейд отдельно не было задумано.
+    raidHp: boss.hp,
     stats: boss.stats,
     luck: boss.luck,
     accuracy: boss.accuracy,
