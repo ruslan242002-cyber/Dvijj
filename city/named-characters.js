@@ -8,6 +8,19 @@
 const { getCharacter } = require('../../city/named-characters.js');
 const { hubMessage, stationButtons, addToInventory } = require('./common.js');
 const { SCENES } = require('./ids.js');
+
+// ⚠️ ВИЗУАЛЬНЫЙ ПРОГРЕСС (по запросу пользователя, "как в популярных
+// играх") — номер этапа извлекается из stage.id автоматически (напр.
+// 'kran_07' → 7), не требует правки всех 52 объектов квестов вручную.
+// STORY_ARC_TOTAL_STAGES — общий потолок саги "Пять Голосов Тракта"
+// (сейчас у Айрин максимум, 13-й) — обновить при добавлении Q14+.
+const STORY_ARC_TOTAL_STAGES = 13;
+function questProgressLine(stageId) {
+  const match = /_(\d+)$/.exec(stageId);
+  if (!match) return '';
+  const n = parseInt(match[1], 10);
+  return `📖 «Пять Голосов Тракта» — Этап ${n}/${STORY_ARC_TOTAL_STAGES}\n\n`;
+}
 const { getAvailableStage, completeStage } = require('../../lib/npc-arcs.js');
 const { grantXp } = require('../../engine/leveling.js');
 const { recordDiscovery } = require('../../lib/discoveries.js');
@@ -84,7 +97,7 @@ function characterScreen(characterId, player, backScene = 'station', prefixText 
     if (stage) {
       return {
         reply: {
-          text: `${prefixText}${character.name}\n\n${stage.intro}`,
+          text: `${prefixText}${character.name}\n\n${questProgressLine(stage.id)}${typeof stage.intro === 'function' ? stage.intro(player) : stage.intro}`,
           buttons: [stage.acceptButton, '⬅️ Назад'],
           imageKey: character.imageKey,
         },
@@ -133,11 +146,26 @@ function handleNamedCharacter(state, input, rng, deps) {
             arcStageId: state.stageId,
           });
         }
+        if (stage.launchesMinigame === 'sensor_layers') {
+          const { sensorLayersScreen } = require('./minigame-sensor.js');
+          return sensorLayersScreen(state.player, state.backScene, {
+            arcCharacterId: state.characterId,
+            arcStageId: state.stageId,
+          });
+        }
+        if (stage.launchesMinigame === 'archive_reconstruction') {
+          const { archiveReconstructionScreen } = require('./minigame-archive.js');
+          return archiveReconstructionScreen(state.player, state.backScene, {
+            arcCharacterId: state.characterId,
+            arcStageId: state.stageId,
+          });
+        }
 
+        const resolvedChoices = typeof stage.choices === 'function' ? stage.choices(state.player) : stage.choices;
         return {
           reply: {
             text: `${character.name}\n\nВыбери, как подойти к делу:`,
-            buttons: stage.choices.map((c) => c.text),
+            buttons: resolvedChoices.map((c) => c.text),
             imageKey: character.imageKey,
           },
           nextState: { scene: SCENES.NAMED_CHARACTER, player: state.player, characterId: state.characterId, backScene: state.backScene, stageId: state.stageId, choosing: true },
@@ -145,8 +173,31 @@ function handleNamedCharacter(state, input, rng, deps) {
       }
 
       if (state.choosing) {
-        const choice = stage.choices.find((c) => c.text === input);
+        const resolvedChoicesForPick = typeof stage.choices === 'function' ? stage.choices(state.player) : stage.choices;
+        const choice = resolvedChoicesForPick.find((c) => c.text === input);
         if (choice) {
+          // ⚠️ НАСТОЯЩИЙ БОЙ ВНУТРИ КВЕСТА (по запросу пользователя —
+          // "логичные битвы", не просто текст). triggerCombat — функция,
+          // строящая врага; переход в pre_combat с npcArcCombat в
+          // состоянии, чтобы combat.js знал, куда вернуться и что выдать
+          // ПОСЛЕ победы — награда даётся только за реальную победу, не
+          // за сам факт выбора.
+          if (choice.triggerCombat) {
+            return {
+              reply: {
+                text: choice.preCombatText || 'Ты готовишься к столкновению.',
+                buttons: ['⚔️ В бой'],
+                imageKey: character.imageKey,
+              },
+              nextState: {
+                scene: 'pre_combat',
+                player: state.player,
+                enemy: choice.triggerCombat(),
+                npcArcCombat: { characterId: state.characterId, stageId: state.stageId, choiceText: choice.text, backScene: state.backScene },
+              },
+            };
+          }
+
           const player = state.player;
           if (choice.loot) {
             addToInventory(player, choice.loot.resource, choice.loot.tier, choice.loot.qty);
@@ -159,6 +210,10 @@ function handleNamedCharacter(state, input, rng, deps) {
           }
           if (choice.discovery) {
             recordDiscovery(player, choice.discovery);
+          }
+          if (choice.questArtifact) {
+            const { grantQuestArtifact } = require('../../lib/artifacts.js');
+            grantQuestArtifact(player, choice.questArtifact);
           }
           if (choice.reputation) {
             addFactionReputation(player, player.faction, choice.reputation);
