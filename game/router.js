@@ -28,12 +28,15 @@ const { handleDecon } = require('./scenes/locations/decon.js');
 const { handleCantina, contractsBoard } = require('./scenes/locations/cantina.js');
 const { handleGates } = require('./scenes/locations/gates.js');
 const { handleWorkshop } = require('./scenes/locations/workshop.js');
+const { handleShipyard } = require('./scenes/locations/shipyard.js');
 const { handleCuratorQuest } = require('./scenes/quests/curator.js');
 const { handleNpc } = require('./scenes/quests/npc.js');
 const { handleNamedCharacter } = require('./scenes/named-character.js');
 const { handleMinigame } = require('./scenes/minigame.js');
 const { handleMinigamePower } = require('./scenes/minigame-power.js');
 const { handleMinigameSensor } = require('./scenes/minigame-sensor.js');
+const { handleMinigameArchive } = require('./scenes/minigame-archive.js');
+const { handleMinigameSecondary } = require('./scenes/minigame-secondary.js');
 const { handleBoss } = require('./scenes/boss.js');
 const { handleRaid } = require('./scenes/raid.js');
 const { handleMarket } = require('./scenes/market.js');
@@ -95,6 +98,7 @@ const SCENE_HANDLERS = {
   [SCENES.LOC_GATES_TRAVEL]: handleGates,
 
   [SCENES.WORKSHOP]: handleWorkshop,
+  [SCENES.SHIPYARD]: handleShipyard,
   [SCENES.REFORGE_PICK]: handleWorkshop,
   [SCENES.REFORGE_TARGET]: handleWorkshop,
   [SCENES.CURATOR_QUEST]: handleCuratorQuest,
@@ -104,6 +108,8 @@ const SCENE_HANDLERS = {
   [SCENES.MINIGAME_SHIP_DIAGNOSTICS]: handleMinigame,
   [SCENES.MINIGAME_POWER_CONTROL]: handleMinigamePower,
   [SCENES.MINIGAME_SENSOR_LAYERS]: handleMinigameSensor,
+  [SCENES.MINIGAME_ARCHIVE]: handleMinigameArchive,
+  [SCENES.MINIGAME_SECONDARY_STATUS]: handleMinigameSecondary,
   [SCENES.BOSS_HUB]: handleBoss,
   [SCENES.BOSS_COMBAT]: handleBoss,
   [SCENES.RAID_LOBBY]: handleRaid,
