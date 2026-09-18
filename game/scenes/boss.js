@@ -16,6 +16,13 @@ const { BOSS_IMAGE_MANIFEST } = require('../../engine/travel-images/boss-image-m
 const { formatBossStatusCard } = require('../../lib/boss-status-card.js');
 const { rollBossGearDrop, grantGearDrop, rarityName } = require('../../engine/gear-engine.js');
 const { aggregatePassiveEffects } = require('../../engine/passive-skills.js');
+const { loseFullCargo } = require('../../lib/trip-cargo.js');
+
+// ⚠️ Тот же общий стандарт жёсткого поражения, что и в combat.js (по
+// прямому запросу пользователя — одинаково везде). Отдельная копия
+// константы (не импорт из combat.js — тот модуль не экспортирует её,
+// и незачем тянуть combat.js целиком сюда только ради одного числа).
+const EMERGENCY_POD_CHANCE = 0.12;
 
 // Тема именной локации (lib/named-locations.js) -> id боссов, которые
 // там водятся (engine/world-bosses/boss-data.js:location). Несколько
@@ -244,9 +251,19 @@ async function handleBoss(state, input, rng, deps, playerId) {
     await deps.bossStore.saveBoss(instance, instance.bossId);
 
     if (result.playerDefeated) {
-      const defeatedPlayer = { ...player, hp: Math.round(player.hpMax * 0.3) };
+      if (rng() < EMERGENCY_POD_CHANCE) {
+        const savedPlayer = { ...player, hp: Math.round(player.hpMax * 0.3) };
+        return {
+          reply: { text: `⚔️ ${result.log.join(' ')}\n\n🛟 Аварийная капсула срабатывает в последний момент — редкая удача, груз цел.`, buttons: stationButtons(deps, savedPlayer) },
+          nextState: { scene: 'station', player: savedPlayer }
+        };
+      }
+      const { lostTrip, lostInventory } = loseFullCargo(player);
+      const lostCount = lostTrip.length + lostInventory.reduce((s, i) => s + (i.qty || 0), 0);
+      const lossNote = lostCount > 0 ? ` Груз потерян (${lostCount} ед.).` : '';
+      const defeatedPlayer = { ...player, hp: 1 };
       return {
-        reply: { text: `⚔️ ${result.log.join(' ')}\n\n💀 Ты не выдержал удара босса. Эвакуация на станцию, часть HP восстановлена.`, buttons: stationButtons(deps, defeatedPlayer) },
+        reply: { text: `⚔️ ${result.log.join(' ')}\n\n💀 Ты не выдержал удара босса.${lossNote} Эвакуация на станцию — едва живым.`, buttons: stationButtons(deps, defeatedPlayer) },
         nextState: { scene: 'station', player: defeatedPlayer }
       };
     }
