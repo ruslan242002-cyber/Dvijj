@@ -1293,13 +1293,15 @@ async function explore(
         spared,
     };
 
+    const explorationLootMult = aggregatePassiveEffects(player.equippedPassives || []).lootMultiplier || 1;
     const event =
       rollEvent(
         zone,
         rng,
         player.level || 1,
         weightsOverride,
-        player.currentLocationTheme
+        player.currentLocationTheme,
+        explorationLootMult
       );
 
     if (
@@ -2531,7 +2533,8 @@ async function handleExploration(
       const result =
         resolveResonancePedestal(
           rng,
-          player.level || 1
+          player.level || 1,
+          aggregatePassiveEffects(player.equippedPassives || []).lootMultiplier || 1
         );
 
       return resolveInteractiveOutcome(
@@ -2582,7 +2585,8 @@ async function handleExploration(
           choice,
           player,
           rng,
-          player.level || 1
+          player.level || 1,
+          aggregatePassiveEffects(player.equippedPassives || []).lootMultiplier || 1
         );
 
       return resolveInteractiveOutcome(
@@ -2635,7 +2639,8 @@ async function handleExploration(
         resolveEchoPlayback(
           choice,
           rng,
-          player.level || 1
+          player.level || 1,
+          aggregatePassiveEffects(player.equippedPassives || []).lootMultiplier || 1
         );
 
       return resolveInteractiveOutcome(
@@ -2677,7 +2682,8 @@ async function handleExploration(
         resolveReactionHazard(
           player,
           rng,
-          player.level || 1
+          player.level || 1,
+          aggregatePassiveEffects(player.equippedPassives || []).lootMultiplier || 1
         );
 
       return resolveInteractiveOutcome(
