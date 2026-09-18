@@ -2,37 +2,24 @@
 
 /**
  * PVP НА ЖИЛЕ — отдельный от обычной 1v1-дуэльной системы (pvp/pvp-engine.js)
- * и от засад (снимок корабля на момент установки, lib/ambush-registry.js).
- * Здесь ЖЕРТВА реальна и актуальна прямо сейчас — оба игрока физически
- * "на месте" жилы одновременно, поэтому нет смысла делать снимок заранее:
- * вызывающий код читает ТЕКУЩЕЕ состояние жертвы из основного стора
- * игроков (deps.store) непосредственно перед боем.
+ * и от засад (lib/ambush-registry.js). Жертва реальна и актуальна прямо
+ * сейчас — вызывающий код читает ТЕКУЩЕЕ состояние жертвы из основного
+ * стора игроков непосредственно перед боем.
  *
- * Крадётся не весь трюм жертвы (это не открытый космос с полной потерей
- * груза, см. lib/trip-cargo.js) — крадётся часть её ВКЛАДА В ЭТУ
- * КОНКРЕТНУЮ ЖИЛУ (damageDealt в vein.participants), что напрямую
- * уменьшает её будущую долю награды при разделе (engine/resource-vein.js:
- * distributeVeinRewards теперь пропорциональна вкладу — без этого кража
- * была бы чисто косметической).
+ * Крадётся не весь трюм жертвы — крадётся часть её ВКЛАДА В ЭТУ
+ * КОНКРЕТНУЮ ЖИЛУ (damageDealt в vein.participants).
  */
-
 const { resolveTurn } = require('./combat-engine.js');
 
-const STEAL_SHARE_PCT = 0.5; // победитель забирает половину вклада жертвы на этой жиле
+const STEAL_SHARE_PCT = 0.5;
 
-/** Один ход PvP-атаки на жиле — тонкая обёртка над обычным resolveTurn,
- * чтобы явно зафиксировать: механика боя та же самая (базовая атака или
- * умение персонажа), меняется только КТО с кем дерётся и что происходит
- * после победы. */
 function resolveVeinAttack({ attacker, defender, skill, rng }) {
-  return resolveTurn({ attacker, defender, skill, rng, pvpMode: true });
+  return resolveTurn({ attacker, defender, skill, rng });
 }
 
 /**
  * Переносит часть вклада жертвы победителю. Мутирует vein.participants
- * напрямую (тот же объект, что живёт в сторе жилы — вызывающий код сам
- * решает, через updateVeinAtomic или как иначе это сохранить).
- * Возвращает украденное количество (для текста ответа).
+ * напрямую. Возвращает украденное количество.
  */
 function stealVeinContribution(vein, winnerId, victimId) {
   const victimEntry = vein.participants[victimId];
@@ -48,4 +35,38 @@ function stealVeinContribution(vein, winnerId, victimId) {
   return stolen;
 }
 
-module.exports = { STEAL_SHARE_PCT, resolveVeinAttack, stealVeinContribution };
+module.exports = { STEAL_SHARE_PCT, resolveVeinAttack, stealVeinContribution, stealPlayerResources };
+
+// ⚠️ ПО ПРЯМОМУ ЗАПРОСУ ПОЛЬЗОВАТЕЛЯ: stealVeinContribution (выше) крадёт
+// только "вклад в жилу" — общий счётчик для дележа НАГРАДЫ ЗА ЖИЛУ В
+// КОНЦЕ, не настоящие ресурсы игрока. Это ОТДЕЛЬНАЯ, новая механика —
+// честная передача ЧАСТИ реального инвентаря побеждённого победителю,
+// то самое "PvP приносит ресурсы", а не абстрактный счётчик.
+const RESOURCE_STEAL_PCT = 0.3;
+
+/** Забирает RESOURCE_STEAL_PCT (округление вниз, минимум 1 при наличии
+ * стака) от каждого ресурса victim.inventory и добавляет winner'у.
+ * Мутирует ОБА объекта на месте (inventory-массивы) — вызывающий код
+ * отвечает за сохранение обоих в сторе (victim обычно берётся СВЕЖИМ
+ * из deps.store, не из устаревшего снепшота боя). Возвращает список
+ * {resource, tier, qty} украденного — для текста победы. */
+function stealPlayerResources(winner, victim, pct = RESOURCE_STEAL_PCT) {
+  winner.inventory = winner.inventory || [];
+  victim.inventory = victim.inventory || [];
+  const stolenItems = [];
+
+  for (const item of victim.inventory) {
+    const stolenQty = Math.min(item.qty, Math.max(1, Math.floor(item.qty * pct)));
+    if (stolenQty <= 0) continue;
+    item.qty -= stolenQty;
+
+    const existing = winner.inventory.find((i) => i.resource === item.resource && i.tier === item.tier);
+    if (existing) existing.qty += stolenQty;
+    else winner.inventory.push({ resource: item.resource, tier: item.tier, qty: stolenQty });
+
+    stolenItems.push({ resource: item.resource, tier: item.tier, qty: stolenQty });
+  }
+  victim.inventory = victim.inventory.filter((i) => i.qty > 0);
+
+  return stolenItems;
+}
