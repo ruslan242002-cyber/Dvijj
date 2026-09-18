@@ -23,7 +23,41 @@ const { applyDerivedStats } = require('../../engine/derived-stats.js');
 const { returnFromPlanet } = require('./exploration.js');
 const { rollLootByEnemyName } = require('../../engine/bestiary.js');
 const { xpForKill, grantXp } = require('../../engine/leveling.js');
+const { findStage, completeStage } = require('../../lib/npc-arcs.js');
+const { recordDiscovery } = require('../../lib/discoveries.js');
+const { addFactionReputation } = require('../../engine/reputation.js');
 const { collectFragment } = require('../../lore/trakt-mythos.js');
+const { loseFullCargo } = require('../../lib/trip-cargo.js');
+
+// ⚠️ ПЕРЕДЕЛАНО ПО ПРЯМОМУ ЗАПРОСУ ПОЛЬЗОВАТЕЛЯ: раньше поражение было
+// "бесплатным" — гарантированные 50% HP, эвакуация, ничего не терялось.
+// Теперь: РЕДКИЙ шанс (EMERGENCY_POD_CHANCE) на спасение БЕЗ потерь —
+// отдельная механика от классового trySurvivalMechanic() (та осталась
+// как была, это ДОПОЛНИТЕЛЬНЫЙ, общий для всех, но редкий шанс). Если
+// капсула не сработала — честное поражение: весь несданный груз
+// теряется (loseFullCargo), HP падает до 1 (0-1% от макс — по прямому
+// уточнению пользователя, не 50% и не 15%) И игрока выбрасывает из зоны
+// (returnFromPlanet, та же функция, что уже использовалась для
+// эвакуации — теперь просто ещё и с реальными потерями, не бесплатно).
+const EMERGENCY_POD_CHANCE = 0.12;
+
+async function resolveDefeat(deps, defeatedPlayer, combatLog, rng) {
+  if (rng() < EMERGENCY_POD_CHANCE) {
+    const toShip = await returnFromPlanet(deps, defeatedPlayer, '');
+    const podText = `💥 ${combatLog}\n\n🛟 Аварийная капсула срабатывает в последний момент — редкая удача, груз цел.\n\n`;
+    if (toShip) { toShip.reply.text = podText + toShip.reply.text; return toShip; }
+    return { reply: { text: podText + 'Ты эвакуирован на станцию.', buttons: [] }, nextState: { scene: 'station', player: defeatedPlayer } };
+  }
+
+  const { lostTrip, lostInventory } = loseFullCargo(defeatedPlayer);
+  const lostCount = lostTrip.length + lostInventory.reduce((s, i) => s + (i.qty || 0), 0);
+  const brokenPlayer = { ...defeatedPlayer, hp: 1 };
+  const lossNote = lostCount > 0 ? `📦 Груз потерян (${lostCount} ед.).` : '';
+  const toShip = await returnFromPlanet(deps, brokenPlayer, '');
+  const defeatText = `💥 ${combatLog}\n\n💀 Поражение. ${lossNote} Тебя вышвыривает из зоны — едва живого.\n\n`;
+  if (toShip) { toShip.reply.text = defeatText + toShip.reply.text; return toShip; }
+  return { reply: { text: defeatText + 'Ты эвакуирован на станцию.', buttons: [] }, nextState: { scene: 'station', player: brokenPlayer } };
+}
 const { checkContractProgress } = require('../../contracts/contracts-engine.js');
 const { recordKill } = require('../../lib/trophies.js');
 const { combatFullCard } = require('../../lib/combat-card.js');
@@ -55,6 +89,38 @@ async function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null
       }
       if (state.curatorQuest) {
         return curatorQuestScreen(deps, { ...result.attacker, hp: result.attacker.hpMax }, state.curatorQuest.questId, state.curatorQuest.winNext);
+      }
+      if (state.npcArcCombat) {
+        // ⚠️ Победа в бою внутри квеста арки (см. named-character.js —
+        // triggerCombat). Не храним функции/объект выбора в состоянии
+        // (не переживёт сохранение между сообщениями) — ищем заново по
+        // characterId+stageId+choiceText, тому же способу, каким игрок
+        // его выбрал изначально.
+        const { characterId, stageId, choiceText, backScene } = state.npcArcCombat;
+        const player = { ...result.attacker, hp: result.attacker.hpMax };
+        const stage = findStage(characterId, stageId);
+        const resolvedChoices = stage ? (typeof stage.choices === 'function' ? stage.choices(player) : stage.choices) : [];
+        const choice = resolvedChoices.find((c) => c.text === choiceText);
+        if (stage && choice) {
+          if (choice.winXp) grantXp(player, choice.winXp);
+          if (choice.winDiscovery) recordDiscovery(player, choice.winDiscovery);
+          if (choice.winArtifact) {
+            const { grantQuestArtifact } = require('../../lib/artifacts.js');
+            grantQuestArtifact(player, choice.winArtifact);
+          }
+          if (choice.winReputation) addFactionReputation(player, player.faction, choice.winReputation);
+          completeStage(player, characterId, stageId);
+          return {
+            reply: { text: `⚔️ ${result.log.join(' ')}\n\n✅ Победа!\n\n${choice.winFlavor || ''}\n\n${stage.closingLine || ''}`, buttons: ['⬅️ Назад'] },
+            nextState: { scene: backScene || 'station', player },
+          };
+        }
+        // Стадия/выбор не нашлись (устарели) — не крашимся, просто
+        // возвращаем на станцию с честной победой без спец-наград.
+        return {
+          reply: { text: `⚔️ ${result.log.join(' ')}\n\n✅ Победа!`, buttons: ['⬅️ Назад'] },
+          nextState: { scene: backScene || 'station', player },
+        };
       }
       const zone = state.zone || 'blue';
       const depth = state.depth || 0;
@@ -155,6 +221,30 @@ async function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null
         nextState: { scene: 'journey_continue', player, zone, depth, isBossContext: !!state.fragmentId }
       };
     }
+    if (state.npcArcCombat) {
+      // ⚠️ ПОРАЖЕНИЕ ВНУТРИ КВЕСТА (по запросу пользователя — "не
+      // ломать квесты, откидывать на разумную контрольную точку, не
+      // теряя сути"). Та же общая механика игры, что и везде (нет
+      // настоящей смерти — аварийная капсула, 50% HP), НО: квест НЕ
+      // завершается (стадия остаётся доступной для повтора), награда
+      // НЕ выдаётся (только за реальную победу), и возврат — в САМ
+      // ДИАЛОГ с персонажем (backScene плюс характерная фраза), а не в
+      // пустое "станция" — так суть попытки не теряется, просто можно
+      // прийти и попробовать снова.
+      const { characterId, stageId, choiceText, backScene } = state.npcArcCombat;
+      const stage = findStage(characterId, stageId);
+      const resolvedChoicesLose = stage ? (typeof stage.choices === 'function' ? stage.choices(result.attacker) : stage.choices) : [];
+      const choiceLose = resolvedChoicesLose.find((c) => c.text === choiceText);
+      const defeatedPlayer = { ...result.attacker, hp: Math.round(result.attacker.hpMax * 0.5) };
+      const loseText = (choiceLose && choiceLose.loseFlavor) || 'Бой оказался тебе не по силам — аварийная система эвакуирует тебя, прежде чем станет по-настоящему плохо.';
+      return {
+        reply: {
+          text: `💥 ${result.log.join(' ')}\n\n${loseText}\n\nМожешь вернуться и попробовать снова, когда будешь готов.`,
+          buttons: ['⬅️ Назад'],
+        },
+        nextState: { scene: backScene || 'station', player: defeatedPlayer },
+      };
+    }
     if (state.curatorQuest) {
       return curatorQuestScreen(deps, { ...result.attacker, hp: Math.round(result.attacker.hpMax * 0.5) }, state.curatorQuest.questId, state.curatorQuest.loseNext);
     }
@@ -167,16 +257,7 @@ async function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null
           nextState: { scene: state.scene, player: survivedPlayer, enemy: result.defender, zone: state.zone, depth: state.depth, skillCooldowns: state.skillCooldowns, survivalUsedThisFight: true }
         };
       }
-      const defeatedPlayer = { ...result.attacker, hp: Math.round(result.attacker.hpMax * 0.5) };
-      const toShip = await returnFromPlanet(deps, defeatedPlayer, '');
-      if (toShip) {
-        toShip.reply.text = `💥 ${result.log.join(' ')}\n\n💀 Скафандр пробит. Аварийная капсула тянет тебя обратно к кораблю.\n\n${toShip.reply.text}`;
-        return toShip;
-      }
-      return {
-        reply: { text: `💥 ${result.log.join(' ')}\n\n💀 Скафандр пробит. Аварийная капсула эвакуирует тебя на станцию.`, buttons: stationButtons(deps, state.player) },
-        nextState: { scene: 'station', player: defeatedPlayer }
-      };
+      return resolveDefeat(deps, { ...result.attacker }, result.log.join(' '), rng);
     }
   }
 
@@ -195,6 +276,21 @@ async function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null
   const log = `${telegraphLine}${result.log.concat(enemyTurn.log).join(' ')}`;
 
   if (enemyTurn.finished && enemyTurn.winner === 'attacker') {
+    if (state.npcArcCombat) {
+      const { characterId, stageId, choiceText, backScene } = state.npcArcCombat;
+      const stage = findStage(characterId, stageId);
+      const resolvedChoicesLose2 = stage ? (typeof stage.choices === 'function' ? stage.choices(enemyTurn.defender) : stage.choices) : [];
+      const choiceLose2 = resolvedChoicesLose2.find((c) => c.text === choiceText);
+      const defeatedPlayer2 = { ...enemyTurn.defender, hp: Math.round(enemyTurn.defender.hpMax * 0.5) };
+      const loseText2 = (choiceLose2 && choiceLose2.loseFlavor) || 'Бой оказался тебе не по силам — аварийная система эвакуирует тебя, прежде чем станет по-настоящему плохо.';
+      return {
+        reply: {
+          text: `💥 ${log}\n\n${loseText2}\n\nМожешь вернуться и попробовать снова, когда будешь готов.`,
+          buttons: ['⬅️ Назад'],
+        },
+        nextState: { scene: backScene || 'station', player: defeatedPlayer2 },
+      };
+    }
     if (state.curatorQuest) {
       return curatorQuestScreen(deps, { ...enemyTurn.defender, hp: Math.round(enemyTurn.defender.hpMax * 0.5) }, state.curatorQuest.questId, state.curatorQuest.loseNext);
     }
@@ -207,16 +303,7 @@ async function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null
           nextState: { scene: state.scene, player: survivedPlayer, enemy: enemyTurn.attacker, zone: state.zone, depth: state.depth, skillCooldowns: state.skillCooldowns, survivalUsedThisFight: true }
         };
       }
-      const defeatedPlayer = { ...enemyTurn.defender, hp: Math.round(enemyTurn.defender.hpMax * 0.5) };
-      const toShip = await returnFromPlanet(deps, defeatedPlayer, '');
-      if (toShip) {
-        toShip.reply.text = `💥 ${log}\n\n💀 Скафандр пробит. Аварийная капсула тянет тебя обратно к кораблю.\n\n${toShip.reply.text}`;
-        return toShip;
-      }
-      return {
-        reply: { text: `💥 ${log}\n\n💀 Скафандр пробит.`, buttons: stationButtons(deps, state.player) },
-        nextState: { scene: 'station', player: defeatedPlayer }
-      };
+      return resolveDefeat(deps, { ...enemyTurn.defender }, log, rng);
     }
   }
 
@@ -251,7 +338,7 @@ async function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null
   const cdLine = cdNote ? `\n\n${cdNote}` : '';
   return {
     reply: { text: `💥 ${log}\n\n${card}${cdLine}${trainingNote}`, buttons, imageKey: imageForEnemy(enemyTurn.attacker.name) },
-    nextState: { scene: 'combat', player: enemyTurn.defender, enemy: enemyTurn.attacker, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: result.stimUsedThisFight, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident, skillCooldowns: cooldowns }
+    nextState: { scene: 'combat', player: enemyTurn.defender, enemy: enemyTurn.attacker, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: result.stimUsedThisFight, curatorQuest: state.curatorQuest, npcArcCombat: state.npcArcCombat, sectorResident: state.sectorResident, skillCooldowns: cooldowns }
   };
 }
 
@@ -269,7 +356,7 @@ async function handleCombat(state, input, rng, deps, playerId) {
       const buttons = ['⚔️ Обычная атака', ...skillButtons(state.player, {}), 'Стим'];
       return {
         reply: { text: `${combatFullCard(state.player, state.enemy)}\n\nВыбери действие:`, buttons, imageKey: imageForEnemy(state.enemy.name) },
-        nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: false, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident, skillCooldowns: {} }
+        nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: false, curatorQuest: state.curatorQuest, npcArcCombat: state.npcArcCombat, sectorResident: state.sectorResident, skillCooldowns: {} }
       };
     }
     case SCENES.COMBAT_STIM_SELECT: {
@@ -278,7 +365,7 @@ async function handleCombat(state, input, rng, deps, playerId) {
       if (input === '⬅️ Назад') {
         return {
           reply: { text: `${combatFullCard(state.player, state.enemy)}\n\nВыбери действие:`, buttons: backButtons, imageKey: imageForEnemy(state.enemy.name) },
-          nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident, skillCooldowns: state.skillCooldowns }
+          nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest, npcArcCombat: state.npcArcCombat, sectorResident: state.sectorResident, skillCooldowns: state.skillCooldowns }
         };
       }
       const prevPlayerHp = state.player.hp;
@@ -298,7 +385,7 @@ async function handleCombat(state, input, rng, deps, playerId) {
         }
         return {
           reply: { text: 'Выбери стим:', buttons: [...stimButtons(), '⬅️ Назад'] },
-          nextState: { scene: 'combat_stim_select', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest, sectorResident: state.sectorResident, skillCooldowns: state.skillCooldowns }
+          nextState: { scene: 'combat_stim_select', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest, npcArcCombat: state.npcArcCombat, sectorResident: state.sectorResident, skillCooldowns: state.skillCooldowns }
         };
       }
       const skillId = input === '⚔️ Обычная атака' ? null : skillIdByName(input);
