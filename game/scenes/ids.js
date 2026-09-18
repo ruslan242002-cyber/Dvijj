@@ -62,6 +62,8 @@ const SCENES = Object.freeze({
   MINIGAME_SHIP_DIAGNOSTICS: 'minigame_ship_diagnostics',
   MINIGAME_POWER_CONTROL: 'minigame_power_control',
   MINIGAME_SENSOR_LAYERS: 'minigame_sensor_layers',
+  MINIGAME_ARCHIVE: 'minigame_archive',
+  MINIGAME_SECONDARY_STATUS: 'minigame_secondary_status',
   QUEST_SHYOPOT: 'quest_shyopot',
   LOC_REPAIR: 'loc_repair',
   LOC_DECON: 'loc_decon',
@@ -70,6 +72,7 @@ const SCENES = Object.freeze({
   LOC_GATES: 'loc_gates',
   LOC_GATES_TRAVEL: 'loc_gates_travel',
   WORKSHOP: 'workshop',
+  SHIPYARD: 'shipyard',
   STEALTH_EXPLORE: 'stealth_explore',
   CURATOR_QUEST: 'curator_quest',
 
