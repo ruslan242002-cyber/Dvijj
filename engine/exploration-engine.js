@@ -128,7 +128,7 @@ function rollPathEvent(rng = Math.random) {
 /** Резолвит выбор игрока на path_obstacle. squeeze_through — риск урона
  * кораблю/скафандру (не боевой урон, отдельная мелкая трата HP), scan —
  * награда ресурсом без риска, fly_around — просто теряет доп. время. */
-function resolvePathEvent(choice, rng = Math.random, playerLevel = 1) {
+function resolvePathEvent(choice, rng = Math.random, playerLevel = 1, lootMultiplier = 1) {
   if (choice === 'fly_around') return { outcome: 'delay', text: 'Обходишь стороной — путь чуть дольше, зато чисто.' };
   if (choice === 'squeeze_through') {
     const damaged = rng() < 0.35;
@@ -137,7 +137,7 @@ function resolvePathEvent(choice, rng = Math.random, playerLevel = 1) {
       : { outcome: 'clean', text: 'Протискиваешься между обломками без единой царапины.' };
   }
   if (choice === 'scan') {
-    const loot = rollLoot('blue', rng, playerLevel);
+    const loot = rollLoot('blue', rng, playerLevel, null, lootMultiplier);
     return { outcome: 'scanned', loot, text: `Скан находит кое-что полезное: ${loot.qty}x ${loot.resource} T${loot.tier}.` };
   }
   return { outcome: 'delay', text: 'Обходишь стороной.' };
@@ -155,12 +155,12 @@ function rollNodeState(rng = Math.random) {
   return weightedPick(NODE_STATE_WEIGHTS, rng);
 }
 
-function rollEvent(zone, rng = Math.random, playerLevel = null, weightsOverride = null, theme = null) {
+function rollEvent(zone, rng = Math.random, playerLevel = null, weightsOverride = null, theme = null, lootMultiplier = 1) {
   const weights = weightsOverride || ZONE_WEIGHTS[zone] || ZONE_WEIGHTS.blue;
   const type = weightedPick(weights, rng);
   switch (type) {
     case 'find': {
-      const loot = rollLoot(zone, rng, playerLevel, theme);
+      const loot = rollLoot(zone, rng, playerLevel, theme, lootMultiplier);
       return { type, loot, text: `Внутри: ${loot.qty}x ${loot.resource} T${loot.tier}, ${loot.credits} кредитов.` };
     }
     case 'ambush': {
@@ -205,7 +205,7 @@ function rollEvent(zone, rng = Math.random, playerLevel = null, weightsOverride 
       };
     }
     case 'node': {
-      const loot = rollLoot(zone, rng, playerLevel, theme);
+      const loot = rollLoot(zone, rng, playerLevel, theme, lootMultiplier);
       let charges = 1 + Math.floor(rng() * 7);
       const nodeState = rollNodeState(rng);
       if (nodeState === 'unstable') charges = Math.round(charges * 1.5);
@@ -220,7 +220,7 @@ function rollEvent(zone, rng = Math.random, playerLevel = null, weightsOverride 
       };
     }
     case 'cache':
-      return rollCacheEvent(zone, rng, playerLevel, theme);
+      return rollCacheEvent(zone, rng, playerLevel, theme, lootMultiplier);
     case 'resonance_pedestal':
       return rollResonancePedestal();
     case 'terminal_hack':
@@ -232,7 +232,7 @@ function rollEvent(zone, rng = Math.random, playerLevel = null, weightsOverride 
     case 'corrupted_ai':
       return rollCorruptedAi();
     default:
-      return { type: 'find', loot: rollLoot(zone, rng, playerLevel, theme), text: 'Пустая находка.' };
+      return { type: 'find', loot: rollLoot(zone, rng, playerLevel, theme, lootMultiplier), text: 'Пустая находка.' };
   }
 }
 
@@ -247,11 +247,11 @@ const CACHE_FLAVOR = [
   'Полуразрушенный склад — судя по маркировке, довоенный, судя по запаху — нет.',
   'Связка герметичных капсул, вмёрзших в породу. На одной из них ещё виден логотип станции, которой больше нет.',
 ];
-function rollCacheEvent(zone, rng, playerLevel, theme) {
+function rollCacheEvent(zone, rng, playerLevel, theme, lootMultiplier = 1) {
   const itemCount = 2 + Math.floor(rng() * 3); // 2-4
   const items = [];
   for (let i = 0; i < itemCount; i++) {
-    items.push(rollLoot(zone, rng, playerLevel, theme));
+    items.push(rollLoot(zone, rng, playerLevel, theme, lootMultiplier));
   }
   const flavor = CACHE_FLAVOR[Math.floor(rng() * CACHE_FLAVOR.length)];
   return { type: 'cache', items, text: flavor };
@@ -270,14 +270,14 @@ const PEDESTAL_OUTCOMES = [
 function rollResonancePedestal() {
   return { type: 'resonance_pedestal', text: 'Артефакт с шёпотом Тракта, вырезанным незнакомыми символами на поверхности. Что-то тянет коснуться его.', choices: ['touch'] };
 }
-function resolveResonancePedestal(rng = Math.random, playerLevel = 1) {
+function resolveResonancePedestal(rng = Math.random, playerLevel = 1, lootMultiplier = 1) {
   const total = PEDESTAL_OUTCOMES.reduce((s, o) => s + o.weight, 0);
   let roll = rng() * total;
   let picked = PEDESTAL_OUTCOMES[PEDESTAL_OUTCOMES.length - 1];
   for (const o of PEDESTAL_OUTCOMES) { if (roll < o.weight) { picked = o; break; } roll -= o.weight; }
   if (picked.type === 'vision') return { ...picked, xp: 15 };
   if (picked.type === 'radiation') return { ...picked, radiationGain: 8 + Math.floor(rng() * 12) };
-  if (picked.type === 'resource') return { ...picked, loot: rollLoot('red', rng, playerLevel) };
+  if (picked.type === 'resource') return { ...picked, loot: rollLoot('red', rng, playerLevel, null, lootMultiplier) };
   if (picked.type === 'reputation') return { ...picked, reputationGain: 8 };
   return picked;
 }
@@ -287,13 +287,13 @@ function resolveResonancePedestal(rng = Math.random, playerLevel = 1) {
 function rollTerminalHack() {
   return { type: 'terminal_hack', text: 'Заброшенный терминал станции, ещё держащий заряд. Экран блокировки мигает — можно попробовать взломать.', choices: ['hack', 'leave'] };
 }
-function resolveTerminalHack(choice, player, rng = Math.random, playerLevel = 1) {
+function resolveTerminalHack(choice, player, rng = Math.random, playerLevel = 1, lootMultiplier = 1) {
   if (choice === 'leave') return { outcome: 'left', text: 'Решаешь не рисковать со взломом.' };
   const mind = player?.stats?.mind || 0;
   const threshold = 20;
   if (mind < threshold) return { outcome: 'fail_low_mind', text: `Не хватает подготовки для взлома (нужно mind ${threshold}+). Терминал блокируется намертво.` };
   const success = rng() < 0.65 + Math.min(0.25, (mind - threshold) * 0.01);
-  if (success) return { outcome: 'success', loot: rollLoot('yellow', rng, playerLevel), xp: 20, text: 'Взлом проходит чисто — терминал выдаёт архивные данные и что-то материальное вместе с ними.' };
+  if (success) return { outcome: 'success', loot: rollLoot('yellow', rng, playerLevel, null, lootMultiplier), xp: 20, text: 'Взлом проходит чисто — терминал выдаёт архивные данные и что-то материальное вместе с ними.' };
   return { outcome: 'fail_alarm', enemy: generateEnemy('yellow', rng, playerLevel), text: 'Взлом срывается — терминал включает тревогу. Что-то реагирует на шум.' };
 }
 
@@ -302,14 +302,14 @@ function resolveTerminalHack(choice, player, rng = Math.random, playerLevel = 1)
 function rollEchoPlayback() {
   return { type: 'echo_playback', text: 'Обрывок голосовой записи довоенной эпохи, зацикленный и потрескивающий. Слушать дальше — рискованно, но там явно есть что дослушать.', choices: ['listen_short', 'listen_full', 'skip'] };
 }
-function resolveEchoPlayback(choice, rng = Math.random, playerLevel = 1) {
+function resolveEchoPlayback(choice, rng = Math.random, playerLevel = 1, lootMultiplier = 1) {
   if (choice === 'skip') return { outcome: 'skipped', text: 'Проходишь мимо, не дослушав.' };
   if (choice === 'listen_short') {
     return { outcome: 'short', xp: 10, text: 'Слушаешь недолго — обрывок фразы, ничего важного, зато безопасно.' };
   }
   const ambushed = rng() < 0.35;
   if (ambushed) return { outcome: 'ambushed', enemy: generateEnemy('red', rng, playerLevel), text: 'Запись обрывается на полуслове — что-то услышало её вместе с тобой.' };
-  return { outcome: 'full', loot: rollLoot('red', rng, playerLevel), xp: 25, text: 'Запись доигрывает до конца. То, что в ней сказано, стоило риска.' };
+  return { outcome: 'full', loot: rollLoot('red', rng, playerLevel, null, lootMultiplier), xp: 25, text: 'Запись доигрывает до конца. То, что в ней сказано, стоило риска.' };
 }
 
 /** Ловушка-резонанс — reaction-check. Успел среагировать — награда
@@ -317,11 +317,11 @@ function resolveEchoPlayback(choice, rng = Math.random, playerLevel = 1) {
 function rollReactionHazard() {
   return { type: 'reaction_hazard', text: 'На вид — обычный участок пути. Но что-то в воздухе едва заметно подрагивает.', choices: ['react'] };
 }
-function resolveReactionHazard(player, rng = Math.random, playerLevel = 1) {
+function resolveReactionHazard(player, rng = Math.random, playerLevel = 1, lootMultiplier = 1) {
   const reaction = player?.stats?.reaction || 0;
   const chance = Math.min(0.85, 0.35 + reaction * 0.01);
   const succeeded = rng() < chance;
-  if (succeeded) return { outcome: 'success', loot: rollLoot('red', rng, playerLevel), text: 'В последний миг успеваешь заметить неладное и вовремя отступить — а заодно находишь то, что здесь спрятала сама опасность.' };
+  if (succeeded) return { outcome: 'success', loot: rollLoot('red', rng, playerLevel, null, lootMultiplier), text: 'В последний миг успеваешь заметить неладное и вовремя отступить — а заодно находишь то, что здесь спрятала сама опасность.' };
   return { outcome: 'fail', dmg: 8 + Math.floor(rng() * 12), text: 'Не успеваешь среагировать — резонансный разряд задевает по касательной.' };
 }
 
