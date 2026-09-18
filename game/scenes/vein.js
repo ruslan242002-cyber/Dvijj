@@ -5,7 +5,7 @@ const {
   shouldSpawnBosses, spawnBosses, aliveBosses, allBossesDead,
   nextBossToJoin, distributeVeinRewards, dominantFaction,
 } = require('../../engine/resource-vein.js');
-const { resolveVeinAttack, stealVeinContribution } = require('../../engine/vein-pvp.js');
+const { resolveVeinAttack, stealVeinContribution, stealPlayerResources } = require('../../engine/vein-pvp.js');
 const { shouldTriggerRaid, markRaidTriggered } = require('../../engine/vein-raid-timer.js');
 const { createBossRound, submitPlayerAction, isRoundReady, resolveBossRound } = require('../../engine/group-boss-combat.js');
 const { generateEnemy } = require('../../engine/exploration-engine.js');
@@ -13,6 +13,20 @@ const { resolveTurn } = require('../../engine/combat-engine.js');
 const { maybeSpeak } = require('../../lib/fifth-voice.js');
 const { skillButtons, skillIdByName, addToInventory, stationButtons, hubMessage } = require('./common.js');
 const { SKILLS } = require('../../engine/skills-data.js');
+const { loseFullCargo } = require('../../lib/trip-cargo.js');
+
+// ⚠️ Тот же общий стандарт жёсткого поражения, что и в combat.js/boss.js
+// (по прямому запросу пользователя — одинаково везде).
+const EMERGENCY_POD_CHANCE = 0.12;
+function resolveVeinDefeat(player, log, rng) {
+  if (rng() < EMERGENCY_POD_CHANCE) {
+    return { text: `💥 ${log}\n\n🛟 Аварийная капсула срабатывает в последний момент — редкая удача, груз цел.`, player: { ...player, hp: Math.round(player.hpMax * 0.3) } };
+  }
+  const { lostTrip, lostInventory } = loseFullCargo(player);
+  const lostCount = lostTrip.length + lostInventory.reduce((s, i) => s + (i.qty || 0), 0);
+  const lossNote = lostCount > 0 ? ` Груз потерян (${lostCount} ед.).` : '';
+  return { text: `💥 ${log}\n\n☠️ Поражение.${lossNote} Отступаешь на станцию — едва живым.`, player: { ...player, hp: 1 } };
+}
 const { SCENES } = require('./ids.js');
 
 const TOOL_NAMES = { resonance_drill: 'Резонансный бур', vein_annihilator: 'Аннигилятор жилы' };
@@ -184,9 +198,28 @@ async function handleVein(state, input, rng, deps, playerId) {
             return v;
           });
         }
+        // ⚠️ Реальная кража ресурсов (по прямому запросу пользователя —
+        // раньше PvP-победа не давала ничего материального победителю,
+        // только абстрактный вклад в жилу выше). Берём СВЕЖЕЕ состояние
+        // жертвы из стора — не устаревший victimSnapshot, взятый в
+        // момент начала боя — и сохраняем изменённое обратно.
+        let stolenResources = [];
+        const winnerPlayer = { ...result.attacker };
+        if (deps.store) {
+          const victimState = await deps.store.get(state.victimId).catch(() => null);
+          if (victimState && victimState.player) {
+            stolenResources = stealPlayerResources(winnerPlayer, victimState.player);
+            if (stolenResources.length) {
+              await deps.store.set(state.victimId, victimState).catch(() => {});
+            }
+          }
+        }
+        const lootText = stolenResources.length
+          ? ` Добыто с побеждённого: ${stolenResources.map((r) => `${r.resource} T${r.tier} ×${r.qty}`).join(', ')}.`
+          : '';
         return {
-          reply: { text: `💥 ${result.log.join(' ')}\n\n🏆 Победа!${stolen > 0 ? ` Украдено ${stolen} ед. чужого вклада в добычу.` : ''}`, buttons: ['⬅️ Назад'] },
-          nextState: { scene: SCENES.VEIN_HUB, player: result.attacker }
+          reply: { text: `💥 ${result.log.join(' ')}\n\n🏆 Победа!${stolen > 0 ? ` Украдено ${stolen} ед. чужого вклада в добычу.` : ''}${lootText}`, buttons: ['⬅️ Назад'] },
+          nextState: { scene: SCENES.VEIN_HUB, player: winnerPlayer }
         };
       }
       if (result.attacker.hp <= 0) {
@@ -221,7 +254,8 @@ async function handleVein(state, input, rng, deps, playerId) {
         return { reply: { text: `💥 ${result.log.join(' ')}\n\n🏆 ${state.enemy.name} уничтожен. Можно вернуться к добыче.`, buttons: ['⬅️ Назад'] }, nextState: { scene: SCENES.VEIN_HUB, player } };
       }
       if (result.attacker.hp <= 0) {
-        return { reply: { text: `💥 ${result.log.join(' ')}\n\n☠️ Поражение. Отступаешь на станцию.`, buttons: stationButtons(deps, result.attacker) }, nextState: { scene: 'station', player: { ...result.attacker, hp: Math.round(result.attacker.hpMax * 0.3) } } };
+        const outcome = resolveVeinDefeat(result.attacker, result.log.join(' '), rng);
+        return { reply: { text: outcome.text, buttons: stationButtons(deps, outcome.player) }, nextState: { scene: 'station', player: outcome.player } };
       }
       return {
         reply: { text: `💥 ${result.log.join(' ')}\n\n❤️ ${result.attacker.hp}/${result.attacker.hpMax}`, buttons: ['⚔️ Атаковать', ...skillButtons(result.attacker, {})] },
@@ -297,7 +331,8 @@ async function handleVein(state, input, rng, deps, playerId) {
       }
 
       if (myFighter.hp <= 0) {
-        return { reply: { text: `💥 ${roundResult.log.join(' ')}\n\n☠️ Тебя вывело из строя. Отступаешь.`, buttons: stationButtons(deps, myFighter) }, nextState: { scene: 'station', player: { ...myFighter, hp: Math.round(myFighter.hpMax * 0.3) } } };
+        const outcome = resolveVeinDefeat(myFighter, roundResult.log.join(' '), rng);
+        return { reply: { text: outcome.text, buttons: stationButtons(deps, outcome.player) }, nextState: { scene: 'station', player: outcome.player } };
       }
 
       return {
