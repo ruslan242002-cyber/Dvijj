@@ -1,0 +1,1902 @@
+'use strict';
+
+const {
+  ROUTE_VARIANTS,
+  availableRoutesFrom,
+  nodeById,
+} = require('../../engine/tract-network.js');
+
+const { availableHiddenRoutesFrom } = require('../../engine/hidden-routes.js');
+
+const {
+  findLocationById,
+  locationsForZone,
+} = require('../../lib/named-locations.js');
+
+const {
+  rollSpaceEvent,
+} = require('../../engine/space-events.js');
+
+const {
+  shipToFighter,
+  applyFighterResultToShip,
+} = require('../../engine/ship.js');
+
+const {
+  resolveTurn,
+} = require('../../engine/combat-engine.js');
+
+const {
+  addToTripCargo,
+  bankTripCargo,
+  loseFullCargo,
+  tripCargoUnits,
+} = require('../../lib/trip-cargo.js');
+
+const {
+  combatFullCard,
+} = require('../../lib/combat-card.js');
+
+const {
+  hubMessage,
+  stationButtons,
+  addToInventory,
+  startJourney,
+} = require('./common.js');
+
+const {
+  createAmbush,
+  pickAmbusher,
+  AMBUSH_DURATION_MS,
+} = require('../../lib/ambush-registry.js');
+
+const {
+  rollTraderOffers,
+  buyFromTrader,
+} = require('../../engine/trader-encounter.js');
+
+const {
+  SCENES,
+} = require('./ids.js');
+
+const { partyAmbushReductionFor, nearbyPartyMemberCount } = require('../../engine/party-bonus.js');
+const { SHIP_SKILLS, SHIP_SKILL_BY_FACTION, shipSkillButtons, shipSkillIdByName } = require('../../engine/ship-skills.js');
+const { SHIP_EMP_DEVICE, SHIP_SENSOR } = require('../../engine/ship-equipment.js');
+const { aggregatePassiveEffects } = require('../../engine/passive-skills.js');
+
+// ⚠️ ТЕСТОВОЕ значение — 10 секунд, чтобы проверять быстро. Для
+// реального релиза увеличить (минуты, а не секунды) — тот же принцип,
+// что и TESTING_MODE в других местах проекта, явно помечено для замены.
+const EMERGENCY_HELP_WAIT_MS = 10 * 1000;
+
+// EMP-кнопка видна, только если устройство экипировано И в ЭТОМ бою ещё
+// остались заряды (state.empChargesUsed, сбрасывается заново при входе
+// в новый бой — см. ниже). Заряды НЕ переносятся между боями (по
+// документу: "ограниченный заряд — не на каждый бой").
+function empButtonFor(player, state) {
+  const deviceId = (player.shipEquipment || {}).emp;
+  const device = deviceId ? SHIP_EMP_DEVICE[deviceId] : null;
+  if (!device) return [];
+  const used = state.empChargesUsed || 0;
+  return used < device.charges ? ['⚡ EMP'] : [];
+}
+const { createStatusState, applyOverheat, hasStatus, getStatus } = require('../../engine/status/statusEngine.js');
+
+const FUEL_BASE_COST = 8;
+
+const HOME_NODE_BY_FACTION = {
+  Приют: 'priyut',
+  Вуаль: 'vual',
+  Терминус: 'terminus',
+  Арсенал: 'arsenal',
+  Кузница: 'kuznitsa',
+};
+
+const CITY_NODE_IDS = new Set([
+  'priyut',
+  'vual',
+  'terminus',
+  'arsenal',
+  'kuznitsa',
+]);
+
+/*
+ * Старые ID Тракта и canonical ID named-locations.
+ * Не создаём новый справочник локаций — только связываем
+ * уже существующие системы.
+ */
+const LOCATION_NODE_ALIASES = {
+  kovcheg9: 'kovcheg9',
+  sputnik_tishiny: 'tishina',
+  tishina: 'tishina',
+  prichal_pervogo: 'prichal_pervogo',
+
+  razlom_kaylara: 'razlom_kaylara',
+  pustosh_tabira: 'pustosh_tabira',
+
+  tanvir: 'perimetr_tanvir',
+  perimetr_tanvir: 'perimetr_tanvir',
+
+  yarmarka_tenej: 'yarmarka_tenej',
+  nekropol_ksarn: 'nekropol_ksarn',
+  bezdna_orrin: 'bezdna_orrin',
+  kuznya_zabytyh: 'kuznya_zabytyh',
+  kladbische_flota: 'kladbische_flota',
+  poligon_arsenala: 'poligon_arsenala',
+};
+
+function currentNodeId(player) {
+  return (
+    player.currentNodeId ||
+    HOME_NODE_BY_FACTION[player.faction] ||
+    'priyut'
+  );
+}
+
+function fuelCostForVariant(variant) {
+  return Math.round(
+    FUEL_BASE_COST * variant.fuelMult
+  );
+}
+
+function riskEmoji(riskLabel) {
+  if (riskLabel === 'red') return '🔴';
+  if (riskLabel === 'yellow') return '🟡';
+  return '🟢';
+}
+
+function resolveNamedLocation(nodeId) {
+  const canonicalId =
+    LOCATION_NODE_ALIASES[nodeId] || nodeId;
+
+  return findLocationById(canonicalId);
+}
+
+function isCityNode(nodeId) {
+  return CITY_NODE_IDS.has(nodeId);
+}
+
+function isPlanetaryLocation(nodeId) {
+  return Boolean(
+    resolveNamedLocation(nodeId)
+  );
+}
+
+function resolveLocationZone(location) {
+  if (!location) {
+    return 'yellow';
+  }
+
+  for (const zone of [
+    'blue',
+    'yellow',
+    'red',
+  ]) {
+    const locations =
+      locationsForZone(zone);
+
+    if (
+      locations.some(
+        (item) =>
+          item.id === location.id
+      )
+    ) {
+      return zone;
+    }
+  }
+
+  return 'yellow';
+}
+
+/*
+ * ВАЖНО:
+ * Это НЕ готовое состояние для exploration.
+ * Это описание места, из которого после подтверждения
+ * высадки создаётся нормальный JOURNEY через startJourney().
+ */
+// Картинки посадки на конкретную именную локацию (lib/named-locations.js
+// id) — есть только для части локаций, где реально есть готовые кадры.
+// У остальных просто нет imageKey, ничего не ломается.
+const LANDING_IMAGE_BY_LOCATION = {
+  kovcheg9: 'locations/IMG_5512.jpeg',
+  prichal_pervogo: 'locations/IMG_5514.jpeg',
+};
+const DEPARTURE_IMAGE_BY_LOCATION = {
+  kovcheg9: 'locations/IMG_5513.jpeg',
+  prichal_pervogo: 'locations/IMG_5515.jpeg',
+};
+
+function buildJourneyContext(
+  player,
+  destinationNodeId
+) {
+  const location =
+    resolveNamedLocation(
+      destinationNodeId
+    );
+
+  const zone =
+    resolveLocationZone(
+      location
+    );
+
+  return {
+    player,
+    currentNodeId:
+      destinationNodeId,
+    planetaryNodeId:
+      destinationNodeId,
+    locationId:
+      location?.id || null,
+    locationTheme:
+      location?.theme || null,
+    locationName:
+      location?.name ||
+      nodeById(destinationNodeId)?.name ||
+      destinationNodeId,
+    locationBlurb:
+      location?.blurb || null,
+    locationDetail:
+      location?.detail || null,
+    zone,
+  };
+}
+
+/*
+ * Создаёт именно тот JOURNEY, который принимает
+ * exploration.js:
+ *
+ * scene
+ * player
+ * kind
+ * payload
+ * stepsLeft
+ *
+ * startJourney уже является существующим общим
+ * механизмом common.js, поэтому второй генератор
+ * путешествия здесь не создаём.
+ */
+function startPlanetExploration(
+  player,
+  destinationNodeId,
+  rng
+) {
+  const context =
+    buildJourneyContext(
+      player,
+      destinationNodeId
+    );
+
+  const journey =
+    startJourney(
+      player,
+      'explore',
+      {
+        zone:
+          context.zone,
+
+        depth: 0,
+
+        locationId:
+          context.locationId,
+
+        locationNodeId:
+          destinationNodeId,
+
+        locationTheme:
+          context.locationTheme,
+
+        locationName:
+          context.locationName,
+      },
+      rng
+    );
+
+  return {
+    ...journey,
+
+    nextState: {
+      ...journey.nextState,
+
+      /*
+       * Эти поля не используются самим
+       * exploration-engine, но позволяют сохранить
+       * конкретное место высадки между шагами.
+       */
+      currentNodeId:
+        destinationNodeId,
+
+      planetaryNodeId:
+        destinationNodeId,
+
+      locationId:
+        context.locationId,
+
+      locationTheme:
+        context.locationTheme,
+
+      locationName:
+        context.locationName,
+
+      locationBlurb:
+        context.locationBlurb,
+
+      locationDetail:
+        context.locationDetail,
+
+      fromTract: true,
+
+      pendingShipDistance:
+        destinationNodeId,
+    },
+  };
+}
+
+async function travelScreen(
+  deps,
+  player,
+  prefixText = ''
+) {
+  const nodeId =
+    currentNodeId(player);
+
+  const node =
+    nodeById(nodeId);
+
+  const activeTracts =
+    deps.tractStore
+      ? await deps.tractStore
+          .getActiveTracts()
+      : [];
+
+  const routes =
+    availableRoutesFrom(
+      nodeId,
+      activeTracts
+    );
+
+  const hiddenRoutes =
+    availableHiddenRoutesFrom(
+      nodeId,
+      player
+    );
+
+  const cargo =
+    tripCargoUnits(player);
+
+  if (!routes.length) {
+    return {
+      reply: {
+        text:
+          `${prefixText}` +
+          `📍 ${node?.name || nodeId}\n` +
+          `⛽ Топливо: ${player.ship.fuel}/${player.ship.fuelMax}\n` +
+          `📦 Несданный груз: ${cargo} ед.\n\n` +
+          `Отсюда сейчас нет доступных маршрутов.`,
+
+        buttons: [
+          '⬅️ Назад',
+        ],
+      },
+
+      nextState: {
+        scene:
+          SCENES.SHIP_TRAVEL,
+
+        player,
+      },
+    };
+  }
+
+  const byDestination = {};
+
+  for (const route of routes) {
+    if (!byDestination[route.to]) {
+      byDestination[route.to] = [];
+    }
+
+    byDestination[route.to].push(
+      route
+    );
+  }
+
+  const lines =
+    Object.entries(
+      byDestination
+    ).map(
+      ([toId, variants]) => {
+        const toNode =
+          nodeById(toId);
+
+        const location =
+          resolveNamedLocation(toId);
+
+        const icons =
+          variants
+            .map((variant) =>
+              riskEmoji(
+                variant.riskLabel
+              )
+            )
+            .join('');
+
+        const typeLabel =
+          isCityNode(toId)
+            ? '🏙️'
+            : location
+              ? '🪐'
+              : '📍';
+
+        return (
+          `${typeLabel} ${icons} ` +
+          `${
+            location?.name ||
+            toNode?.name ||
+            toId
+          }`
+        );
+      }
+    );
+
+  const buttons =
+    Object.keys(
+      byDestination
+    ).map((toId) => {
+      const location =
+        resolveNamedLocation(toId);
+
+      const node =
+        nodeById(toId);
+
+      return (
+        `→ ${
+          location?.name ||
+          node?.name ||
+          toId
+        }`
+      );
+    });
+
+  const hiddenRouteButtons =
+    hiddenRoutes.map((r) => r.label);
+
+  const hiddenRouteLines =
+    hiddenRoutes.map((r) =>
+      `${r.label} — ${r.description}`
+    );
+
+  buttons.push(
+    ...hiddenRouteButtons,
+    '🕳️ Засада',
+    '⬅️ Назад'
+  );
+
+  return {
+    reply: {
+      text:
+        `${prefixText}` +
+        `📍 ${node?.name || nodeId}\n` +
+        `⛽ Топливо: ${player.ship.fuel}/${player.ship.fuelMax}\n` +
+        `📦 Несданный груз: ${cargo} ед.\n\n` +
+        `🗺️ Доступные направления:\n` +
+        lines.join('\n') +
+        (hiddenRouteLines.length ? `\n\n🌫️ Скрытые маршруты:\n${hiddenRouteLines.join('\n')}` : ''),
+
+      buttons,
+    },
+
+    nextState: {
+      scene:
+        SCENES.SHIP_TRAVEL,
+
+      player,
+
+      availableRoutes:
+        routes,
+
+      hiddenRoutes,
+    },
+  };
+}
+
+function variantPickScreen(
+  player,
+  routesToDestination,
+  destinationName
+) {
+  const buttons =
+    routesToDestination.map(
+      (route) => {
+        const variant =
+          Object.values(
+            ROUTE_VARIANTS
+          ).find(
+            (item) =>
+              item.id ===
+              route.variant
+          );
+
+        if (!variant) {
+          return '⚠️ Неизвестный маршрут';
+        }
+
+        const label =
+          route.variant ===
+          'dangerous'
+            ? 'Опасный'
+            : route.variant ===
+                'safe'
+              ? 'Безопасный'
+              : 'Обычный';
+
+        return (
+          `${riskEmoji(
+            route.riskLabel
+          )} ${label} ` +
+          `(⛽${fuelCostForVariant(
+            variant
+          )})`
+        );
+      }
+    );
+
+  buttons.push(
+    '⬅️ Назад'
+  );
+
+  return {
+    reply: {
+      text:
+        `Маршрут до «${destinationName}» — выбери вариант:\n` +
+        `🔴 опасный — быстро, PvP разрешён\n` +
+        `🟡 обычный — баланс\n` +
+        `🟢 безопасный — медленнее, без PvP`,
+
+      buttons,
+    },
+
+    nextState: {
+      scene:
+        SCENES.SHIP_TRAVEL,
+
+      player,
+
+      pendingRoutes:
+        routesToDestination,
+    },
+  };
+}
+
+function travelToDestination(
+  deps,
+  player,
+  destinationNodeId,
+  prefixText = ''
+) {
+  player.currentNodeId =
+    destinationNodeId;
+
+  const { banked } =
+    bankTripCargo(player);
+
+  const node =
+    nodeById(destinationNodeId);
+
+  const location =
+    resolveNamedLocation(
+      destinationNodeId
+    );
+
+  if (destinationNodeId === 'volny_port') {
+    // Не город ни формально, ни по stationButtons() — отдельный хаб со
+    // своими 6 районами (game/scenes/locations/volny-port.js).
+    const { volnyPortHub } = require('./locations/volny-port.js');
+    return volnyPortHub(player, `${prefixText}🛰️ Прибытие: Вольный Порт.${banked.length ? '\n📦 Груз сдан.' : ''}\n\n`);
+  }
+
+  if (
+    isCityNode(
+      destinationNodeId
+    )
+  ) {
+    // ⚠️ БАГ-ФИКС: раньше прибытие в ЛЮБОЙ город (включая чужой) просто
+    // ставило scene:'station' с тем же player, НИКОГДА не выставляя
+    // player.visitingStation — currentStation(player)/game/scenes/common.js
+    // существовал только для СТАРОЙ линейной системы (gates.js, теперь
+    // скрыта из меню), у новой системы Трактов не было своей точки
+    // включения гостевого режима вообще. Из-за этого мои более ранние
+    // фиксы (cantina.js/npc.js/repair.js на currentStation) были
+    // технически верны, но не имели эффекта — флаг никогда не
+    // выставлялся. Теперь: город чужой фракции — гость, свой — очищаем
+    // (на случай, если флаг остался от прошлого визита в другое место).
+    const arrivedFactionName = node?.name || null;
+    const isForeignCity =
+      arrivedFactionName &&
+      arrivedFactionName !== player.faction;
+
+    if (isForeignCity) {
+      player.visitingStation = arrivedFactionName;
+    } else {
+      delete player.visitingStation;
+    }
+
+    return {
+      reply: {
+        text:
+          `${prefixText}` +
+          `🛰️ Прибытие на станцию: ${
+            node?.name ||
+            destinationNodeId
+          }.` +
+          (
+            banked.length
+              ? '\n📦 Груз сдан.'
+              : ''
+          ),
+
+        buttons:
+          stationButtons(
+            deps,
+            player
+          ),
+      },
+
+      nextState: {
+        scene:
+          SCENES.STATION,
+
+        player,
+      },
+    };
+  }
+
+  if (location) {
+    const context =
+      buildJourneyContext(
+        player,
+        destinationNodeId
+      );
+
+    return {
+      reply: {
+        text:
+          `${prefixText}` +
+          `🛰️ Прибытие к локации:\n` +
+          `🪐 ${location.name}\n\n` +
+          `${location.blurb || ''}\n\n` +
+          `Можно высаживаться.` +
+          (
+            banked.length
+              ? '\n📦 Груз сдан.'
+              : ''
+          ),
+
+        buttons: [
+          '🪐 Высадиться',
+          '🚀 Остаться на корабле',
+        ],
+      },
+
+      nextState: {
+        scene:
+          SCENES.SHIP_TRAVEL,
+
+        player,
+
+        currentNodeId:
+          destinationNodeId,
+
+        planetaryNodeId:
+          destinationNodeId,
+
+        locationId:
+          context.locationId,
+
+        locationTheme:
+          context.locationTheme,
+
+        locationName:
+          context.locationName,
+
+        locationBlurb:
+          context.locationBlurb,
+
+        locationDetail:
+          context.locationDetail,
+
+        zone:
+          context.zone,
+
+        landingReady:
+          true,
+
+        pendingShipDistance:
+          destinationNodeId,
+      },
+    };
+  }
+
+  if (
+    node?.type ===
+    'location'
+  ) {
+    return {
+      reply: {
+        text:
+          `${prefixText}` +
+          `🛰️ Прибытие к локации:\n` +
+          `📍 ${node.name}\n\n` +
+          `Локация ещё не связана с каталогом именованных мест.`,
+
+        buttons: [
+          '🪐 Высадиться',
+          '🚀 Остаться на корабле',
+        ],
+      },
+
+      nextState: {
+        scene:
+          SCENES.SHIP_TRAVEL,
+
+        player,
+
+        currentNodeId:
+          destinationNodeId,
+
+        planetaryNodeId:
+          destinationNodeId,
+
+        landingReady:
+          true,
+
+        pendingShipDistance:
+          destinationNodeId,
+      },
+    };
+  }
+
+  return {
+    reply: {
+      text:
+        `${prefixText}` +
+        `🛰️ Прибытие: ${
+          node?.name ||
+          destinationNodeId
+        }.`,
+
+      buttons:
+        stationButtons(
+          deps,
+          player
+        ),
+    },
+
+    nextState: {
+      scene:
+        SCENES.STATION,
+
+      player,
+    },
+  };
+}
+
+async function resolveTransit(
+  deps,
+  player,
+  route,
+  rng
+) {
+  const variant =
+    Object.values(
+      ROUTE_VARIANTS
+    ).find(
+      (item) =>
+        item.id ===
+        route.variant
+    );
+
+  if (!variant) {
+    return travelScreen(
+      deps,
+      player,
+      '⚠️ Неизвестный вариант Тракта.\n\n'
+    );
+  }
+
+  const baseFuelCost =
+    fuelCostForVariant(
+      variant
+    );
+  // ⚠️ QA-НАХОДКА: fuelDiscount от пассивок — несмотря на название,
+  // это ПЛОСКОЕ число (-1/-2/-3 за шаг, см. fuel_efficiency ранги в
+  // passive-skills.js), НЕ процент — проверил семантику перед тем как
+  // писать формулу (тот же урок, что и с radiationReduction раньше).
+  // Пол в 1 — маршрут никогда не становится полностью бесплатным.
+  const fuelDiscount = aggregatePassiveEffects(player.equippedPassives || []).fuelDiscount || 0;
+  const fuelCost = Math.max(1, baseFuelCost - fuelDiscount);
+
+  if (
+    player.ship.fuel <
+    fuelCost
+  ) {
+    // ⚠️ БАГ-ФИКС: раньше здесь был честный тупик — "Назад" вёл на тот
+    // же список маршрутов, все из которых требуют топлива, которого
+    // нет. Игрок физически не мог сдвинуться с места. Теперь —
+    // "Вызвать помощь" с реальным таймером (проверяется по настоящему
+    // Date.now(), не имитация): EMERGENCY_HELP_WAIT_MS сейчас 10 секунд
+    // для тестирования, для реального релиза стоит увеличить.
+    return {
+      reply: {
+        text:
+          '⛽ Не хватает топлива, чтобы продолжить путь.',
+
+        buttons: [
+          '🆘 Вызвать помощь',
+          '⬅️ Назад',
+        ],
+      },
+
+      nextState: {
+        scene:
+          SCENES.SHIP_TRAVEL,
+
+        player,
+      },
+    };
+  }
+
+  player.ship.fuel -=
+    fuelCost;
+
+  if (
+    variant.pvpAllowed &&
+    deps.ambushStore
+  ) {
+    const activeAmbushes =
+      await deps.ambushStore
+        .listActiveAmbushes();
+
+    const ambusher =
+      pickAmbusher(
+        route.to,
+        activeAmbushes,
+        player.id,
+        rng
+      );
+
+    if (
+      ambusher &&
+      ambusher.shipSnapshot
+    ) {
+      const partyReductionPct = await partyAmbushReductionFor(deps, player, player.id);
+      // ⚠️ Сенсор (engine/ship-equipment.js) — складывается с партийным
+      // бонусом, не заменяет его. SHIP_SENSOR.ambushAvoidBonusPct —
+      // дробь(0.15=15%), партийный бонус уже в целых процентных
+      // пунктах — приводим к общей единице.
+      const sensorId = (player.shipEquipment || {}).sensor;
+      const sensor = sensorId ? SHIP_SENSOR[sensorId] : null;
+      const sensorBonusPct = sensor ? sensor.ambushAvoidBonusPct * 100 : 0;
+      const ambushReductionPct = partyReductionPct + sensorBonusPct;
+      if (ambushReductionPct > 0 && rng() < ambushReductionPct / 100) {
+        return travelToDestination(deps, player, route.to, `👀 ${sensor ? 'Дальний сканер замечает засаду заранее' : 'Товарищи по пати замечают засаду заранее'} — обходите её стороной.\n\n`);
+      }
+      const enemy =
+        shipToFighter(
+          ambusher.shipSnapshot,
+          ambusher.playerName ||
+            'Неизвестный корабль'
+        );
+
+      return {
+        reply: {
+          text:
+            `⚠️ На подлёте к «${
+              resolveNamedLocation(
+                route.to
+              )?.name ||
+              nodeById(
+                route.to
+              )?.name ||
+              route.to
+            }» обнаружен вражеский корабль.`,
+
+          buttons: [
+            '⚔️ Атаковать',
+            '🏃 Уйти',
+          ],
+        },
+
+        nextState: {
+          scene:
+            SCENES.SHIP_PRE_COMBAT,
+
+          player,
+
+          destinationNodeId:
+            route.to,
+
+          enemy,
+
+          ambusherPlayerId:
+            ambusher.playerId,
+        },
+      };
+    }
+  }
+
+  let wreckageNote = '';
+
+  if (deps.wreckageStore) {
+    const wreck =
+      await deps.wreckageStore
+        .claimWreckage(
+          route.to
+        )
+        .catch(
+          () => null
+        );
+
+    if (wreck) {
+      for (
+        const item of
+        wreck.cargo || []
+      ) {
+        addToInventory(
+          player,
+          item.resource,
+          item.tier,
+          item.qty
+        );
+      }
+
+      wreckageNote =
+        '📡 Обломки: груз найден.\n\n';
+    }
+  }
+
+  const pseudoDistance =
+    variant.id ===
+    'dangerous'
+      ? 8
+      : variant.id ===
+          'safe'
+        ? 2
+        : 5;
+
+  const event =
+    variant.pvpAllowed
+      ? rollSpaceEvent(
+          player,
+          pseudoDistance,
+          rng,
+          null
+        )
+      : {
+          type:
+            'empty_space',
+
+          text:
+            'Безопасный маршрут прошёл спокойно.',
+        };
+
+  if (
+    event.type ===
+    'hostile_ship'
+  ) {
+    const nearbyPartyCount = await nearbyPartyMemberCount(deps, player, player.id);
+    const preCombatButtons = ['⚔️ Атаковать'];
+    if (nearbyPartyCount > 0) preCombatButtons.push('🤝 Позвать пати');
+    preCombatButtons.push('🏃 Уйти');
+    return {
+      reply: {
+        text:
+          `${wreckageNote}${event.text}`,
+
+        buttons: preCombatButtons,
+      },
+
+      nextState: {
+        scene:
+          SCENES.SHIP_PRE_COMBAT,
+
+        player,
+
+        destinationNodeId:
+          route.to,
+
+        enemy:
+          event.enemy,
+      },
+    };
+  }
+
+  if (rng() < 0.12) {
+    const offers =
+      rollTraderOffers(rng);
+
+    return {
+      reply: {
+        text:
+          `${wreckageNote}` +
+          `🧑‍🚀 Встречный торговец:\n\n` +
+          offers
+            .map(
+              (offer) =>
+                `${offer.resource} T${offer.tier} ×${offer.qty} — 💳${offer.price}`
+            )
+            .join('\n'),
+
+        buttons: [
+          ...offers.map(
+            (offer) =>
+              `Купить: ${offer.resource} T${offer.tier}`
+          ),
+          '🚫 Отказаться',
+        ],
+      },
+
+      nextState: {
+        scene:
+          SCENES.SHIP_TRADER,
+
+        player,
+
+        destinationNodeId:
+          route.to,
+
+        offers,
+      },
+    };
+  }
+
+  if (
+    event.type ===
+      'derelict_wreck' ||
+    event.type ===
+      'asteroid_field'
+  ) {
+    if (
+      event.loot?.resource
+    ) {
+      addToTripCargo(
+        player,
+        event.loot.resource,
+        event.loot.tier,
+        event.loot.qty
+      );
+    }
+
+    if (
+      event.loot?.credits
+    ) {
+      player.credits =
+        (player.credits || 0) +
+        event.loot.credits;
+    }
+  }
+
+  return travelToDestination(
+    deps,
+    player,
+    route.to,
+    `${wreckageNote}${
+      event.text
+        ? `${event.text}\n\n`
+        : ''
+    }`
+  );
+}
+
+async function handleTravel(
+  state,
+  input,
+  rng,
+  deps,
+  playerId
+) {
+  const player =
+    state?.player;
+
+  if (!player) {
+    return null;
+  }
+
+  if (playerId) {
+    player.id =
+      playerId;
+  }
+
+  /*
+   * Игрок подтверждает высадку.
+   *
+   * ВАЖНО: после этого мы НЕ оставляем state.scene=JOURNEY
+   * вручную. Сначала показываем подтверждение высадки,
+   * а JOURNEY создаётся только кнопкой «Начать исследование».
+   */
+  if (
+    state.landingReady &&
+    input ===
+      '🪐 Высадиться'
+  ) {
+    const context =
+      buildJourneyContext(
+        player,
+        state.planetaryNodeId ||
+          state.currentNodeId
+      );
+
+    return {
+      reply: {
+        text:
+          `🪐 Ты высаживаешься на «${context.locationName}».\n\n` +
+          `${
+            context.locationDetail ||
+            context.locationBlurb ||
+            'Поверхность незнакомой локации встречает тебя тишиной.'
+          }`,
+
+        buttons: [
+          '➡️ Начать исследование',
+        ],
+
+        imageKey:
+          LANDING_IMAGE_BY_LOCATION[
+            context.locationId
+          ],
+      },
+
+      nextState: {
+        scene:
+          SCENES.SHIP_TRAVEL,
+
+        player,
+
+        currentNodeId:
+          state.currentNodeId,
+
+        planetaryNodeId:
+          state.planetaryNodeId,
+
+        locationId:
+          context.locationId,
+
+        locationTheme:
+          context.locationTheme,
+
+        locationName:
+          context.locationName,
+
+        locationBlurb:
+          context.locationBlurb,
+
+        locationDetail:
+          context.locationDetail,
+
+        zone:
+          context.zone,
+
+        landingReady:
+          false,
+
+        landed:
+          true,
+
+        pendingShipDistance:
+          state.pendingShipDistance ||
+          state.planetaryNodeId ||
+          state.currentNodeId,
+      },
+    };
+  }
+
+  /*
+   * Теперь начинается настоящая вылазка.
+   *
+   * Здесь используется существующий startJourney()
+   * из common.js. Именно он формирует корректный:
+   *
+   * scene: journey
+   * kind: explore
+   * payload
+   * stepsLeft
+   */
+  if (
+    state.landed &&
+    input ===
+      '➡️ Начать исследование'
+  ) {
+    return startPlanetExploration(
+      player,
+      state.planetaryNodeId ||
+        state.currentNodeId,
+      rng
+    );
+  }
+
+  if (
+    state.landingReady &&
+    input ===
+      '🚀 Остаться на корабле'
+  ) {
+    return travelScreen(
+      deps,
+      player
+    );
+  }
+
+  if (
+    state.scene ===
+    SCENES.SHIP_TRAVEL
+  ) {
+    if (input === '🆘 Вызвать помощь') {
+      player.emergencyCallStartedAt = Date.now();
+      return {
+        reply: {
+          text: '📡 Сигнал бедствия отправлен. Ближайший буксир уже в пути — жди.',
+          buttons: ['🔄 Проверить'],
+        },
+        nextState: { scene: SCENES.SHIP_TRAVEL, player },
+      };
+    }
+
+    if (input === '🔄 Проверить') {
+      const startedAt = player.emergencyCallStartedAt;
+      if (!startedAt || Date.now() - startedAt < EMERGENCY_HELP_WAIT_MS) {
+        const secondsLeft = startedAt ? Math.ceil((EMERGENCY_HELP_WAIT_MS - (Date.now() - startedAt)) / 1000) : '?';
+        return {
+          reply: {
+            text: `📡 Буксир ещё в пути. Осталось примерно ${secondsLeft} сек.`,
+            buttons: ['🔄 Проверить'],
+          },
+          nextState: { scene: SCENES.SHIP_TRAVEL, player },
+        };
+      }
+
+      // Помощь прибыла — восстанавливаем ровно столько топлива, чтобы
+      // можно было доехать хотя бы одним "Опасным" (самым дешёвым)
+      // маршрутом отсюда, не полный бак — это аварийная помощь, не
+      // бесплатная заправка.
+      delete player.emergencyCallStartedAt;
+      const cheapestFuel = fuelCostForVariant(ROUTE_VARIANTS.DANGEROUS);
+      player.ship.fuel = Math.max(player.ship.fuel, cheapestFuel);
+      return travelScreen(deps, player, '📡 Буксир прибыл, перелил немного топлива — этого хватит, чтобы добраться куда-то отсюда.\n\n');
+    }
+
+    if (
+      input ===
+      '⬅️ Назад'
+    ) {
+      if (
+        state.pendingRoutes
+      ) {
+        return travelScreen(
+          deps,
+          player
+        );
+      }
+
+      // ⚠️ БАГ-ФИКС: раньше "Назад" ВСЕГДА вёл в scene:'station' с
+      // домашней станцией игрока (hubMessage/stationButtons), даже если
+      // игрок физически стоит у ЛОКАЦИИ (не города) — currentStation()
+      // там откатывается на player.faction, т.к. visitingStation
+      // выставляется только при прибытии в ГОРОД. Гость на локации типа
+      // Причала Первого Прибытия видел меню своей домашней станции,
+      // хотя рядом никакой станции нет вообще. Теперь: в город — только
+      // если РЕАЛЬНО стоишь у города, иначе просто заново показываем
+      // тот же экран путешествия (некуда больше "возвращаться").
+      if (
+        isCityNode(
+          player.currentNodeId
+        )
+      ) {
+        return {
+          reply: {
+            text:
+              hubMessage(player),
+
+            buttons:
+              stationButtons(
+                deps,
+                player
+              ),
+          },
+
+          nextState: {
+            scene:
+              SCENES.STATION,
+
+            player,
+          },
+        };
+      }
+
+      return travelScreen(
+        deps,
+        player
+      );
+    }
+
+    if (
+      state.pendingRoutes
+    ) {
+      const labels = {
+        Опасный:
+          'dangerous',
+        Обычный:
+          'normal',
+        Безопасный:
+          'safe',
+      };
+
+      const match =
+        /^(?:🔴|🟡|🟢)\s+(Опасный|Обычный|Безопасный)/u.exec(
+          input
+        );
+
+      if (!match) {
+        return variantPickScreen(
+          player,
+          state.pendingRoutes,
+          ''
+        );
+      }
+
+      const route =
+        state.pendingRoutes.find(
+          (item) =>
+            item.variant ===
+            labels[match[1]]
+        );
+
+      if (!route) {
+        return variantPickScreen(
+          player,
+          state.pendingRoutes,
+          ''
+        );
+      }
+
+      return resolveTransit(
+        deps,
+        player,
+        route,
+        rng
+      );
+    }
+
+    if (
+      input ===
+      '🕳️ Засада'
+    ) {
+      if (
+        !deps.ambushStore ||
+        !player.id
+      ) {
+        return travelScreen(
+          deps,
+          player
+        );
+      }
+
+      const ambush =
+        createAmbush(
+          player.id,
+          currentNodeId(player),
+          {
+            shipSnapshot: {
+              ...player.ship,
+            },
+
+            playerName:
+              player.name,
+          }
+        );
+
+      await deps.ambushStore
+        .addAmbush(
+          ambush
+        );
+
+      return travelScreen(
+        deps,
+        player,
+        `🕳️ Засада активна ${Math.round(
+          AMBUSH_DURATION_MS / 60000
+        )} мин.\n\n`
+      );
+    }
+
+    const hiddenRoute =
+      (state.hiddenRoutes || []).find(
+        (r) => r.label === input
+      );
+
+    if (hiddenRoute) {
+      // Скрытый маршрут — всегда по параметрам "Опасный" варианта
+      // (риск уже заложен в саму идею короткого пути), плюс бонус
+      // кредитов сразу за сам факт короткого пути (rewardMultiplier из
+      // engine/hidden-routes.js) — независимо от того, что случится по
+      // дороге (resolveTransit ниже обрабатывает путь как обычно, тем
+      // же кодом, что и всегда, — не отдельная система).
+      const dangerVariant =
+        ROUTE_VARIANTS.DANGEROUS;
+
+      const syntheticRoute = {
+        id: hiddenRoute.id,
+        from: hiddenRoute.from,
+        to: hiddenRoute.to,
+        variant: dangerVariant.id,
+        speedMult: dangerVariant.speedMult,
+        fuelMult: dangerVariant.fuelMult,
+        pvpAllowed: dangerVariant.pvpAllowed,
+        riskLabel: dangerVariant.riskLabel,
+      };
+
+      const shortcutBonus =
+        Math.round(
+          80 * hiddenRoute.rewardMultiplier
+        );
+      player.credits =
+        (player.credits || 0) +
+        shortcutBonus;
+
+      return resolveTransit(
+        deps,
+        player,
+        syntheticRoute,
+        rng
+      );
+    }
+
+    const destination =
+      input.replace(
+        /^→\s+/,
+        ''
+      );
+
+    const routes =
+      state.availableRoutes ||
+      [];
+
+    const matchingRoutes =
+      routes.filter(
+        (route) => {
+          const location =
+            resolveNamedLocation(
+              route.to
+            );
+
+          const node =
+            nodeById(route.to);
+
+          return (
+            location?.name ===
+              destination ||
+            node?.name ===
+              destination
+          );
+        }
+      );
+
+    if (
+      matchingRoutes.length
+    ) {
+      const name =
+        resolveNamedLocation(
+          matchingRoutes[0].to
+        )?.name ||
+        nodeById(
+          matchingRoutes[0].to
+        )?.name ||
+        destination;
+
+      return variantPickScreen(
+        player,
+        matchingRoutes,
+        name
+      );
+    }
+
+    return travelScreen(
+      deps,
+      player
+    );
+  }
+
+  if (
+    state.scene ===
+    SCENES.SHIP_TRADER
+  ) {
+    if (
+      input ===
+      '🚫 Отказаться'
+    ) {
+      return travelToDestination(
+        deps,
+        player,
+        state.destinationNodeId
+      );
+    }
+
+    const match =
+      /^Купить:\s+(.+)\s+T(\d+)$/u.exec(
+        input
+      );
+
+    if (match) {
+      const result =
+        buyFromTrader(
+          player,
+          state.offers,
+          match[1],
+          Number(match[2])
+        );
+
+      if (
+        result.success
+      ) {
+        addToTripCargo(
+          player,
+          result.offer.resource,
+          result.offer.tier,
+          result.offer.qty
+        );
+
+        return travelToDestination(
+          deps,
+          player,
+          state.destinationNodeId,
+          'Сделка заключена.\n\n'
+        );
+      }
+    }
+
+    return {
+      reply: {
+        text:
+          'Выбери предложение.',
+
+        buttons: [
+          ...state.offers.map(
+            (offer) =>
+              `Купить: ${offer.resource} T${offer.tier}`
+          ),
+          '🚫 Отказаться',
+        ],
+      },
+
+      nextState:
+        state,
+    };
+  }
+
+  if (
+    state.scene ===
+    SCENES.SHIP_PRE_COMBAT
+  ) {
+    if (
+      input ===
+        '🏃 Уйти' &&
+      rng() < 0.6
+    ) {
+      return travelScreen(
+        deps,
+        player,
+        '🏃 Удалось уйти от боя.\n\n'
+      );
+    }
+
+    if (input === '🤝 Позвать пати' && deps.partyStore && deps.partyCombatStore) {
+      const party = await deps.partyStore.getPartyForPlayer(player.id);
+      if (party) {
+        const enemyFighter = { ...state.enemy, hp: state.enemy.hp || state.enemy.hpMax, hpMax: state.enemy.hpMax };
+        const { startPartyCombatWithEnemy } = require('./party-combat.js');
+        return startPartyCombatWithEnemy(deps, player, player.id, party.id, enemyFighter, `🤝 Зовёшь пати на помощь!\n\n`);
+      }
+    }
+
+    const equippedShipSkillId = SHIP_SKILL_BY_FACTION[player.faction];
+    const skillButtons = shipSkillButtons(equippedShipSkillId ? [equippedShipSkillId] : [], player.shipSkillCooldowns || {});
+
+    return {
+      reply: {
+        text:
+          combatFullCard(
+            shipToFighter(
+              player.ship,
+              'Твой корабль',
+              null,
+              player
+            ),
+            state.enemy
+          ),
+
+        buttons: [
+          '⚔️ Атаковать',
+          ...skillButtons,
+          ...empButtonFor(player, state),
+          '🏃 Уйти',
+        ],
+      },
+
+      nextState: {
+        scene:
+          SCENES.SHIP_COMBAT,
+
+        player,
+
+        enemy:
+          state.enemy,
+
+        destinationNodeId:
+          state.destinationNodeId,
+
+        ambusherPlayerId:
+          state.ambusherPlayerId,
+
+        shipSkillCooldowns: player.shipSkillCooldowns || {},
+      },
+    };
+  }
+
+  if (
+    state.scene ===
+    SCENES.SHIP_COMBAT
+  ) {
+    if (input === '⚡ EMP') {
+      const deviceId = (player.shipEquipment || {}).emp;
+      const device = deviceId ? SHIP_EMP_DEVICE[deviceId] : null;
+      const used = state.empChargesUsed || 0;
+      if (!device || used >= device.charges) {
+        // Кнопка не должна была показаться в этом случае — просто
+        // игнорируем некорректный клик, ничего не меняя.
+        input = '⚔️ Атаковать';
+      } else {
+
+      const enemy = { ...state.enemy };
+      const empDamage = 8; // "почти не наносит физического урона" — прямая цитата документа
+      enemy.hp = Math.max(0, enemy.hp - empDamage);
+
+      if (enemy.hp <= 0) {
+        return travelToDestination(deps, player, state.destinationNodeId, '⚡ EMP добивает цель.\n\n');
+      }
+
+      const overheatNote2 = hasStatus(player.statusState || createStatusState(), 'overheat')
+        ? `\n🔥 Перегрев: ${getStatus(player.statusState, 'overheat').intensity}%`
+        : '';
+      const equippedShipSkillIdEmp = SHIP_SKILL_BY_FACTION[player.faction];
+      const skillButtonsEmp = shipSkillButtons(equippedShipSkillIdEmp ? [equippedShipSkillIdEmp] : [], player.shipSkillCooldowns || {});
+
+      return {
+        reply: {
+          text:
+            `⚡ Импульсный деструктор бьёт по системам цели — минимум урона, зато на ${device.disableDurationTurns} хода её системы отключены.\n\n` +
+            combatFullCard(shipToFighter(player.ship, 'Твой корабль', null, player), enemy) + overheatNote2,
+          buttons: ['⚔️ Атаковать', ...skillButtonsEmp, ...empButtonFor(player, { empChargesUsed: used + 1 }), '🏃 Уйти'],
+        },
+        nextState: {
+          scene: SCENES.SHIP_COMBAT,
+          player,
+          enemy,
+          destinationNodeId: state.destinationNodeId,
+          shipSkillCooldowns: player.shipSkillCooldowns,
+          ambusherPlayerId: state.ambusherPlayerId,
+          empChargesUsed: used + 1,
+          enemyDisabledTurns: device.disableDurationTurns,
+        },
+      };
+      }
+    }
+
+    // ⚠️ БАГ-ФИКС (найден QA-аудитом): раньше ЛЮБОЙ нераспознанный ввод
+    // в SHIP_COMBAT тихо трактовался как "⚔️ Атаковать" — если у игрока
+    // на экране осталась случайная старая кнопка (например, персонажа,
+    // из-за особенностей клиента ВК), клик по ней МОЛЧА бил противника
+    // вместо честной ошибки. Обычный combat.js эту проверку УЖЕ имел
+    // (см. handleCombat выше по коду) — SHIP_COMBAT её не имел, теперь
+    // тот же принцип здесь. Проверяем ДО расхода патронов — иначе
+    // случайный клик ещё и патрон бы тратил впустую.
+    const isRecognizedShipInput =
+      input === '⚔️ Атаковать' ||
+      shipSkillIdByName(input) != null;
+    if (!isRecognizedShipInput) {
+      const equippedShipSkillIdInvalid = SHIP_SKILL_BY_FACTION[player.faction];
+      const invalidInputButtons = shipSkillButtons(equippedShipSkillIdInvalid ? [equippedShipSkillIdInvalid] : [], player.shipSkillCooldowns || {});
+      return {
+        reply: {
+          text: 'Команда не распознана — выбери действие кнопкой ниже.',
+          buttons: ['⚔️ Атаковать', ...invalidInputButtons, ...empButtonFor(player, state), '🏃 Уйти'],
+        },
+        nextState: state,
+      };
+    }
+
+    const attacker =
+      shipToFighter(
+        player.ship,
+        'Твой корабль',
+        null,
+        player
+      );
+
+    // Патроны расходуются по выстрелу — сразу после того, как их бонус
+    // уже учтён в shipToFighter() выше (через aggregateShipEquipmentEffects),
+    // не раньше — иначе бонус не применился бы к ЭТОМУ же выстрелу.
+    require('../../engine/ship-equipment.js').consumeShipAmmo(player);
+
+    const defender =
+      state.enemy;
+
+    const cooldowns = state.shipSkillCooldowns || {};
+    const usedSkillId = input === '⚔️ Атаковать' ? null : shipSkillIdByName(input);
+    const skill = usedSkillId && !(cooldowns[usedSkillId] > 0) ? SHIP_SKILLS[usedSkillId] : null;
+
+    let statusState = player.statusState || createStatusState();
+    if (skill) {
+      cooldowns[usedSkillId] = skill.cd;
+      statusState = applyOverheat(statusState, { intensity: 15, duration: 4 });
+    }
+    player.statusState = statusState;
+
+    const result =
+      resolveTurn({
+        attacker,
+        defender,
+        skill,
+        rng,
+        pvpMode:
+          Boolean(
+            state.ambusherPlayerId
+          ),
+      });
+
+    applyFighterResultToShip(
+      player.ship,
+      result.attacker,
+      rng
+    );
+    player.shipSkillCooldowns = Object.fromEntries(Object.entries(cooldowns).map(([id, cd]) => [id, Math.max(0, cd - (id === usedSkillId ? 0 : 1))]));
+
+    if (
+      result.defender.hp <=
+      0
+    ) {
+      return travelToDestination(
+        deps,
+        player,
+        state.destinationNodeId,
+        '⚔️ Бой завершён.\n\n'
+      );
+    }
+
+    const disabledTurnsLeft = state.enemyDisabledTurns || 0;
+    // ⚡ EMP-эффект — цель "отключена" на N ходов (см. ветку input==='⚡ EMP'
+    // выше): ответный удар просто не происходит, вместо resolveTurn с
+    // реальным боем — фейковый нулевой результат с честным логом.
+    const enemyTurn = disabledTurnsLeft > 0
+      ? { log: ['Системы цели всё ещё отключены — ответного удара нет.'], defender: attacker, attacker: defender }
+      : resolveTurn({
+          attacker:
+            defender,
+
+          defender:
+            attacker,
+
+          rng,
+
+          pvpMode:
+            Boolean(
+              state.ambusherPlayerId
+            ),
+        });
+
+    applyFighterResultToShip(
+      player.ship,
+      enemyTurn.defender,
+      rng
+    );
+
+    if (
+      enemyTurn.defender.hp <=
+      0
+    ) {
+      loseFullCargo(
+        player
+      );
+
+      player.ship.hp =
+        Math.max(
+          1,
+          Math.round(
+            player.ship.hpMax *
+              0.2
+          )
+        );
+
+      return {
+        reply: {
+          text:
+            `💥 Корабль потерял бой.\n` +
+            `Спасательная капсула доставила тебя на станцию.`,
+
+          buttons:
+            stationButtons(
+              deps,
+              player
+            ),
+        },
+
+        nextState: {
+          scene:
+            SCENES.STATION,
+
+          player,
+        },
+      };
+    }
+
+    const equippedShipSkillId2 = SHIP_SKILL_BY_FACTION[player.faction];
+    const nextSkillButtons = shipSkillButtons(equippedShipSkillId2 ? [equippedShipSkillId2] : [], player.shipSkillCooldowns || {});
+    const overheatNote = hasStatus(statusState, 'overheat') ? `\n🔥 Перегрев: ${getStatus(statusState, 'overheat').intensity}%` : '';
+
+    return {
+      reply: {
+        text:
+          `${result.log.join(' ')}\n` +
+          `${enemyTurn.log.join(' ')}\n\n` +
+          combatFullCard(
+            shipToFighter(
+              player.ship,
+              'Твой корабль',
+              null,
+              player
+            ),
+            defender
+          ) + overheatNote,
+
+        buttons: [
+          '⚔️ Атаковать',
+          ...nextSkillButtons,
+          ...empButtonFor(player, state),
+          '🏃 Уйти',
+        ],
+      },
+
+      nextState: {
+        scene:
+          SCENES.SHIP_COMBAT,
+
+        player,
+
+        enemy:
+          defender,
+
+        destinationNodeId:
+          state.destinationNodeId,
+
+        ambusherPlayerId:
+          state.ambusherPlayerId,
+
+        shipSkillCooldowns: player.shipSkillCooldowns || {},
+
+        empChargesUsed: state.empChargesUsed || 0,
+        enemyDisabledTurns: Math.max(0, disabledTurnsLeft - 1),
+      },
+    };
+  }
+
+  return null;
+}
+
+module.exports = {
+  handleTravel,
+  travelScreen,
+  currentNodeId,
+  isCityNode,
+  isPlanetaryLocation,
+  resolveNamedLocation,
+  buildJourneyContext,
+  startPlanetExploration,
+  HOME_NODE_BY_FACTION,
+  DEPARTURE_IMAGE_BY_LOCATION,
+};
