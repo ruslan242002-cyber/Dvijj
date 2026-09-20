@@ -29,7 +29,7 @@ const anyClaimable = player.contracts.list.some((c) => c.completed && !player.co
 return {
 reply: {
 text: ` КОНТРАКТЫ КУРАТОРА\n Репутация: ${player.reputation || 0} (${title})\n\n${lines.join('\n')}`,
-buttons: anyClaimable ? ['Забрать награды', ' Назад'] : [' Назад']
+buttons: anyClaimable ? ['Забрать награды', '⬅️ Назад'] : ['⬅️ Назад']
 },
 nextState: { scene: 'contracts', player }
 };
@@ -45,15 +45,15 @@ const arc = getArcForFaction(player.faction);
 const arcQuest = arc ? getNextAvailableQuest(player, arc) : null;
 if (quests.length === 0 && !arcQuest) {
 return {
-reply: { text: ` БАР\n\n${greeting ? `${greeting}\n\n` : ''}Куратору сейчас нечего тебе предложить.`, buttons: [' Назад'], imageKey: imageForCurator(player.faction) },
+reply: { text: ` БАР\n\n${greeting ? `${greeting}\n\n` : ''}Куратору сейчас нечего тебе предложить.`, buttons: ['⬅️ Назад'], imageKey: imageForCurator(player.faction) },
 nextState: { scene: 'loc_cantina', player }
 };
 }
 const lines = quests.map((q, i) => `${i + 1}. «${q.title}» — ${describeObjective(q.objective)} (${progressText(player, q.objective)})`);
 if (arcQuest) lines.push(` Куратор ${CURATORS[player.faction] || ''} хочет поговорить лично: «${arcQuest.name}»`);
 const shardCount = (player.bestiaryItems || []).filter((id) => id === 'oskolok_bezdny').length;
-const abyssButtons = shardCount > 0 ? [' Осколок Бездны'] : [];
-const buttons = [...quests.map((q) => q.title), ...(arcQuest ? [` ${arcQuest.name}`] : []), ...abyssButtons, ' Назад'];
+const abyssButtons = shardCount > 0 ? ['💠 Осколок Бездны'] : [];
+const buttons = [...quests.map((q) => q.title), ...(arcQuest ? [` ${arcQuest.name}`] : []), ...abyssButtons, '⬅️ Назад'];
 return {
 reply: { text: ` БАР\n\n${greeting ? `${greeting}\n\n` : ''}Доступные задания куратора:\n${lines.join('\n')}`, buttons, imageKey: imageForCurator(player.faction) },
 nextState: { scene: 'loc_cantina', player }
@@ -62,15 +62,15 @@ nextState: { scene: 'loc_cantina', player }
 function handleCantina(state, input, rng, deps) {
 switch (state.scene) {
 case SCENES.LOC_CANTINA: {
-if (input === ' Назад') {
+if (input === '⬅️ Назад') {
 return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
 }
-if (input === ' Осколок Бездны') {
+if (input === '💠 Осколок Бездны') {
 const shardIdx = (state.player.bestiaryItems || []).indexOf('oskolok_bezdny');
 if (shardIdx === -1) return cantinaBoard(state.player);
 if ((state.player.level || 1) < 60) {
 return {
-reply: { text: ' Кто-то за дальним столом качает головой, глядя на осколок в твоей руке: «Рано ещё. Организм не выдержит того, что это с тобой сделает — сначала научись жить с тем, что есть» (нужен 60 уровень).', buttons: [' Назад'] },
+reply: { text: ' Кто-то за дальним столом качает головой, глядя на осколок в твоей руке: «Рано ещё. Организм не выдержит того, что это с тобой сделает — сначала научись жить с тем, что есть» (нужен 60 уровень).', buttons: ['⬅️ Назад'] },
 nextState: { scene: 'loc_cantina', player: state.player }
 };
 }
@@ -111,7 +111,7 @@ if (!objectiveMet(state.player, quest.objective)) {
 return {
 reply: {
 text: `Ещё не готово: ${describeObjective(quest.objective)} — сейчас ${progressText(state.player, quest.objective)}. Возвращайся, когда выполнишь.`,
-buttons: [' Назад']
+buttons: ['⬅️ Назад']
 },
 nextState: { scene: 'loc_cantina', player: state.player }
 };
@@ -139,7 +139,7 @@ rewardText += `\n\n Гипотеза «Предательство» подтве
 return { reply: { text: rewardText, buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player } };
 }
 case SCENES.CONTRACTS: {
-if (input === ' Назад') {
+if (input === '⬅️ Назад') {
 return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
 }
 if (input === 'Забрать награды') {
@@ -155,7 +155,7 @@ if (res.success) { totalCredits += res.reward.credits; totalRep += res.reward.re
 const text = claimableIds.length
 ? `Получено: ${totalCredits} кредитов, +${totalRep} репутации.`
 : 'Нечего забирать — сначала выполни хотя бы один контракт.';
-return { reply: { text, buttons: [' Назад'] }, nextState: { scene: 'contracts', player } };
+return { reply: { text, buttons: ['⬅️ Назад'] }, nextState: { scene: 'contracts', player } };
 }
 return contractsBoard({ ...state.player });
 }
