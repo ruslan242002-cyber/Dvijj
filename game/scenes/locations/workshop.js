@@ -95,7 +95,7 @@ else buttons.push(` ${a.name}`);
 }
 for (const r of craftable) buttons.push(` ${r.name}`);
 for (const r of craftableGear) buttons.push(` ${r.name}`);
-buttons.push(' Назад');
+buttons.push('⬅️ Назад');
 return {
 reply: { text: `${prefixText} МАСТЕРСКАЯ\n\n${sections.join('\n\n') || 'Пока пусто — скрафти первый предмет.'}`, buttons, imageKey: imageForLocation('repair', player.faction) },
 nextState: { scene: SCENES.WORKSHOP, player }
@@ -103,7 +103,7 @@ nextState: { scene: SCENES.WORKSHOP, player }
 }
 function handleWorkshop(state, input, rng, deps) {
 if (state.scene !== SCENES.WORKSHOP) return null;
-if (input === ' Назад') {
+if (input === '⬅️ Назад') {
 return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
 }
 const findModuleByName = (name) => RECIPES.find((r) => r.name === name);
