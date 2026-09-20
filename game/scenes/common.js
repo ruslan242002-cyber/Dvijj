@@ -1,283 +1,1769 @@
 'use strict';
 
-const { findBoss, allBossIds } = require('../../bosses/boss-data.js');
-const { spawnBossInstance, resolvePlayerVsBoss, distributeRewards, shouldSpawnBoss } = require('../../bosses/boss-engine.js');
+/**
+ * ОБЩИЕ ДАННЫЕ И ХЕЛПЕРЫ, используемые больше чем одним модулем сцен.
+ * Вынесено из router.js как часть рефакторинга на отдельные сцены
+ * (game/scenes/*.js) — раньше всё это жило в одном файле на 1500+ строк.
+ */
+
+const { xpToNext } = require('../../engine/leveling.js');
+const { RECIPES } = require('../../crafting/crafting-engine.js');
+const { GEAR_RECIPES } = require('../../engine/gear-engine.js');
+const { SYSTEM_REPAIR_MATERIAL } = require('../../engine/ship-systems.js');
+const { explorationStatusCard } = require('../../lib/status-card.js');
 const { SKILLS } = require('../../engine/skills-data.js');
-const { hubMessage, stationButtons, skillButtons, skillIdByName, skillCooldownNote } = require('./common.js');
-const { startCooldown, tickCooldowns } = require('../../engine/cooldowns.js');
-const { checkAchievements } = require('../../lib/achievements.js');
-const { grantXp } = require('../../engine/leveling.js');
-const { activeGuildBonuses } = require('../../guilds/guild-levels.js');
-const { logWorldEvent } = require('../../lib/world-feed.js');
-const { logEconomyEvent, EVENT_TYPES } = require('../../lib/economy-audit.js');
-const { notifyPlayer } = require('../../lib/notifications.js');
-const { SCENES } = require('./ids.js');
-const { BOSS_IMAGE_MANIFEST } = require('../../engine/travel-images/boss-image-manifest.js');
-const { formatBossStatusCard } = require('../../lib/boss-status-card.js');
-const { rollBossGearDrop, grantGearDrop, rarityName } = require('../../engine/gear-engine.js');
-const { aggregatePassiveEffects } = require('../../engine/passive-skills.js');
-const { loseFullCargo } = require('../../lib/trip-cargo.js');
+const { getDailyContracts, getReputationTitle } = require('../../contracts/contracts-engine.js');
+const { getDistrictAtmosphere } = require('../../city/city-engine.js');
+const { DISTRICTS } = require('../../city/districts-data.js');
+const { rollStationEvent } = require('../../city/station-events.js');
+const { trophyProgressText } = require('../../lib/trophies.js');
+const { stormStatusText, isStormActive, STORM_REWARD_MULTIPLIER } = require('../../lib/world-storm.js');
+const { NODES } = require('../../engine/tract-network.js');
+const { applyDerivedStats } = require('../../engine/derived-stats.js');
+const { SHIP_SKILL_BY_FACTION } = require('../../engine/ship-skills.js');
 
-// ⚠️ Тот же общий стандарт жёсткого поражения, что и в combat.js (по
-// прямому запросу пользователя — одинаково везде). Отдельная копия
-// константы (не импорт из combat.js — тот модуль не экспортирует её,
-// и незачем тянуть combat.js целиком сюда только ради одного числа).
-const EMERGENCY_POD_CHANCE = 0.12;
-
-// Тема именной локации (lib/named-locations.js) -> id боссов, которые
-// там водятся (engine/world-bosses/boss-data.js:location). Несколько
-// боссов на одну тему — при встрече выбирается случайный среди них.
-// Кузня Забытых (industrial), Кладбище Флота (wreckage), Некрополь Ксарн
-// (ruins) и Бездна Оррин (abyss) — все 4 красные локации; Ярмарка Теней
-// (smuggle) — единственная жёлтая, поэтому и босс там послабже.
-const BOSS_LOCATION_THEMES = {
-  abyss: ['guardian_unnamed_horizons', 'abyss_firstborn'],
-  ruins: ['ksarn_praxid', 'ksarn_memorist', 'ksarn_echo_keeper'],
-  industrial: ['forge_archon', 'oblivion_engineer'],
-  wreckage: ['echo_destroyer', 'void_keeper', 'vexar_chronofallen'],
-  smuggle: ['shadow_auctioneer'],
+const DANGER_LABEL = {
+  low: 'низкая',
+  medium: 'средняя',
+  high: 'высокая',
 };
 
-// Небольшой шанс на каждом шаге вылазки по подходящей локации — не
-// гарантия при каждом визите (иначе локация превратится в "комнату
-// босса", а не место с шансом на редкую опасную встречу).
-const BOSS_ENCOUNTER_CHANCE = 0.06;
+/**
+ * Карточка станции при заходе на хаб — картинка (см. imageForLocation
+ * ('station', faction) в hub.js) + описание в духе "Вы находитесь на
+ * станции: X", плюс редкое случайное событие станции (station-events.js)
+ * простым текстом внизу, если повезло сработать.
+ *
+ * Возвращает { text, reward } — reward нужно применить к игроку в hub.js
+ * (эта функция сама player не мутирует, только читает).
+ */
+function stationArrivalCard(player, rng = Math.random) {
+  // ⚠️ БАГ-ФИКС: раньше player.faction напрямую (домашняя фракция, не
+  // место, где игрок реально сейчас). При гостевом визите на чужую
+  // станцию (player.visitingStation) это показывало данные родной
+  // станции — "все локации сливались в одну". hubMessage() рядом уже
+  // делал через currentStation() правильно, здесь забыли так же.
+  const station = currentStation(player);
+  const district = DISTRICTS[station];
+  const curator = CURATORS[station] || 'куратор станции';
+  const atmosphere = getDistrictAtmosphere(station);
+  const dangerLabel = district
+    ? (DANGER_LABEL[district.danger] || district.danger)
+    : '—';
 
-/** Вызывать из exploration.js на каждый шаг вылазки (после броска
- * обычного события) — если тема локации подходит и шанс сработал,
- * возвращает bossId для встречи, иначе null. Не трогает bossStore —
- * только решает, "срабатывает" ли сама встреча. */
-function rollBossEncounter(locationTheme, rng = Math.random) {
-  const candidates = BOSS_LOCATION_THEMES[locationTheme];
-  if (!candidates || !candidates.length) return null;
-  if (rng() >= BOSS_ENCOUNTER_CHANCE) return null;
-  return candidates[Math.floor(rng() * candidates.length)];
-}
+  let text =
+    `📍 Вы находитесь на станции: ${station}\n` +
+    `Куратор: ${curator}\n` +
+    `Опасность станции: ${dangerLabel}`;
 
-/** Экран встречи с конкретным именным боссом — загружает существующий
- * активный инстанс (если кто-то уже начал бой) или спавнит новый (если
- * прошёл кулдаун респавна). imageKey подхватывается автоматически уже
- * существующим механизмом (vk/photo-cache.js через deps.resolveEnemyImage,
- * см. vk/webhook-handler.js) — здесь только нужно его правильно указать. */
-async function bossEncounterScreen(deps, player, playerId, bossId, prefixText = '') {
-  const boss = findBoss(bossId);
-  if (!boss || !deps.bossStore) return null;
+  if (district) {
+    text += `\n\n${district.description}`;
+  }
 
-  let instance = await deps.bossStore.getActiveBoss(bossId);
-  if (!instance || instance.defeated) {
-    const lastDefeatedAt = (await deps.bossStore.getLastDefeatedAt(bossId)) || 0;
-    if (!shouldSpawnBoss(bossId, lastDefeatedAt)) return null;
-    instance = spawnBossInstance(bossId);
-    await deps.bossStore.saveBoss(instance, bossId);
+  if (atmosphere) {
+    text += `\n\n${atmosphere.time}`;
+  }
+
+  if (isStormActive()) {
+    text += `\n\n${stormStatusText()}`;
+  }
+
+  const event =
+    district
+      ? rollStationEvent(
+          district.events,
+          rng
+        )
+      : null;
+
+  if (event) {
+    text += `\n\n${event.text}`;
   }
 
   return {
-    reply: {
-      text: `${prefixText}${formatBossStatusCard(boss, instance)}`,
-      buttons: ['⚔️ Атаковать', '🏃 Уйти'],
-      imageKey: BOSS_IMAGE_MANIFEST[bossId]?.file,
+    text,
+    reward: event?.reward || null,
+  };
+}
+
+const FACTIONS = [
+  'Приют',
+  'Терминус',
+  'Арсенал',
+  'Вуаль',
+  'Кузница',
+];
+
+/** Расписание открытия городов по уровню */
+const CITY_UNLOCK_LEVEL = {
+  Арсенал: 5,
+  Вуаль: 10,
+  Терминус: 15,
+  Кузница: 20,
+};
+
+const {
+  unlockedSkillsForPlayer,
+} = require('../../engine/skills-data.js');
+
+const {
+  freshShip,
+} = require('../../engine/ship.js');
+
+/**
+ * КОМБАТ-БОНУСЫ ФРАКЦИЙ
+ */
+const FACTION_KIT = {
+  Приют: {
+    statBias: {
+      mind: 6,
+      endurance: 4,
     },
-    nextState: { scene: SCENES.BOSS_HUB, player, activeBossId: bossId },
-  };
-}
+  },
 
+  Терминус: {
+    statBias: {
+      endurance: 8,
+      power: 2,
+    },
+  },
 
-const BOSS_SLOT = 'default';
-// Раньше — единственный ACTIVE_BOSS_ID='test_colossus'. Теперь 11 реальных
-// боссов (bosses/boss-data.js — адаптер над engine/world-bosses/), у
-// каждого СВОЙ таймер респавна (bossId используется как slot-ключ в
-// bossStore вместо общего 'default' — getLastDefeatedAt/setLastDefeatedAt
-// уже принимают произвольный slot, ничего менять в сторе не пришлось).
+  Арсенал: {
+    statBias: {
+      power: 6,
+      firepowerBonus: 4,
+    },
+  },
 
-/** Выбирает случайного среди боссов, чей персональный таймер респавна уже
- *  истёк. Если ни один не готов — возвращает null и ближайшее время
- *  ожидания (для текста "никто не потревожил Периферию"). */
-async function pickReadyBoss(deps) {
-  const ready = [];
-  let soonestHoursLeft = Infinity;
-  for (const bossId of allBossIds()) {
-    const boss = findBoss(bossId);
-    const lastDefeated = await deps.bossStore.getLastDefeatedAt(bossId);
-    if (shouldSpawnBoss(bossId, lastDefeated)) {
-      ready.push(bossId);
-    } else if (boss.respawnMinHours < 999999) {
-      const hoursLeft = Math.max(0, boss.respawnMinHours - (Date.now() - lastDefeated) / 3600000);
-      soonestHoursLeft = Math.min(soonestHoursLeft, hoursLeft);
-    }
-  }
-  if (!ready.length) return { bossId: null, soonestHoursLeft: soonestHoursLeft === Infinity ? null : Math.round(soonestHoursLeft) };
-  return { bossId: ready[Math.floor(Math.random() * ready.length)], soonestHoursLeft: null };
-}
+  Вуаль: {
+    statBias: {
+      mind: 6,
+      reaction: 4,
+    },
+  },
 
-/** Гильдейский бонус к урону по мировому боссу (3-й уровень гильд-
- *  апгрейда) — читается здесь явно и передаётся в resolvePlayerVsBoss,
- *  сам движок босса не знает о гильдиях (тот же принцип, что feeDiscount
- *  в market-engine.js). Деградирует тихо, если гильдии/deps.guildStore
- *  нет — 0% бонуса, бой всё равно работает. */
-async function guildDamageBonusFor(deps, player) {
-  if (!player.guildId || !deps.guildStore) return 0;
-  const guildLevel = await deps.guildStore.getGuildUpgradeLevel(player.guildId);
-  return activeGuildBonuses(guildLevel).worldBossDamagePct;
-}
+  Кузница: {
+    statBias: {
+      endurance: 6,
+      power: 6,
+    },
+  },
+};
 
-async function bossHub(deps, player, playerId, prefixText = '') {
-  // ВАЖНО: 11 именных боссов (engine/world-bosses/) НЕ показываются здесь.
-  // По уточнению — они "обычные враги, но в разы сильнее", встречаются НА
-  // СВОЕЙ ЛОКАЦИИ (см. boss.location в engine/world-bosses/boss-data.js),
-  // не через центральную кнопку станции. Настоящий "мировой босс" —
-  // отдельная механика через лайки/посты сообщества ВК, ещё не построена.
-  // Раньше здесь была ротация среди всех 11 — убрана по прямому указанию.
+const MAX_EQUIPPED_SKILLS = 3;
+const RESET_COMMAND = 'Сброс';
+
+const HUB_BUTTONS = [
+  'Исследовать',
+  'Мостик',
+  'Отсек',
+  'Декон-камера',
+  'Бар',
+  'Контракты',
+  'Биржа',
+  'Дуэль',
+  'Жильё',
+  'Врата Тракта',
+  '📊 Статус',
+  'Профиль',
+  'Сброс',
+];
+
+const ZONE_BUTTONS = [
+  'Патрулируемый',
+  'Спорный',
+  'Открытый космос',
+  'К другим станциям',
+  '⬅️ Назад',
+];
+
+const ZONE_BY_LABEL = {
+  Патрулируемый: 'blue',
+  Спорный: 'yellow',
+  'Открытый космос': 'red',
+};
+
+const ZONE_LABEL = {
+  blue: 'Патрулируемый сектор',
+  yellow: 'Спорный сектор',
+  red: 'Открытый космос',
+};
+
+const MIN_LEVEL_FOR_ZONE = {
+  blue: 1,
+  yellow: 3,
+  red: 7,
+};
+
+const CURATORS = {
+  Приют: 'Ирис Вейл',
+  Терминус: 'Шёпот',
+  Арсенал: 'Рен Окса',
+  Вуаль: 'Дрого Кейн',
+  Кузница: 'Марта Ковач',
+};
+
+const ZONE_TRAVEL_PHRASES = {
+  blue: [
+    'Патрульный дрон станции лениво сканирует твой позывной и отворачивается — путь свободен.',
+    'Знакомый гул генераторов станции затихает за спиной.',
+    'Курс проложен, приборы спокойны — сектор патрулируемый.',
+    'Мимо проплывает разметочный буй — граница патрулируемой зоны, всё как обычно.',
+    'Скафандр чуть скрипит на стыках — привычный звук, ничего тревожного.',
+    'Диспетчер станции коротко подтверждает курс и переключается на следующего.',
+    'Здесь спокойно настолько, что мысли сами уходят куда-то в сторону.',
+    'Знакомые созвездия за иллюминатором — этот участок ты уже видел(а) не раз.',
+  ],
+
+  yellow: [
+    'Датчик радиации тихо щёлкает — пока в пределах нормы, но чаще, чем час назад.',
+    'Обрывок чужих переговоров на общей частоте — сектор явно оспаривается.',
+    'Обломки чужого корабля проплывают мимо — здесь недавно был бой.',
+    'Приборы дважды теряют и находят сигнал станции — связь здесь уже не такая надёжная.',
+    'На периферии сканера — что-то похожее на брошенный маяк, отключённый и молчаливый.',
+    'Воздух в кабине как будто гуще — или просто нервы, сложно сказать наверняка.',
+    'Чей-то незнакомый позывной мелькает в эфире и пропадает, не дождавшись ответа.',
+    'Разметка сектора здесь старая, местами выцветшая — граница спорной территории.',
+  ],
+
+  red: [
+    'Здесь эхо Тракта не в приборах — оно в голове.',
+    'Связь со станцией слабеет с каждой секундой.',
+    'Приборы фиксируют резонанс, для которого нет описания в базе.',
+    'Тишина здесь неправильная — слишком плотная, будто сам космос затаил дыхание.',
+    'На периферии зрения что-то движется — оборачиваешься, и там пусто.',
+    'Датчики то и дело сходят с ума, показывая невозможные значения и тут же сбрасываясь.',
+    'Свет далёких звёзд здесь как будто чуть тусклее обычного.',
+    'Ощущение, что за тобой наблюдают, не проходит с самого входа в сектор.',
+  ],
+};
+
+const STATION_TRAVEL_PHRASES = [
+  'Тракт прокладывает курс между станциями — недолго, но не мгновенно.',
+  'Обломки давно потерянных ковчегов мелькают за бортом.',
+  'Резонанс Тракта на секунду искажает показания приборов — обычное дело для прыжка.',
+  'Станция назначения уже видна вдалеке — почти на месте.',
+  'Корабль мягко потряхивает на границе течений Тракта — пассажиры бы такое не одобрили.',
+  'Автопилот коротко мигает индикатором коррекции курса и снова затихает.',
+  'За бортом проносится вереница чужих маячков — оживлённый межстанционный коридор.',
+  'Двигатели гудят ровнее обычного — редкий спокойный перелёт.',
+];
+
+function trainerDrone() {
   return {
-    reply: { text: `${prefixText}👹 МИРОВОЙ БОСС\n\nЭта механика ещё не запущена — появление мирового босса будет связано с активностью сообщества «Периферии» в ВК. Сильные противники сейчас встречаются на своих локациях в открытом космосе.`, buttons: ['⬅️ Назад'] },
-    nextState: { scene: 'station', player }
+    name: 'Дрон-манекен',
+    tier: 0,
+    hp: 100,
+    hpMax: 100,
+    stats: {
+      power: 8,
+      mind: 8,
+      reaction: 8,
+      endurance: 10,
+      firepower: 10,
+      shielding: 5,
+    },
+    luck: 0,
+    accuracy: 0.5,
+    dodge: 0.05,
+    focus: 0.4,
+    periodic: [],
   };
 }
 
+const MIN_LEVEL_TO_JOIN_FACTION = 30;
 
-async function handleBoss(state, input, rng, deps, playerId) {
-  if (state.scene === SCENES.BOSS_HUB) {
-    if (input === '⬅️ Назад') {
-      return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player) }, nextState: { scene: 'station', player: state.player } };
-    }
-    if (input === '⚔️ Атаковать') {
-      const instance = await deps.bossStore.getActiveBoss(state.activeBossId);
-      if (!instance || instance.defeated) return bossHub(deps, state.player, playerId, 'Босс уже недоступен.\n\n');
-      const buttons = ['⚔️ Обычная атака', ...skillButtons(state.player, state.bossCooldowns || {}), '🏃 Уйти'];
-      return { reply: { text: 'Выбери действие:', buttons }, nextState: { scene: SCENES.BOSS_COMBAT, player: state.player, bossCooldowns: state.bossCooldowns || {}, activeBossId: state.activeBossId } };
-    }
-    return bossHub(deps, state.player, playerId);
-  }
-
-  if (state.scene === SCENES.BOSS_COMBAT) {
-    if (input === '🏃 Уйти') {
-      const instance = await deps.bossStore.getActiveBoss(state.activeBossId);
-      const boss = instance ? findBoss(instance.bossId) : null;
-      // Переменный шанс — база 40%, растёт с reaction игрока (та же
-      // характеристика, что уже отвечает за уклонение/скорость реакции
-      // в остальном бою), падает с уровнем угрозы босса. Никогда не 0 и
-      // не 100% — побег должен оставаться решением с риском, не гарантией.
-      const reactionBonus = (state.player.stats?.reaction || 0) / 200; // 200 reaction -> +100%, реалистично даёт единицы-десятки %
-      const threatPenalty = { 'ЛЕГКО': 0, 'СРЕДНИЙ': 0.05, 'ВЫСОКИЙ': 0.1, 'СЛОЖНО': 0.15, 'ВЫСОЧАЙШИЙ': 0.2 }[boss?.threatLevel] || 0.1;
-      const escapeChance = Math.max(0.1, Math.min(0.9, 0.4 + reactionBonus - threatPenalty));
-      if (rng() < escapeChance) {
-        return bossHub(deps, state.player, playerId, '🏃 Манёвр удался — отрываешься от боя без потерь.\n\n');
-      }
-      return {
-        reply: { text: `🏃 Не получилось оторваться — ${boss?.name || 'противник'} остаётся на хвосте, бой продолжается.`, buttons: ['⚔️ Обычная атака', ...skillButtons(state.player, state.bossCooldowns || {}), '🏃 Уйти'] },
-        nextState: { scene: SCENES.BOSS_COMBAT, player: state.player, bossCooldowns: state.bossCooldowns || {}, activeBossId: state.activeBossId }
-      };
-    }
-    const skillId = input === '⚔️ Обычная атака' ? null : skillIdByName(input);
-    const skill = skillId ? SKILLS[skillId] : null;
-    if (input !== '⚔️ Обычная атака' && !skill) {
-      const buttons = ['⚔️ Обычная атака', ...skillButtons(state.player, state.bossCooldowns || {}), '🏃 Уйти'];
-      return { reply: { text: 'Выбери действие кнопкой ниже.', buttons }, nextState: state };
-    }
-
-    const instance = await deps.bossStore.getActiveBoss(state.activeBossId);
-    if (!instance || instance.defeated) return bossHub(deps, state.player, playerId, 'Босс уже недоступен.\n\n');
-
-    const guildBonusPct = await guildDamageBonusFor(deps, state.player);
-    // ⚠️ Уникальный эффект мифического оружия (Нихрон-резонатор) —
-    // легендарное оружие должно ощущаться особенным именно против
-    // легендарных угроз, не просто быть числом покрупнее. Тот же
-    // процентный механизм, что уже используется для гильдейского
-    // бонуса (bosses/boss-engine.js:resolvePlayerVsBoss) — не строим
-    // отдельную систему уникальных эффектов предметов.
-    const mythicWeaponBonus = state.player.equippedGear?.weapon === 'weapon_mythic' ? 20 : 0;
-    const result = resolvePlayerVsBoss(instance, state.player, playerId, skill, rng, guildBonusPct + mythicWeaponBonus);
-    if (result.error) return bossHub(deps, state.player, playerId);
-
-    const cooldownsAfterUse = skillId ? startCooldown(state.bossCooldowns || {}, skillId, skill) : (state.bossCooldowns || {});
-    const tickedCooldowns = tickCooldowns(cooldownsAfterUse);
-    let player = result.player;
-
-    if (result.bossDefeated) {
-      await deps.bossStore.saveBoss(instance, instance.bossId);
-      await deps.bossStore.setLastDefeatedAt(instance.bossId, Date.now());
-      const rewards = distributeRewards(instance);
-      const boss = findBoss(instance.bossId);
-      let myGearDrop = null;
-      let myActualCreditsGranted = 0;
-      for (const [pid, reward] of Object.entries(rewards)) {
-        logEconomyEvent(deps, { type: EVENT_TYPES.BOSS_REWARD, playerId: pid, credits: reward.credits, note: 'world_boss_victory' }).catch(() => {});
-        // ⚠️ Дроп снаряжения — по одному независимому броску на каждого
-        // участника (не общий на группу), см. engine/gear-engine.js:
-        // rollBossGearDrop(). Не каждая победа даёт лут — это ожидаемо.
-        const dropItem = rollBossGearDrop(boss.threatLevel, rng);
-        if (pid === playerId) {
-          const myPassiveEffects = aggregatePassiveEffects(player.equippedPassives || []);
-          myActualCreditsGranted = Math.round(reward.credits * (myPassiveEffects.creditMultiplier || 1));
-          player.credits = (player.credits || 0) + myActualCreditsGranted;
-          grantXp(player, reward.xp);
-          if (dropItem) {
-            const dropResult = grantGearDrop(player, dropItem.id);
-            if (dropResult.success) myGearDrop = dropItem;
-          }
-          continue;
-        }
-        const otherState = await deps.store.get(pid).catch(() => null);
-        if (otherState?.player) {
-          otherState.player.credits = (otherState.player.credits || 0) + reward.credits;
-          grantXp(otherState.player, reward.xp);
-          let dropNote = '';
-          if (dropItem) {
-            const dropResult = grantGearDrop(otherState.player, dropItem.id);
-            if (dropResult.success) dropNote = `\n💎 Выпало: [${rarityName(dropItem.rarity)}] ${dropItem.name}!`;
-          }
-          await deps.store.set(pid, otherState).catch(() => {});
-          // Уведомляем именно тех, кто не в игре прямо сейчас (текущий
-          // playerId уже видит результат в основном ответе ниже, дублировать
-          // ему push бессмысленно).
-          notifyPlayer(deps, pid, `🎉 Мировой босс повержен! Твоя доля: +${reward.credits} кредитов, +${reward.xp} опыта.${dropNote}`).catch(() => {});
-        }
-      }
-      const myReward = rewards[playerId];
-      const newAchievements = checkAchievements(player);
-      const achNote = newAchievements.length ? `\n\n${newAchievements.map((a) => `🏆 Достижение: «${a.title}»`).join('\n')}` : '';
-      const dropText = myGearDrop ? `\n\n💎 Выпало снаряжение: [${rarityName(myGearDrop.rarity)}] ${myGearDrop.name}!` : '';
-
-      // Лента мира — победа над мировым боссом видна всем, не только
-      // участникам боя (см. lib/world-feed.js). Не блокирует ответ
-      // игроку (fire-and-forget), не падает, если Redis недоступен.
-      logWorldEvent(deps, { type: 'world_boss_defeated', text: `Отряд из ${Object.keys(instance.participants).length} игроков повергает ${boss.name}!` }).catch(() => {});
-
-      return {
-        reply: { text: `⚔️ ${result.log.join(' ')}\n\n🎉 БОСС ПОВЕРЖЕН!\nТвоя доля (по вкладу в урон): 💳+${myActualCreditsGranted}, опыт +${myReward ? myReward.xp : 0}.${dropText}${achNote}`, buttons: stationButtons(deps, player) },
-        nextState: { scene: 'station', player }
-      };
-    }
-
-    await deps.bossStore.saveBoss(instance, instance.bossId);
-
-    if (result.playerDefeated) {
-      if (rng() < EMERGENCY_POD_CHANCE) {
-        const savedPlayer = { ...player, hp: Math.round(player.hpMax * 0.3) };
-        return {
-          reply: { text: `⚔️ ${result.log.join(' ')}\n\n🛟 Аварийная капсула срабатывает в последний момент — редкая удача, груз цел.`, buttons: stationButtons(deps, savedPlayer) },
-          nextState: { scene: 'station', player: savedPlayer }
-        };
-      }
-      const { lostTrip, lostInventory } = loseFullCargo(player);
-      const lostCount = lostTrip.length + lostInventory.reduce((s, i) => s + (i.qty || 0), 0);
-      const lossNote = lostCount > 0 ? ` Груз потерян (${lostCount} ед.).` : '';
-      const defeatedPlayer = { ...player, hp: 1 };
-      return {
-        reply: { text: `⚔️ ${result.log.join(' ')}\n\n💀 Ты не выдержал удара босса.${lossNote} Эвакуация на станцию — едва живым.`, buttons: stationButtons(deps, defeatedPlayer) },
-        nextState: { scene: 'station', player: defeatedPlayer }
-      };
-    }
-
-    const buttons = ['⚔️ Обычная атака', ...skillButtons(player, tickedCooldowns)];
-    const cdNote = skillCooldownNote(player, tickedCooldowns);
-    const cdLine = cdNote ? `\n\n${cdNote}` : '';
+function canJoinFaction(
+  player,
+  newFaction
+) {
+  if (
+    !FACTIONS.includes(
+      newFaction
+    )
+  ) {
     return {
-      reply: { text: `⚔️ ${result.log.join(' ')} (нанёс ${result.dmgDealt})\n\n${formatBossStatusCard(findBoss(instance.bossId), instance)}${cdLine}`, buttons },
-      nextState: { scene: SCENES.BOSS_COMBAT, player, bossCooldowns: tickedCooldowns, activeBossId: state.activeBossId }
+      ok: false,
+      reason:
+        'UNKNOWN_FACTION',
     };
   }
 
-  return null;
+  if (
+    player.faction ===
+    newFaction
+  ) {
+    return {
+      ok: false,
+      reason:
+        'ALREADY_THIS_FACTION',
+    };
+  }
+
+  if (
+    (player.level || 1) <
+    MIN_LEVEL_TO_JOIN_FACTION
+  ) {
+    return {
+      ok: false,
+      reason:
+        'LEVEL_TOO_LOW',
+    };
+  }
+
+  return {
+    ok: true,
+  };
 }
 
-module.exports = { bossHub, handleBoss, rollBossEncounter, bossEncounterScreen, BOSS_LOCATION_THEMES };
+/** Узел города по названию фракции (для Тракт-сети, engine/tract-network.js) —
+ * города там названы ровно так же, как и сами фракции. */
+function homeNodeIdForFaction(faction) {
+  const cityNode = Object.values(NODES).find(
+    (n) => n.type === 'city' && n.name === faction
+  );
+  return cityNode ? cityNode.id : null;
+}
+
+function switchFaction(
+  player,
+  newFaction
+) {
+  const oldBias =
+    (
+      FACTION_KIT[
+        player.faction
+      ] || {}
+    ).statBias || {};
+
+  const newBias =
+    (
+      FACTION_KIT[
+        newFaction
+      ] || {}
+    ).statBias || {};
+
+  player.stats = {
+    ...player.stats,
+  };
+
+  player.stats.power =
+    (player.stats.power || 0) -
+    (oldBias.power || 0) +
+    (newBias.power || 0);
+
+  player.stats.mind =
+    (player.stats.mind || 0) -
+    (oldBias.mind || 0) +
+    (newBias.mind || 0);
+
+  player.stats.reaction =
+    (player.stats.reaction || 0) -
+    (oldBias.reaction || 0) +
+    (newBias.reaction || 0);
+
+  player.stats.endurance =
+    (player.stats.endurance || 0) -
+    (oldBias.endurance || 0) +
+    (newBias.endurance || 0);
+
+  player.baseFirepower =
+    (player.baseFirepower ?? 26) -
+    (oldBias.firepowerBonus || 0) +
+    (newBias.firepowerBonus || 0);
+
+  player.faction =
+    newFaction;
+
+  // ⚠️ БАГ-ФИКС: player.currentNodeId раньше НЕ обновлялся при смене
+  // станции приписки — оставался тем узлом Тракта, где игрок физически
+  // был на момент смены (обычно 'priyut', если менял на исходной
+  // станции). currentNodeId(player) в travel.js приоритетно берёт ИМЕННО
+  // это поле, а не домашнюю фракцию — значит "Полёт" продолжал
+  // показывать маршруты СТАРОЙ станции независимо от новой фракции.
+  // Телепортируем на узел новой домашней станции — станция приписки
+  // это не просто бумажка, это то, где реально находится корабль.
+  const newHomeNodeId = homeNodeIdForFaction(newFaction);
+  if (newHomeNodeId) {
+    player.currentNodeId = newHomeNodeId;
+  }
+
+  const starterSkills =
+    unlockedSkillsForPlayer(
+      newFaction,
+      player.level || 1
+    ).map(
+      (s) => s.id
+    );
+
+  player.equippedSkills =
+    starterSkills.slice(
+      0,
+      MAX_EQUIPPED_SKILLS
+    );
+
+  if (player.ship) {
+    const shipSkill =
+      SHIP_SKILL_BY_FACTION[
+        newFaction
+      ];
+
+    player.ship.equippedSkills =
+      shipSkill
+        ? [shipSkill]
+        : [];
+  }
+
+  applyDerivedStats(
+    player
+  );
+
+  return player;
+}
+
+function currentStation(
+  player
+) {
+  return (
+    player.visitingStation ||
+    player.faction
+  );
+}
+
+function freshPlayer(
+  name,
+  faction
+) {
+  const bias =
+    (
+      FACTION_KIT[
+        faction
+      ] || {}
+    ).statBias || {};
+
+  const starterSkills =
+    unlockedSkillsForPlayer(
+      faction,
+      1
+    ).map(
+      (s) => s.id
+    );
+
+  return {
+    name,
+    faction,
+
+    hp: 220,
+    hpMax: 220,
+
+    stats: {
+      power:
+        20 +
+        (bias.power || 0),
+
+      mind:
+        20 +
+        (bias.mind || 0),
+
+      reaction:
+        20 +
+        (bias.reaction || 0),
+
+      endurance:
+        22 +
+        (bias.endurance || 0),
+
+      firepower:
+        26 +
+        (bias.firepowerBonus || 0),
+
+      shielding: 18,
+    },
+
+    luck: 10,
+    accuracy: 0.8,
+    dodge: 0.12,
+    focus: 0.76,
+
+    periodic: [],
+
+    statPoints: 5,
+
+    equippedSkills:
+      starterSkills.slice(
+        0,
+        MAX_EQUIPPED_SKILLS
+      ),
+
+    inventory: [],
+    tripCargo: [],
+
+    ship:
+      freshShip(faction),
+
+    equippedPassives: [],
+    knownPassives: [],
+
+    credits: 0,
+    radiation: 0,
+
+    zone: 'blue',
+
+    level: 1,
+    xp: 0,
+
+    killCount: 0,
+
+    zoneVisits: {
+      blue: 0,
+      yellow: 0,
+      red: 0,
+    },
+
+    completedQuests: [],
+    reputation: 0,
+    npcMeetings: {},
+  };
+}
+
+const DECON_BASE_FEE = 300;
+
+function deconFee(
+  faction
+) {
+  if (
+    faction ===
+    'Приют'
+  ) {
+    return 0;
+  }
+
+  if (
+    faction ===
+    'Вуаль'
+  ) {
+    return Math.round(
+      DECON_BASE_FEE *
+        0.5
+    );
+  }
+
+  return DECON_BASE_FEE;
+}
+
+function equippedSkillIds(
+  player
+) {
+  if (
+    player.equippedSkills &&
+    player.equippedSkills.length
+  ) {
+    return player.equippedSkills;
+  }
+
+  return unlockedSkillsForPlayer(
+    player.faction,
+    player.level || 1
+  ).map(
+    (s) => s.id
+  );
+}
+
+function skillButtons(
+  player,
+  cooldowns = {}
+) {
+  return equippedSkillIds(
+    player
+  )
+    .filter(
+      (id) =>
+        !(cooldowns[id] > 0)
+    )
+    .map(
+      (id) =>
+        SKILLS[id]?.name
+    )
+    .filter(Boolean);
+}
+
+function skillCooldownNote(
+  player,
+  cooldowns = {}
+) {
+  const onCd =
+    equippedSkillIds(
+      player
+    )
+      .filter(
+        (id) =>
+          cooldowns[id] > 0
+      )
+      .map(
+        (id) =>
+          `⏳ ${SKILLS[id]?.name}: ещё ${cooldowns[id]} х.`
+      );
+
+  return onCd.length
+    ? onCd.join('\n')
+    : '';
+}
+
+function skillIdByName(
+  name
+) {
+  return Object.values(
+    SKILLS
+  ).find(
+    (s) =>
+      s.name === name
+  )?.id || null;
+}
+
+function addToInventory(
+  player,
+  resource,
+  tier,
+  qty
+) {
+  const inv =
+    player.inventory ||
+    (
+      player.inventory = []
+    );
+
+  const existing =
+    inv.find(
+      (i) =>
+        i.resource ===
+          resource &&
+        i.tier === tier
+    );
+
+  if (existing) {
+    existing.qty += qty;
+  } else {
+    inv.push({
+      resource,
+      tier,
+      qty,
+    });
+  }
+}
+
+function sellInventory(
+  player
+) {
+  let total = 0;
+
+  for (
+    const item of
+    player.inventory || []
+  ) {
+    total +=
+      item.qty *
+      item.tier *
+      8;
+  }
+
+  player.inventory = [];
+
+  player.credits =
+    (player.credits || 0) +
+    total;
+
+  return total;
+}
+
+function isResourceProtected(
+  resource,
+  tier,
+  player
+) {
+  const owned =
+    new Set(
+      player.modules || []
+    );
+
+  const neededForModule =
+    RECIPES.some(
+      (r) =>
+        !owned.has(r.id) &&
+        r.cost.some(
+          (c) =>
+            c.resource ===
+              resource &&
+            c.tier === tier
+        )
+    );
+
+  const ownedGear =
+    new Set(
+      player.gear || []
+    );
+
+  const neededForGear =
+    GEAR_RECIPES.some(
+      (r) =>
+        !ownedGear.has(r.id) &&
+        r.cost.some(
+          (c) =>
+            c.resource ===
+              resource &&
+            c.tier === tier
+        )
+    );
+
+  const shipDamaged =
+    player.ship?.systems &&
+    Object.values(
+      player.ship.systems
+    ).some(
+      (v) => v < 100
+    );
+
+  const neededForShipRepair =
+    shipDamaged &&
+    Object.values(
+      SYSTEM_REPAIR_MATERIAL
+    ).some(
+      (m) =>
+        m.resource ===
+          resource &&
+        m.tier === tier
+    );
+
+  return (
+    neededForModule ||
+    neededForGear ||
+    neededForShipRepair
+  );
+}
+
+function sellUnprotectedInventory(
+  player
+) {
+  let total = 0;
+  const kept = [];
+
+  for (
+    const item of
+    player.inventory || []
+  ) {
+    if (
+      isResourceProtected(
+        item.resource,
+        item.tier,
+        player
+      )
+    ) {
+      kept.push(item);
+    } else {
+      total +=
+        item.qty *
+        item.tier *
+        8;
+    }
+  }
+
+  player.inventory =
+    kept;
+
+  player.credits =
+    (player.credits || 0) +
+    total;
+
+  return {
+    total,
+    keptCount:
+      kept.length,
+  };
+}
+
+function stationButtons(
+  deps,
+  player
+) {
+  const link =
+    typeof deps.getProfileLink ===
+    'function'
+      ? deps.getProfileLink()
+      : null;
+
+  const station =
+    currentStation(
+      player
+    );
+
+  const visiting =
+    !!player.visitingStation;
+
+  const rawGroups =
+    DISTRICT_GROUPS[
+      station
+    ] ||
+    DISTRICT_GROUPS[
+      'Приют'
+    ];
+
+  // ⚠️ БАГ-ФИКС: districtGroupsFor() (чуть ниже в этом же файле) уже
+  // фильтрует "⛏️ Жила"/"Врата Тракта" — но это ДРУГАЯ функция,
+  // используется только для подменю конкретной группы района
+  // (game/scenes/hub.js:district_hub), НЕ для главного меню станции!
+  // stationButtons() — вот та функция, что реально строит кнопки, которые
+  // видит игрок сразу на станции — она читала DISTRICT_GROUPS напрямую,
+  // в обход фильтра. Значит фильтр никогда не применялся к тому, что
+  // реально показывается. "⚔️ Мировой босс" добавлен в тот же список —
+  // сама механика ещё не запущена (см. game/scenes/boss.js:bossHub —
+  // честная заглушка "не запущена"), скрывать по тому же принципу.
+  const HIDDEN_STATION_LABELS = new Set(['⛏️ Жила', 'Врата Тракта', '⚔️ Мировой босс']);
+
+  const filteredGroups =
+    rawGroups
+      .filter((g) => !HIDDEN_STATION_LABELS.has(g.label))
+      .filter((g) =>
+        visiting
+          ? g.label !==
+              'Бар' &&
+            g.label !==
+              'Контракты'
+          : true
+      );
+
+  const groups =
+    filteredGroups.map(
+      (g) => {
+        if (
+          g.label ===
+          'Контракты'
+        ) {
+          return {
+            label:
+              'Контракты',
+            color:
+              'positive',
+          };
+        }
+
+        if (
+          g.label ===
+          'Полёт'
+        ) {
+          return {
+            label:
+              'Полёт',
+            color:
+              'negative',
+          };
+        }
+
+        return g.label;
+      }
+    );
+
+  const flatTail =
+    visiting
+      ? [
+          '🏠 Домой',
+          'Сброс',
+        ]
+      : ['Сброс'];
+
+  return link
+    ? [
+        {
+          label:
+            'Открыть профиль',
+          url: link,
+        },
+        ...groups,
+        ...flatTail,
+      ]
+    : [
+        ...groups,
+        'Профиль',
+        ...flatTail,
+      ];
+}
+
+function hubMessage(
+  player
+) {
+  const next =
+    xpToNext(
+      player.level || 1
+    );
+
+  const visiting =
+    player.visitingStation;
+
+  const headerLine =
+    visiting
+      ? `🛰️ СТАНЦИЯ «${visiting}» (ты здесь гость — доступны общие услуги, не куратор)`
+      : `🛰️ СТАНЦИЯ «${player.faction}»\n${
+          CURATORS[
+            player.faction
+          ] || 'куратор станции'
+        } на связи.`;
+
+  const atmosphere =
+    getDistrictAtmosphere(
+      currentStation(
+        player
+      )
+    );
+
+  const atmosphereLine =
+    atmosphere
+      ? `\n\n${atmosphere.time}`
+      : '';
+
+  const stormLine =
+    `\n\n${stormStatusText()}`;
+
+  return (
+    `${headerLine}` +
+    `${atmosphereLine}` +
+    `${stormLine}\n\n` +
+    `${player.name} · Ур. ${
+      player.level || 1
+    } (${player.xp || 0}/${
+      next
+    } XP)\n` +
+    `❤️ ${player.hp}/${player.hpMax}   ` +
+    `💳 ${player.credits || 0}\n` +
+    `📍 ${
+      ZONE_LABEL[
+        player.zone
+      ] ||
+      'Патрулируемый сектор'
+    }` +
+    `${
+      player.radiation
+        ? `\n☢️ Облучение: ${player.radiation}%`
+        : ''
+    }` +
+    `${
+      player.statPoints
+        ? `\n✨ Нераспределённых очков: ${player.statPoints}`
+        : ''
+    }`
+  );
+}
+
+function statusText(
+  p
+) {
+  const repLine =
+    p.reputation
+      ? `\n⭐ Репутация: ${p.reputation} (${getReputationTitle(p.reputation)})`
+      : '';
+
+  const trophyLine =
+    `\n\n${trophyProgressText(p).summary}`;
+
+  return (
+    hubMessage(p) +
+    repLine +
+    trophyLine
+  );
+}
+
+/**
+ * Создание JOURNEY.
+ *
+ * Обычный explore из станции сохраняет старое поведение.
+ *
+ * Если payload содержит locationId, это уже не полёт по космосу,
+ * а высадка на конкретную named-location.
+ *
+ * В таком случае:
+ *   - сохраняем theme в player.currentLocationTheme;
+ *   - НЕ показываем космические ZONE_TRAVEL_PHRASES;
+ *   - НЕ создаём несколько искусственных шагов Тракта;
+ *   - сразу передаём игроку существующий контекст поверхности;
+ *   - следующим нажатием запускается обычный exploration engine.
+ */
+function startJourney(
+  player,
+  kind,
+  payload,
+  rng
+) {
+  const isPlanetaryExploration =
+    kind === 'explore' &&
+    !!payload?.locationId;
+
+  // ⚠️ БАГ-ФИКС: zoneVisits (game/quests-data.js/lore/trakt-mythos.js:
+  // условия "Исследуй в зоне N раз") нигде не увеличивался — счётчик
+  // навсегда оставался на 0, соответствующие квесты/условия мифологии
+  // были математически невозможны. Считаем НАЧАЛО новой вылазки (не
+  // каждый шаг "Углубиться дальше" внутри неё — depth ещё не задан на
+  // самом первом вызове), чтобы "3 раза" значило именно 3 отдельных
+  // похода в зону, а не 3 шага одного похода.
+  if (
+    kind === 'explore' &&
+    payload?.zone &&
+    !payload?.depth
+  ) {
+    player.zoneVisits =
+      player.zoneVisits || {};
+    player.zoneVisits[payload.zone] =
+      (player.zoneVisits[payload.zone] || 0) + 1;
+  }
+
+  if (kind === 'explore') {
+    if (
+      payload?.locationTheme
+    ) {
+      player.currentLocationTheme =
+        payload.locationTheme;
+    } else {
+      delete player.currentLocationTheme;
+    }
+  } else {
+    delete player.currentLocationTheme;
+  }
+
+  if (
+    isPlanetaryExploration
+  ) {
+    const locationName =
+      payload.locationName ||
+      'Неизвестная локация';
+
+    const locationText =
+      payload.locationDetail ||
+      payload.locationBlurb ||
+      'Поверхность этой локации встречает тебя тишиной. Впереди начинается вылазка.';
+
+    return {
+      reply: {
+        text:
+          `🪐 ${locationName}\n\n` +
+          `${locationText}\n\n` +
+          `Ты начинаешь исследование поверхности.`,
+
+        buttons: [
+          'Начать исследование',
+        ],
+      },
+
+      nextState: {
+        scene: 'journey',
+        player,
+        kind,
+        payload,
+        stepsLeft: 1,
+      },
+    };
+  }
+
+  const stepsLeft =
+    2 +
+    Math.floor(
+      rng() * 2
+    );
+
+  const pool =
+    kind === 'explore'
+      ? (
+          ZONE_TRAVEL_PHRASES[
+            payload.zone
+          ] ||
+          ZONE_TRAVEL_PHRASES.blue
+        )
+      : STATION_TRAVEL_PHRASES;
+
+  const text =
+    pool[
+      Math.floor(
+        rng() *
+          pool.length
+      )
+    ];
+
+  return {
+    reply: {
+      text,
+      buttons: [
+        'Продолжить путь',
+      ],
+    },
+
+    nextState: {
+      scene: 'journey',
+      player,
+      kind,
+      payload,
+      stepsLeft,
+    },
+  };
+}
+
+function buildGuardianEnemy(
+  name,
+  tier,
+  rng
+) {
+  const dangerMult = 1.4;
+
+  const hp =
+    Math.round(
+      (80 +
+        rng() *
+          120) *
+        dangerMult *
+        (1 +
+          tier *
+            0.1)
+    );
+
+  const base =
+    12 +
+    tier * 4;
+
+  return {
+    name:
+      name ||
+      'Страж фрагмента',
+
+    tier,
+    hp,
+    hpMax: hp,
+
+    stats: {
+      power:
+        Math.round(
+          base * 1.1
+        ),
+
+      mind:
+        Math.round(
+          base * 1.1
+        ),
+
+      reaction:
+        Math.round(
+          base * 1.1
+        ),
+
+      endurance:
+        Math.round(
+          base * 1.1
+        ),
+
+      firepower:
+        Math.round(
+          base * 1.3
+        ),
+
+      shielding:
+        Math.min(
+          70,
+          Math.round(
+            base * 0.7
+          )
+        ),
+    },
+
+    luck:
+      Math.round(
+        8 +
+          tier *
+            1.5
+      ),
+
+    accuracy:
+      0.72 +
+      Math.min(
+        tier,
+        5
+      ) *
+        0.02,
+
+    dodge:
+      0.08 +
+      Math.min(
+        tier,
+        5
+      ) *
+        0.015,
+
+    focus:
+      0.65 +
+      Math.min(
+        tier,
+        5
+      ) *
+        0.02,
+
+    periodic: [],
+  };
+}
+
+function journeyContinueButtons(
+  zone,
+  isBossContext = false
+) {
+  const buttons = [
+    'Углубиться дальше',
+    'Вернуться на станцию',
+  ];
+
+  if (
+    zone === 'red' ||
+    isBossContext
+  ) {
+    buttons.push(
+      'Эвакуироваться'
+    );
+  }
+
+  return buttons;
+}
+
+function safeReturnChoice(
+  text,
+  player,
+  zone,
+  depth,
+  isBossContext = false,
+  extra = {}
+) {
+  return {
+    reply: {
+      text:
+        `${text}\n\n${explorationStatusCard(player)}`,
+
+      buttons:
+        journeyContinueButtons(
+          zone,
+          isBossContext
+        ),
+    },
+
+    nextState: {
+      scene:
+        'journey_continue',
+
+      player,
+      zone,
+      depth,
+      isBossContext,
+      ...extra,
+    },
+  };
+}
+
+function stormRewardMult() {
+  return isStormActive()
+    ? STORM_REWARD_MULTIPLIER
+    : 1;
+}
+
+const DISTRICT_GROUPS = {
+  Приют: [
+    {
+      label: '🎖️ Штаб',
+      buttons: [
+        'Мостик',
+        '📊 Статус',
+        '🏆 Достижения',
+        '📬 Уведомления',
+        '🌐 Лента мира',
+      ],
+    },
+    {
+      label: '🔧 Ремонтная палуба',
+      buttons: [
+        'Отсек',
+        'Мастерская',
+        '🚀 Верфь',
+      ],
+    },
+    {
+      label: '🏠 Палубы',
+      buttons: [
+        'Бар',
+        'Биржа',
+        'Жильё',
+        'Декон-камера',
+        'Мара Кейн',
+      ],
+    },
+    {
+      label: '🌌 Периферийный сектор',
+      buttons: [
+        'Терраса памяти',
+        'Мастерская новичка',
+        'Барак ожидания',
+      ],
+    },
+    {
+      label: '📋 Контракты',
+      buttons: [
+        'Контракты',
+      ],
+    },
+    {
+      label: '🏰 Гильдия',
+      buttons: [
+        'Гильдия',
+      ],
+    },
+    {
+      label: '👥 Люди станции',
+      buttons: [
+        '👥 Люди станции',
+      ],
+    },
+    {
+      label: '⚔️ Мировой босс',
+      buttons: [
+        '⚔️ Мировой босс',
+      ],
+    },
+    {
+      label: '👥 Люди в городе',
+      buttons: [
+        '👥 Люди в городе',
+        '🤝 Пати',
+      ],
+    },
+    {
+      label: '🚀 Полёт',
+      buttons: [
+        'Полёт',
+      ],
+    },
+    {
+      label: 'Врата Тракта',
+      buttons: [
+        'Врата Тракта',
+      ],
+    },
+    {
+      label: '⛏️ Жила',
+      buttons: [
+        '⛏️ Жила',
+      ],
+    },
+  ],
+
+  Терминус: [
+    {
+      label: '🎖️ Гарнизон',
+      buttons: [
+        'Мостик',
+        '📊 Статус',
+        '🏆 Достижения',
+        '📬 Уведомления',
+        '🌐 Лента мира',
+      ],
+    },
+    {
+      label: '📡 Техпост',
+      buttons: [
+        'Отсек',
+        'Мастерская',
+        '🚀 Верфь',
+      ],
+    },
+    {
+      label: '🏠 Казармы',
+      buttons: [
+        'Бар',
+        'Биржа',
+        'Жильё',
+        'Декон-камера',
+      ],
+    },
+    {
+      label: '🛰️ Рубеж',
+      buttons: [
+        'Архив теней',
+      ],
+    },
+    {
+      label: '📋 Контракты',
+      buttons: [
+        'Контракты',
+      ],
+    },
+    {
+      label: '🏰 Гильдия',
+      buttons: [
+        'Гильдия',
+      ],
+    },
+    {
+      label: '👥 Люди станции',
+      buttons: [
+        '👥 Люди станции',
+      ],
+    },
+    {
+      label: '⚔️ Мировой босс',
+      buttons: [
+        '⚔️ Мировой босс',
+      ],
+    },
+    {
+      label: '👥 Люди в городе',
+      buttons: [
+        '👥 Люди в городе',
+        '🤝 Пати',
+      ],
+    },
+    {
+      label: '🚀 Полёт',
+      buttons: [
+        'Полёт',
+      ],
+    },
+    {
+      label: 'Врата Тракта',
+      buttons: [
+        'Врата Тракта',
+      ],
+    },
+    {
+      label: '⛏️ Жила',
+      buttons: [
+        '⛏️ Жила',
+      ],
+    },
+  ],
+
+  Арсенал: [
+    {
+      label: '🎖️ Штаб',
+      buttons: [
+        'Мостик',
+        '📊 Статус',
+        '🏆 Достижения',
+        '📬 Уведомления',
+        '🌐 Лента мира',
+      ],
+    },
+    {
+      label: '⚙️ Оружейная',
+      buttons: [
+        'Отсек',
+        'Мастерская',
+        '🚀 Верфь',
+        'Дуэль',
+      ],
+    },
+    {
+      label: '🏠 Склад',
+      buttons: [
+        'Бар',
+        'Биржа',
+        'Жильё',
+        'Декон-камера',
+      ],
+    },
+    {
+      label: '📋 Контракты',
+      buttons: [
+        'Контракты',
+      ],
+    },
+    {
+      label: '🏰 Гильдия',
+      buttons: [
+        'Гильдия',
+      ],
+    },
+    {
+      label: '👥 Люди станции',
+      buttons: [
+        '👥 Люди станции',
+      ],
+    },
+    {
+      label: '⚔️ Мировой босс',
+      buttons: [
+        '⚔️ Мировой босс',
+      ],
+    },
+    {
+      label: '👥 Люди в городе',
+      buttons: [
+        '👥 Люди в городе',
+        '🤝 Пати',
+      ],
+    },
+    {
+      label: '🚀 Полёт',
+      buttons: [
+        'Полёт',
+      ],
+    },
+    {
+      label: 'Врата Тракта',
+      buttons: [
+        'Врата Тракта',
+      ],
+    },
+    {
+      label: '⛏️ Жила',
+      buttons: [
+        '⛏️ Жила',
+      ],
+    },
+  ],
+
+  Вуаль: [
+    {
+      label: '🎖️ Штаб',
+      buttons: [
+        'Мостик',
+        '📊 Статус',
+        '🏆 Достижения',
+        '📬 Уведомления',
+        '🌐 Лента мира',
+      ],
+    },
+    {
+      label: '🔧 Цех',
+      buttons: [
+        'Отсек',
+        'Мастерская',
+        '🚀 Верфь',
+        'Доктор Ворн',
+      ],
+    },
+    {
+      label: '🏠 Модуль',
+      buttons: [
+        'Бар',
+        'Биржа',
+        'Жильё',
+        'Декон-камера',
+      ],
+    },
+    {
+      label: '📋 Контракты',
+      buttons: [
+        'Контракты',
+      ],
+    },
+    {
+      label: '🏰 Гильдия',
+      buttons: [
+        'Гильдия',
+      ],
+    },
+    {
+      label: '👥 Люди станции',
+      buttons: [
+        '👥 Люди станции',
+      ],
+    },
+    {
+      label: '⚔️ Мировой босс',
+      buttons: [
+        '⚔️ Мировой босс',
+      ],
+    },
+    {
+      label: '👥 Люди в городе',
+      buttons: [
+        '👥 Люди в городе',
+        '🤝 Пати',
+      ],
+    },
+    {
+      label: '🚀 Полёт',
+      buttons: [
+        'Полёт',
+      ],
+    },
+    {
+      label: 'Врата Тракта',
+      buttons: [
+        'Врата Тракта',
+      ],
+    },
+    {
+      label: '⛏️ Жила',
+      buttons: [
+        '⛏️ Жила',
+      ],
+    },
+  ],
+
+  Кузница: [
+    {
+      label: '🎖️ Плавильня',
+      buttons: [
+        'Мостик',
+        '📊 Статус',
+        '🏆 Достижения',
+        '📬 Уведомления',
+        '🌐 Лента мира',
+      ],
+    },
+    {
+      label: '⚒️ Механический двор',
+      buttons: [
+        'Отсек',
+        'Мастерская',
+        '🚀 Верфь',
+      ],
+    },
+    {
+      label: '🏠 Литейный квартал',
+      buttons: [
+        'Бар',
+        'Биржа',
+        'Жильё',
+        'Декон-камера',
+      ],
+    },
+    {
+      label: '📋 Контракты',
+      buttons: [
+        'Контракты',
+      ],
+    },
+    {
+      label: '🏰 Гильдия',
+      buttons: [
+        'Гильдия',
+      ],
+    },
+    {
+      label: '👥 Люди станции',
+      buttons: [
+        '👥 Люди станции',
+      ],
+    },
+    {
+      label: '⚔️ Мировой босс',
+      buttons: [
+        '⚔️ Мировой босс',
+      ],
+    },
+    {
+      label: '👥 Люди в городе',
+      buttons: [
+        '👥 Люди в городе',
+        '🤝 Пати',
+      ],
+    },
+    {
+      label: '🚀 Полёт',
+      buttons: [
+        'Полёт',
+      ],
+    },
+    {
+      label: 'Врата Тракта',
+      buttons: [
+        'Врата Тракта',
+      ],
+    },
+    {
+      label: '⛏️ Жила',
+      buttons: [
+        '⛏️ Жила',
+      ],
+    },
+  ],
+};
+
+// ИВЕНТ-ГЕЙТИНГ — «Мировой босс» и «Жила» на главной странице города
+// раньше были видны всегда. Флаг передаётся ЯВНО параметром при каждом
+// вызове, а не хранится в памяти модуля — на Vercel serverless нет
+// гарантии, что один и тот же процесс переживёт до следующего запроса
+// (холодный старт сбросил бы любой module-level флаг молча). Источник
+// правды — реальная проверка deps.veinStore на стороне вызывающего кода
+// (см. game/router.js), не кэш здесь.
+const HIDDEN_UNTIL_EVENT_LABELS = new Set(['⚔️ Мировой босс', '⛏️ Жила']);
+
+function districtGroupsFor(
+  player,
+  eventFlags = {}
+) {
+  const groups = (
+    DISTRICT_GROUPS[
+      player?.faction
+    ] ||
+    DISTRICT_GROUPS[
+      'Приют'
+    ]
+  );
+  return groups.filter((g) => {
+    if (g.label === '⚔️ Мировой босс') return !!eventFlags.worldBoss;
+    // "⛏️ Жила" — временно скрыта из обычного меню независимо от того,
+    // активна ли сейчас жила (eventFlags.vein). По решению пользователя:
+    // код/сцена не трогаются, система остаётся полностью рабочей — просто
+    // пока не готовы показывать её игрокам через обычный интерфейс.
+    // Вернуть — заменить return false на return !!eventFlags.vein.
+    if (g.label === '⛏️ Жила') return false;
+    // "Врата Тракта" — старая линейная система перелёта (game/scenes/
+    // locations/gates.js), конфликтовала с новой системой Трактов
+    // ("Полёт", game/scenes/travel.js) — два параллельных способа
+    // путешествовать одновременно. По решению пользователя: НЕ удалять
+    // код, просто прячем кнопку из обычного меню — придержано на
+    // будущее для очень дальних перелётов, когда экономика будет готова
+    // к быстрому телепорту (сейчас рано — сломало бы баланс топлива/
+    // риска новой системы). Если понадобится вернуть — убрать эту строку.
+    if (g.label === 'Врата Тракта') return false;
+    return true;
+  });
+}
+
+module.exports = {
+  FACTIONS,
+  FACTION_KIT,
+  CITY_UNLOCK_LEVEL,
+  MIN_LEVEL_TO_JOIN_FACTION,
+  canJoinFaction,
+  switchFaction,
+  currentStation,
+  MAX_EQUIPPED_SKILLS,
+  RESET_COMMAND,
+
+  ZONE_BUTTONS,
+  ZONE_BY_LABEL,
+  ZONE_LABEL,
+  MIN_LEVEL_FOR_ZONE,
+
+  CURATORS,
+
+  ZONE_TRAVEL_PHRASES,
+  STATION_TRAVEL_PHRASES,
+  DISTRICT_GROUPS,
+
+  trainerDrone,
+  freshPlayer,
+
+  equippedSkillIds,
+  skillButtons,
+  skillIdByName,
+  skillCooldownNote,
+
+  addToInventory,
+  sellInventory,
+  sellUnprotectedInventory,
+  isResourceProtected,
+
+  stationButtons,
+  hubMessage,
+  statusText,
+
+  startJourney,
+  buildGuardianEnemy,
+  journeyContinueButtons,
+  safeReturnChoice,
+
+  stormRewardMult,
+  districtGroupsFor,
+  stationArrivalCard,
+  deconFee,
+};
