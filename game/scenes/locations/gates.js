@@ -13,13 +13,13 @@ function handleGates(state, input, rng, deps) {
 switch (state.scene) {
 case SCENES.LOC_GATES: {
 const others = FACTIONS.filter((f) => f !== state.player.faction);
-if (input === ' Назад') {
+if (input === '⬅️ Назад') {
 return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
 }
 if (others.includes(input)) {
 return startJourney(state.player, 'travel', { targetFaction: input }, rng);
 }
-return { reply: { text: 'Куда проложить курс?', buttons: [...others, ' Назад'] }, nextState: state };
+return { reply: { text: 'Куда проложить курс?', buttons: [...others, '⬅️ Назад'] }, nextState: state };
 }
 default:
 return null;
