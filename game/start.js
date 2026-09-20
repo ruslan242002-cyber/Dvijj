@@ -23,7 +23,7 @@ const wakeText = `Позывной принят, ${input}.\n\n` +
 `Здесь просыпаются все — Приют первым принимает потерявших память, задолго до того, как кто-то решает, куда двигаться дальше. Остальные станции подождут: доберёшься, когда будешь готов(а).\n\n` +
 `Куратор ${curator} встречает новичков лично: «Тракт стёр тебе память, но не стёр рефлексы. Проверим?»`;
 return {
-reply: { text: wakeText, buttons: [' Атаковать'] },
+reply: { text: wakeText, buttons: ['⚔️ Атаковать'] },
 nextState: { scene: 'pre_combat', player, enemy: trainerDrone(), trainingFight: true }
 };
 }
@@ -35,7 +35,7 @@ case SCENES.ASK_FACTION: {
 // фолбэк, чем краш.
 const player = freshPlayer(state.name || 'Пилот', 'Приют');
 return {
-reply: { text: `Добро пожаловать в Приют, ${player.name}.`, buttons: [' Атаковать'] },
+reply: { text: `Добро пожаловать в Приют, ${player.name}.`, buttons: ['⚔️ Атаковать'] },
 nextState: { scene: 'pre_combat', player, enemy: trainerDrone(), trainingFight: true }
 };
 }
