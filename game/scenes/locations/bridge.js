@@ -46,7 +46,7 @@ completeQuest(qs, {});
 player.completedQuests = player.completedQuests || [];
 if (!player.completedQuests.includes('shyopot_hypotheses')) player.completedQuests.push('shyopot_hypotheses');
 }
-const buttons = rendered.isTerminal ? [' Назад'] : rendered.choices.map((c) => c.label);
+const buttons = rendered.isTerminal ? ['⬅️ Назад'] : rendered.choices.map((c) => c.label);
 return { reply: { text: rendered.text, buttons, imageKey: imageForCurator('Терминус') }, nextState: { scene: 'quest_shyopot', player } };
 }
 /** Экран пассивных умений — три категории: неизученные чипы (в трюме,
@@ -85,7 +85,7 @@ buttons.push(isEquipped ? `Снять: ${skill.name}` : `Экипировать:
 if (!chips.length && !known.length) {
 lines.push('Пока ничего — пассивки находятся редкими нейрочипами на вылазках и в дальнем космосе.');
 }
-buttons.push(' Назад');
+buttons.push('⬅️ Назад');
 return {
 reply: { text: `${prefixText} ПАССИВНЫЕ УМЕНИЯ\n\n${lines.join('\n')}`, buttons },
 nextState: { scene: 'passive_management', player }
@@ -96,7 +96,7 @@ nextState: { scene: 'passive_management', player }
 * дважды расходились из-за этого в прошлом. Один источник теперь. */
 function bridgeScreen(player, prefixText = '') {
 return {
-reply: { text: `${prefixText} МОСТИК\n\nЗдесь решают судьбу станции.`, buttons: ['Мифология Тракта', 'Пассивки', 'Станция приписки', ' Назад'], imageKey: imageForLocation('bridge', player.faction) },
+reply: { text: `${prefixText} МОСТИК\n\nЗдесь решают судьбу станции.`, buttons: ['Мифология Тракта', 'Пассивки', 'Станция приписки', '⬅️ Назад'], imageKey: imageForLocation('bridge', player.faction) },
 nextState: { scene: 'loc_bridge', player }
 };
 }
@@ -107,12 +107,12 @@ function factionTransferScreen(player, prefixText = '') {
 const level = player.level || 1;
 if (level < MIN_LEVEL_TO_JOIN_FACTION) {
 return {
-reply: { text: `${prefixText} СТАНЦИЯ ПРИПИСКИ\n\nСейчас: «${player.faction}».\n\nВступить в другую фракцию можно с ${MIN_LEVEL_TO_JOIN_FACTION} уровня — рано.`, buttons: [' Назад'] },
+reply: { text: `${prefixText} СТАНЦИЯ ПРИПИСКИ\n\nСейчас: «${player.faction}».\n\nВступить в другую фракцию можно с ${MIN_LEVEL_TO_JOIN_FACTION} уровня — рано.`, buttons: ['⬅️ Назад'] },
 nextState: { scene: SCENES.FACTION_TRANSFER, player }
 };
 }
 const options = FACTIONS.filter((f) => f !== player.faction && level >= (CITY_UNLOCK_LEVEL[f] || 0));
-const buttons = [...options.map((f) => `Вступить: ${f}`), ' Назад'];
+const buttons = [...options.map((f) => `Вступить: ${f}`), '⬅️ Назад'];
 const optionsNote = options.length ? '' : '\n\nПока нет ни одной другой открытой станции для перехода.';
 return {
 reply: { text: `${prefixText} СТАНЦИЯ ПРИПИСКИ\n\nСейчас: «${player.faction}».${optionsNote}`, buttons },
@@ -136,7 +136,7 @@ const label = f.shortName || f.name || f.id || 'фрагмент';
 return `${icon} ${label}${extra}`;
 });
 const collectible = statuses.filter((f) => f.unlocked && !f.collected);
-const buttons = [...collectible.map((f) => `Собрать: ${f.shortName || f.name || f.id}`), 'Гипотезы', ' Назад'];
+const buttons = [...collectible.map((f) => `Собрать: ${f.shortName || f.name || f.id}`), 'Гипотезы', '⬅️ Назад'];
 // Защита: если HYPOTHESIS_INFO не содержит ключ hyp (другое название поля
 // или другой набор гипотез в реальном trakt-mythos.js) — раньше это было
 // необработанное исключение (undefined.name), которое молча ронялo весь
@@ -164,7 +164,7 @@ return factionTransferScreen(state.player);
 return { reply: { text: hubMessage(state.player), buttons: stationButtons(deps, state.player), imageKey: imageForLocation('station', state.player.faction) }, nextState: { scene: 'station', player: state.player } };
 }
 case SCENES.FACTION_TRANSFER: {
-if (input === ' Назад') {
+if (input === '⬅️ Назад') {
 return bridgeScreen(state.player);
 }
 const match = /^Вступить: (.+)$/.exec(input);
@@ -185,7 +185,7 @@ nextState: { scene: 'station', player }
 return factionTransferScreen(state.player);
 }
 case SCENES.PASSIVE_MANAGEMENT: {
-if (input === ' Назад') {
+if (input === '⬅️ Назад') {
 return bridgeScreen(state.player);
 }
 const findByName = (name) => Object.values(PASSIVE_SKILLS).find((s) => s.name === name)?.id;
@@ -223,7 +223,7 @@ return passiveScreen(player);
 return passiveScreen(state.player);
 }
 case SCENES.LORE_MYTHOS: {
-if (input === ' Назад') {
+if (input === '⬅️ Назад') {
 return bridgeScreen(state.player);
 }
 if (input === 'Гипотезы') {
@@ -249,7 +249,7 @@ return mythosScreen(player, text);
 return mythosScreen(state.player);
 }
 case SCENES.QUEST_SHYOPOT: {
-if (input === ' Назад') {
+if (input === '⬅️ Назад') {
 return mythosScreen(state.player);
 }
 return stepShyopotQuest(state.player, input);
