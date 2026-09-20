@@ -17,7 +17,6 @@ const { requiredTool, RESONANCE_DRILL, VEIN_ANNIHILATOR } = require('../../../en
 const { SHIP_SKINS, skinsAvailableFor, ownedSkins, purchaseSkin } = require('../../../engine/ship-skins.js');
 const { PASSIVE_SKILLS } = require('../../../engine/passive-skills.js');
 const { characterScreen } = require('../named-character.js');
-registerFunctionHandler('kayr', 'old_routes_quests', require('../character-functions/kayr.js').oldRoutesLead);
 
 const { buildBestiaryFighter, BESTIARY } = require('../../../engine/bestiary.js');
 const { resolveTurn } = require('../../../engine/combat-engine.js');
