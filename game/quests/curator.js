@@ -25,7 +25,7 @@ const { stage } = found;
 const text = (stage.text || '').replace(/\$\{playerName\}/g, player.name || '');
 if (stage.isCombat) {
 return {
-reply: { text, buttons: [' Атаковать', 'Отступить'], imageKey: imageForEnemy(stage.enemy.name) },
+reply: { text, buttons: ['⚔️ Атаковать', 'Отступить'], imageKey: imageForEnemy(stage.enemy.name) },
 nextState: { scene: 'pre_combat', player, enemy: { ...stage.enemy, periodic: [] }, curatorQuest: { questId, winNext: stage.winNext, loseNext: stage.loseNext } }
 };
 }
@@ -40,7 +40,7 @@ if (stage.reward.statPoints) { nextPlayer.statPoints = (nextPlayer.statPoints ||
 nextPlayer.completedQuests = [...(nextPlayer.completedQuests || [])];
 if (!nextPlayer.completedQuests.includes(questId)) nextPlayer.completedQuests.push(questId);
 const fullText = rewardLines.length ? `${text}\n\n${rewardLines.join('\n')}` : text;
-return { reply: { text: fullText, buttons: [' Назад'], imageKey: imageForCurator(player.faction) }, nextState: { scene: 'station', player: nextPlayer } };
+return { reply: { text: fullText, buttons: ['⬅️ Назад'], imageKey: imageForCurator(player.faction) }, nextState: { scene: 'station', player: nextPlayer } };
 }
 return {
 reply: { text, buttons: (stage.choices || []).map((c) => c.label), imageKey: imageForCurator(player.faction) },
