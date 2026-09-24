@@ -15,17 +15,18 @@
  */
 const {
   SHIP_WEAPONS, SHIP_ARMOR, SHIP_AMMO, SHIP_EMP_DEVICE, SHIP_SENSOR,
+  SHIP_TRACT_SENSOR, SHIP_TRACT_ENGINE,
   findAnyShipItem, findShipAmmo, canAffordShipItem, craftShipItem,
   equipShipItem, unequipShipItem, buyShipAmmo,
 } = require('../../../engine/ship-equipment.js');
 const { hubMessage, stationButtons } = require('../common.js');
 const { SCENES } = require('../ids.js');
 
-const ALL_CRAFTABLE = { ...SHIP_WEAPONS, ...SHIP_ARMOR, ...SHIP_EMP_DEVICE, ...SHIP_SENSOR };
+const ALL_CRAFTABLE = { ...SHIP_WEAPONS, ...SHIP_ARMOR, ...SHIP_EMP_DEVICE, ...SHIP_SENSOR, ...SHIP_TRACT_SENSOR, ...SHIP_TRACT_ENGINE };
 
 function describeShipItem(item) {
   const statsText = Object.entries(item)
-    .filter(([k]) => ['firepowerBonus', 'armorBonus', 'disableDurationTurns', 'ambushAvoidBonusPct'].includes(k))
+    .filter(([k]) => ['firepowerBonus', 'armorBonus', 'disableDurationTurns', 'ambushAvoidBonusPct', 'revealsZone', 'enablesZone'].includes(k))
     .map(([k, v]) => `${k}:${v}`).join(', ');
   const matText = (item.materials || []).map((m) => `${m.resource} T${m.tier} ×${m.qty}`).join(', ');
   return `${item.name} (${statsText}) — ${matText}, 💳${item.credits}`;
@@ -86,6 +87,8 @@ function slotForItemId(id) {
   if (SHIP_ARMOR[id]) return 'armor';
   if (SHIP_EMP_DEVICE[id]) return 'emp';
   if (SHIP_SENSOR[id]) return 'sensor';
+  if (SHIP_TRACT_SENSOR[id]) return 'tractSensor';
+  if (SHIP_TRACT_ENGINE[id]) return 'tractEngine';
   return null;
 }
 
