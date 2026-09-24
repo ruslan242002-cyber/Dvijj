@@ -33,6 +33,9 @@ const { handleCuratorQuest } = require('./scenes/quests/curator.js');
 const { handleNpc } = require('./scenes/quests/npc.js');
 const { handleNamedCharacter } = require('./scenes/named-character.js');
 const { handleMinigame, handleMinigamePower, handleMinigameSensor, handleMinigameArchive, handleMinigameSecondary } = require('./scenes/minigames.js');
+const { handleQuestSite } = require('./scenes/quest-site.js');
+const { handleQuestJourney } = require('./scenes/quest-journey.js');
+const { handleMissionTracker } = require('./scenes/mission-tracker.js');
 const { handleBoss } = require('./scenes/boss.js');
 const { handleRaid } = require('./scenes/raid.js');
 const { handleMarket } = require('./scenes/market.js');
@@ -106,6 +109,9 @@ const SCENE_HANDLERS = {
   [SCENES.MINIGAME_SENSOR_LAYERS]: handleMinigameSensor,
   [SCENES.MINIGAME_ARCHIVE]: handleMinigameArchive,
   [SCENES.MINIGAME_SECONDARY_STATUS]: handleMinigameSecondary,
+  [SCENES.QUEST_SITE]: handleQuestSite,
+  [SCENES.QUEST_JOURNEY]: handleQuestJourney,
+  [SCENES.MISSION_TRACKER]: handleMissionTracker,
   [SCENES.BOSS_HUB]: handleBoss,
   [SCENES.BOSS_COMBAT]: handleBoss,
   [SCENES.RAID_LOBBY]: handleRaid,
