@@ -181,6 +181,11 @@ async function resolveStationAction(input, state, deps, rng, playerId) {
     };
   }
 
+  if (input === '📋 Задания') {
+    const { missionTrackerScreen } = require('./mission-tracker.js');
+    return missionTrackerScreen(state.player);
+  }
+
   if (input === 'Профиль') {
     const link =
       typeof deps.getProfileLink === 'function'
