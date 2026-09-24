@@ -95,11 +95,17 @@ function characterScreen(characterId, player, backScene = 'station', prefixText 
   if (character.hasArc) {
     const stage = getAvailableStage(characterId, player);
     if (stage) {
+      if (stage.preBeats && stage.preBeats.length > 0) {
+        return {
+          reply: { text: `${prefixText}${stage.preBeats[0]}`, buttons: ['➡️ Дальше'], imageKey: stage.imageKey || character.imageKey },
+          nextState: { scene: SCENES.NAMED_CHARACTER, player, characterId, backScene, stageId: stage.id, beatIndex: 0 },
+        };
+      }
       return {
         reply: {
           text: `${prefixText}${character.name}\n\n${questProgressLine(stage.id)}${typeof stage.intro === 'function' ? stage.intro(player) : stage.intro}`,
           buttons: [stage.acceptButton, '⬅️ Назад'],
-          imageKey: character.imageKey,
+          imageKey: stage.imageKey || character.imageKey,
         },
         nextState: { scene: SCENES.NAMED_CHARACTER, player, characterId, backScene, stageId: stage.id },
       };
@@ -138,6 +144,28 @@ function handleNamedCharacter(state, input, rng, deps) {
     const { findStage } = require('../../lib/npc-arcs.js');
     const stage = findStage(state.characterId, state.stageId);
     if (stage) {
+      // ⚠️ МНОГОШАГОВЫЙ ПЕЙСИНГ (по прямому запросу пользователя) —
+      // stage.preBeats: короткие шаги перед основным intro+выборами,
+      // для крупных эмоциональных раскрытий, где одна кинематографичная
+      // пауза важнее мгновенного перехода к тексту с кнопками. Не
+      // меняет саму механику стадии — просто задержка перед ней.
+      if (stage.preBeats && state.beatIndex !== undefined && input === '➡️ Дальше') {
+        const nextIndex = state.beatIndex + 1;
+        if (nextIndex < stage.preBeats.length) {
+          return {
+            reply: { text: stage.preBeats[nextIndex], buttons: ['➡️ Дальше'], imageKey: stage.imageKey || character.imageKey },
+            nextState: { scene: SCENES.NAMED_CHARACTER, player: state.player, characterId: state.characterId, backScene: state.backScene, stageId: state.stageId, beatIndex: nextIndex },
+          };
+        }
+        return {
+          reply: {
+            text: `${character.name}\n\n${questProgressLine(stage.id)}${typeof stage.intro === 'function' ? stage.intro(state.player) : stage.intro}`,
+            buttons: [stage.acceptButton, '⬅️ Назад'],
+            imageKey: stage.imageKey || character.imageKey,
+          },
+          nextState: { scene: SCENES.NAMED_CHARACTER, player: state.player, characterId: state.characterId, backScene: state.backScene, stageId: stage.id },
+        };
+      }
       if (input === stage.acceptButton) {
         if (stage.launchesMinigame === 'ship_diagnostics') {
           const { shipDiagnosticsScreen } = require('./minigames.js');
@@ -160,13 +188,32 @@ function handleNamedCharacter(state, input, rng, deps) {
             arcStageId: state.stageId,
           });
         }
+        // ⚠️ Направляемое путешествие (lib/quest-journeys.js) — для
+        // ключевых сюжетных моментов Q1-Q14, где текст квеста ГОВОРИТ
+        // про полёт (напр. V8 "Отправление"). Возврат — обратно к
+        // этому же диалогу (backScene = named-character), чтобы
+        // discovery, выданный в конце путешествия, сразу же разблокировал
+        // следующую стадию у того же NPC через обычное condition.
+        if (stage.launchesJourney) {
+          const { startQuestJourney } = require('./quest-journey.js');
+          return startQuestJourney(state.player, stage.launchesJourney, state.backScene, {
+            arcCharacterId: state.characterId,
+            arcStageId: state.stageId,
+          });
+        }
 
         const resolvedChoices = typeof stage.choices === 'function' ? stage.choices(state.player) : stage.choices;
+        // ⚠️ VK жёстко режет подпись кнопки до 40 символов молча
+        // (см. lib/button-utils.js) — короткая подпись на кнопке,
+        // полный текст пронумерован в теле сообщения, если хоть один
+        // вариант длиннее лимита.
+        const { buildChoiceDisplay } = require('../../lib/button-utils.js');
+        const { buttons: choiceButtons, optionsList } = buildChoiceDisplay(resolvedChoices);
         return {
           reply: {
-            text: `${character.name}\n\nВыбери, как подойти к делу:`,
-            buttons: resolvedChoices.map((c) => c.text),
-            imageKey: character.imageKey,
+            text: `${character.name}\n\nВыбери, как подойти к делу:${optionsList}`,
+            buttons: choiceButtons,
+            imageKey: stage.imageKey || character.imageKey,
           },
           nextState: { scene: SCENES.NAMED_CHARACTER, player: state.player, characterId: state.characterId, backScene: state.backScene, stageId: state.stageId, choosing: true },
         };
@@ -174,7 +221,11 @@ function handleNamedCharacter(state, input, rng, deps) {
 
       if (state.choosing) {
         const resolvedChoicesForPick = typeof stage.choices === 'function' ? stage.choices(state.player) : stage.choices;
-        const choice = resolvedChoicesForPick.find((c) => c.text === input);
+        // ⚠️ Кнопка могла показать укороченную подпись (VK 40-символьный
+        // лимит, lib/button-utils.js) — сверяем и с полным текстом, и
+        // с тем, что реально было на кнопке.
+        const { shortButtonLabel } = require('../../lib/button-utils.js');
+        const choice = resolvedChoicesForPick.find((c) => c.text === input || shortButtonLabel(c.text) === input);
         if (choice) {
           // ⚠️ НАСТОЯЩИЙ БОЙ ВНУТРИ КВЕСТА (по запросу пользователя —
           // "логичные битвы", не просто текст). triggerCombat — функция,
@@ -187,7 +238,7 @@ function handleNamedCharacter(state, input, rng, deps) {
               reply: {
                 text: choice.preCombatText || 'Ты готовишься к столкновению.',
                 buttons: ['⚔️ В бой'],
-                imageKey: character.imageKey,
+                imageKey: stage.imageKey || character.imageKey,
               },
               nextState: {
                 scene: 'pre_combat',
@@ -201,6 +252,17 @@ function handleNamedCharacter(state, input, rng, deps) {
           const player = state.player;
           if (choice.loot) {
             addToInventory(player, choice.loot.resource, choice.loot.tier, choice.loot.qty);
+          }
+          if (choice.consumeResource) {
+            // ⚠️ Механика "принеси ресурсы" (по прямому запросу
+            // пользователя) — выбор, доступный только при наличии
+            // материала (проверка уже в самой choices-функции стадии),
+            // здесь списывает его по-настоящему. Не падаем, если вдруг
+            // не хватило (гонка между просмотром и кликом) — просто не
+            // списываем лишнего.
+            const { resource, tier, qty } = choice.consumeResource;
+            const owned = (player.inventory || []).find((i) => i.resource === resource && i.tier === tier);
+            if (owned) owned.qty = Math.max(0, owned.qty - qty);
           }
           if (choice.xp) {
             grantXp(player, choice.xp);
@@ -216,19 +278,38 @@ function handleNamedCharacter(state, input, rng, deps) {
             grantTrust(player, state.characterId, choice.trustDelta);
           }
           if (choice.questArtifact) {
-            const { grantQuestArtifact } = require('../../lib/artifacts.js');
-            grantQuestArtifact(player, choice.questArtifact);
+            // ⚠️ ПО ПРЯМОМУ ЗАПРОСУ ПОЛЬЗОВАТЕЛЯ: предмет — не гарантия
+            // за прохождение, а признание доверия. Если у выбора задан
+            // questArtifactMinTrust — дарят, только если доверие к
+            // этому персонажу уже достаточное (система lib/npc-trust.js).
+            // Без questArtifactMinTrust — как раньше, безусловно (не
+            // трогаем совместимость для choices, где это не задано).
+            const shouldGrant = !choice.questArtifactMinTrust || (() => {
+              const { getTrust } = require('../../lib/npc-trust.js');
+              return getTrust(player, state.characterId) >= choice.questArtifactMinTrust;
+            })();
+            if (shouldGrant) {
+              const { grantQuestArtifact } = require('../../lib/artifacts.js');
+              grantQuestArtifact(player, choice.questArtifact);
+            }
           }
           if (choice.reputation) {
             addFactionReputation(player, player.faction, choice.reputation);
           }
           completeStage(player, state.characterId, state.stageId);
 
+          // ⚠️ БАГ-ФИКС: choice.flavor теперь тоже может быть функцией
+          // от player (напр. planAware()), тем же паттерном, что уже
+          // поддерживают stage.intro/stage.choices — раньше поддержки
+          // не было, planAware-обёрнутый flavor утекал в текст как
+          // исходный код функции вместо результата вызова.
+          const resolvedFlavor = typeof choice.flavor === 'function' ? choice.flavor(player) : choice.flavor;
+
           return {
             reply: {
-              text: `${choice.flavor}\n\n${stage.closingLine}`,
+              text: `${resolvedFlavor}\n\n${stage.closingLine}`,
               buttons: ['⬅️ Назад'],
-              imageKey: character.imageKey,
+              imageKey: stage.imageKey || character.imageKey,
             },
             nextState: { scene: SCENES.NAMED_CHARACTER, player, characterId: state.characterId, backScene: state.backScene },
           };
