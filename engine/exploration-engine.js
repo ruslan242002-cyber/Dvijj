@@ -18,7 +18,13 @@ const THEME_EXCLUSIVE_MONSTER = {
 };
 const EXCLUSIVE_MONSTER_CHANCE = 0.4; // высокий, но не гарантированный шанс — место узнаваемо, не однообразно
 
-const RESOURCES = ['Сплавы', 'Изотопы', 'Полимеры', 'Биомасса', 'Реголит'];
+// ⚠️ ПО ПРЯМОМУ ЗАПРОСУ ПОЛЬЗОВАТЕЛЯ — добавлены 2 новых обычных
+// ресурса (Редкоземы/Осколки памяти, находятся так же часто, как
+// остальные 5). Третий новый ресурс, "Кристаллы Тракта" — НЕ здесь
+// (не должен быть таким же частым, "золотая" редкость) — см. отдельную
+// низковероятностную подмену в rollLoot() ниже, только в yellow/red.
+const RESOURCES = ['Сплавы', 'Изотопы', 'Полимеры', 'Биомасса', 'Реголит', 'Редкоземы', 'Осколки памяти'];
+const TRACT_CRYSTAL_CHANCE = { blue: 0, yellow: 0.03, red: 0.07 };
 const ENEMY_NAMES = {
   blue: ['Дрейф-обломок', 'Слабый резонанс', 'Отбившийся зонд', 'Ржавый автомат', 'Эхо-помеха'],
   yellow: ['Отголосок-падальщик', 'Резонансный хищник', 'Сбойный дрон', 'Тракт-паразит', 'Радиационный рой'],
@@ -66,7 +72,15 @@ const TESTING_MODE = true;
 const TESTING_LOOT_MULTIPLIER = 500;
 
 function rollLoot(zone, rng = Math.random, playerLevel = 1, theme = null, lootMultiplier = 1) {
-  const resource = theme ? pickResourceForTheme(RESOURCES, theme, rng) : RESOURCES[Math.floor(rng() * RESOURCES.length)];
+  // ⚠️ Кристаллы Тракта — редчайший ресурс ("золотого" уровня по
+  // прямому запросу пользователя), подменяет обычный ролл только в
+  // yellow/red с низкой вероятностью, не часть равномерного списка
+  // RESOURCES выше — тем и остаётся редким, не таким же частым, как
+  // остальные 7.
+  const crystalRoll = rng();
+  const resource = crystalRoll < (TRACT_CRYSTAL_CHANCE[zone] || 0)
+    ? 'Кристаллы Тракта'
+    : (theme ? pickResourceForTheme(RESOURCES, theme, rng) : RESOURCES[Math.floor(rng() * RESOURCES.length)]);
   const tier = tierForZone(zone, rng, playerLevel);
   let qty = 1 + Math.floor(rng() * 4);
   let credits = Math.round((10 + rng() * 40) * tier);
