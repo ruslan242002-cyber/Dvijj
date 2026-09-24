@@ -865,9 +865,10 @@ function stationButtons(
     visiting
       ? [
           '🏠 Домой',
+          '📋 Задания',
           'Сброс',
         ]
-      : ['Сброс'];
+      : ['📋 Задания', 'Сброс'];
 
   return link
     ? [
