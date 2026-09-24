@@ -1,3 +1,4 @@
+
 'use strict';
 
 /**
@@ -211,6 +212,10 @@ function handleVolnyPort(state, input, rng, deps) {
     }
 
     case 'volny_port_olddock': {
+      // ⚠️ БАГ-ФИКС: отсутствовала проверка на "⬅️ Назад" — клик просто
+      // заново показывал тот же экран старого дока, кнопка "назад"
+      // не работала вообще (найдено пользователем в реальной игре).
+      if (input === '⬅️ Назад') return volnyPortHub(state.player);
       if (input === 'Поговорить с Кайром') {
         return characterScreen('kayr', state.player, 'volny_port_olddock');
       }
