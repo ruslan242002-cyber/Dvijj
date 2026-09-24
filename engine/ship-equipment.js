@@ -135,6 +135,86 @@ const SHIP_SENSOR = {
   },
 };
 
+// ⚠️ ПО ПРЯМОМУ ЗАПРОСУ ПОЛЬЗОВАТЕЛЯ: доступ к жёлтой/красной зоне не
+// должен быть просто числом уровня — должен требовать реального
+// корабельного снаряжения, которое нужно скрафтить. ДВА раздельных
+// требования, не одно: сенсор даёт ВИДИМОСТЬ маршрута (без него
+// опасные маршруты просто не показываются в списке вариантов, как
+// будто их нет), двигатель даёт ВОЗМОЖНОСТЬ лететь (без него даже
+// видимый маршрут не даст долететь). Игрок может увидеть, но не
+// долететь — честно, не скрывает прогресс, просто показывает, чего
+// не хватает. ОТДЕЛЬНАЯ категория от SHIP_SENSOR (ambush-avoidance,
+// про бой) — этот про саму карту Трактов, разные оси, не путать.
+const SHIP_TRACT_SENSOR = {
+  tract_scanner_yellow: {
+    id: 'tract_scanner_yellow',
+    name: 'Трактовый сканер малого радиуса',
+    revealsZone: 'yellow',
+    credits: 1800,
+    materials: [{ resource: 'Полимеры', tier: 2, qty: 10 }, { resource: 'Изотопы', tier: 1, qty: 5 }],
+    description: 'Улавливает резонанс жёлтых Трактов — без него маршруты туда просто не появляются на карте, будто их не существует.',
+  },
+  tract_scanner_red: {
+    id: 'tract_scanner_red',
+    name: 'Трактовый сканер дальнего радиуса',
+    revealsZone: 'red',
+    credits: 3500,
+    materials: [{ resource: 'Изотопы', tier: 3, qty: 12 }, { resource: 'Полимеры', tier: 3, qty: 8 }, { resource: 'Кристаллы Тракта', tier: 1, qty: 2 }],
+    description: 'Ловит даже самый слабый отголосок красных Трактов — маршрут становится виден, но одной видимости мало, чтобы туда долететь. Требует настоящие кристаллы Тракта — без них сенсор просто не резонирует с тем, что ищет.',
+  },
+};
+
+const SHIP_TRACT_ENGINE = {
+  reinforced_drive: {
+    id: 'reinforced_drive',
+    name: 'Усиленный маршевый двигатель',
+    enablesZone: 'yellow',
+    credits: 2000,
+    materials: [{ resource: 'Сплавы', tier: 2, qty: 12 }, { resource: 'Изотопы', tier: 1, qty: 6 }],
+    description: 'Выдерживает турбулентность жёлтых Трактов — без него корпус просто не выдержит перехода, сколько бы сканер ни видел маршрут.',
+  },
+  jump_drive: {
+    id: 'jump_drive',
+    name: 'Прыжковый двигатель',
+    enablesZone: 'red',
+    credits: 4500,
+    materials: [{ resource: 'Изотопы', tier: 3, qty: 15 }, { resource: 'Сплавы', tier: 3, qty: 10 }, { resource: 'Кристаллы Тракта', tier: 1, qty: 3 }],
+    description: 'Единственное известное решение, способное протащить корабль через красный Тракт целым — дорого, редко, но без него дальше просто некуда. Кристаллы Тракта — не просто дорогой компонент, а единственное известное вещество, резонирующее с самим Трактом достаточно, чтобы пройти сквозь него.',
+  },
+};
+
+const ZONE_ORDER = { blue: 0, yellow: 1, red: 2 };
+
+/** Максимальная зона, маршруты в которую вообще ПОКАЗЫВАЮТСЯ игроку
+ * (видимость — про сенсор, не про двигатель). */
+function maxVisibleZone(player) {
+  const eq = player.shipEquipment || {};
+  const sensor = eq.tractSensor ? SHIP_TRACT_SENSOR[eq.tractSensor] : null;
+  if (sensor?.revealsZone === 'red') return 'red';
+  if (sensor?.revealsZone === 'yellow') return 'yellow';
+  return 'blue';
+}
+
+/** Максимальная зона, куда игрок физически МОЖЕТ долететь (двигатель).
+ * Отдельно от видимости намеренно — можно увидеть маршрут раньше, чем
+ * появится возможность им воспользоваться, это честный прогресс, не
+ * баг. */
+function maxFlyableZone(player) {
+  const eq = player.shipEquipment || {};
+  const engine = eq.tractEngine ? SHIP_TRACT_ENGINE[eq.tractEngine] : null;
+  if (engine?.enablesZone === 'red') return 'red';
+  if (engine?.enablesZone === 'yellow') return 'yellow';
+  return 'blue';
+}
+
+function zoneIsVisible(player, zone) {
+  return (ZONE_ORDER[zone] ?? 0) <= ZONE_ORDER[maxVisibleZone(player)];
+}
+
+function zoneIsFlyable(player, zone) {
+  return (ZONE_ORDER[zone] ?? 0) <= ZONE_ORDER[maxFlyableZone(player)];
+}
+
 function findShipWeapon(id) { return SHIP_WEAPONS[id] || null; }
 function findShipAmmo(id) { return SHIP_AMMO[id] || null; }
 function findShipArmor(id) { return SHIP_ARMOR[id] || null; }
@@ -239,7 +319,7 @@ function unequipShipItem(player, slot) {
   return { ok: true };
 }
 
-const ALL_SHIP_ITEMS = { ...SHIP_WEAPONS, ...SHIP_ARMOR, ...SHIP_EMP_DEVICE, ...SHIP_SENSOR };
+const ALL_SHIP_ITEMS = { ...SHIP_WEAPONS, ...SHIP_ARMOR, ...SHIP_EMP_DEVICE, ...SHIP_SENSOR, ...SHIP_TRACT_SENSOR, ...SHIP_TRACT_ENGINE };
 
 function findAnyShipItem(id) { return ALL_SHIP_ITEMS[id] || null; }
 
@@ -272,7 +352,9 @@ function craftShipItem(player, itemId) {
 
 module.exports = {
   SHIP_WEAPONS, SHIP_AMMO, SHIP_ARMOR, SHIP_EMP_DEVICE, SHIP_SENSOR,
+  SHIP_TRACT_SENSOR, SHIP_TRACT_ENGINE,
   findShipWeapon, findShipAmmo, findShipArmor, findAnyShipItem,
   aggregateShipEquipmentEffects, equipShipItem, unequipShipItem,
   canAffordShipItem, craftShipItem, buyShipAmmo, consumeShipAmmo,
+  maxVisibleZone, maxFlyableZone, zoneIsVisible, zoneIsFlyable,
 };
