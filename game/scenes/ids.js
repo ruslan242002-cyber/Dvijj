@@ -113,6 +113,9 @@ const SCENES = Object.freeze({
   VEIN_MONSTER_COMBAT: 'vein_monster_combat',
   VEIN_BOSS_WAIT: 'vein_boss_wait',
   VEIN_BOSS_COMBAT: 'vein_boss_combat',
+  QUEST_SITE: 'quest_site',
+  QUEST_JOURNEY: 'quest_journey',
+  MISSION_TRACKER: 'mission_tracker',
 });
 
 module.exports = { SCENES };
