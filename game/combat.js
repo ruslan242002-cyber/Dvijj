@@ -87,6 +87,17 @@ async function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null
           nextState: { scene: 'quest_report', player: { ...result.attacker, hp: result.attacker.hpMax } }
         };
       }
+      if (state.questSiteReturn) {
+        // ⚠️ Победа в бою внутри многошагового расследования на месте
+        // (lib/quest-sites.js). Возвращаемся к нужному шагу сценария
+        // через ту же questSiteScreen — не завершаем квест здесь, шаг
+        // сам решает, что дальше (обычно приводит к финальной находке).
+        const { questSiteScreen } = require('./quest-site.js');
+        const { QUEST_SITES } = require('../../lib/quest-sites.js');
+        const player = { ...result.attacker, hp: result.attacker.hpMax };
+        const site = { siteId: state.questSiteReturn.siteId, ...QUEST_SITES[state.questSiteReturn.siteId] };
+        return questSiteScreen(player, site, state.questSiteReturn.onWinStep, `✅ Победа!\n\n${state.questSiteReturn.onWinText}\n\n`);
+      }
       if (state.curatorQuest) {
         return curatorQuestScreen(deps, { ...result.attacker, hp: result.attacker.hpMax }, state.curatorQuest.questId, state.curatorQuest.winNext);
       }
@@ -103,7 +114,9 @@ async function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null
         const choice = resolvedChoices.find((c) => c.text === choiceText);
         if (stage && choice) {
           if (choice.winXp) grantXp(player, choice.winXp);
+          if (choice.winLoot) addToInventory(player, choice.winLoot.resource, choice.winLoot.tier, choice.winLoot.qty);
           if (choice.winDiscovery) recordDiscovery(player, choice.winDiscovery);
+          if (choice.winDiscoveries) choice.winDiscoveries.forEach((d) => recordDiscovery(player, d));
           if (choice.winArtifact) {
             const { grantQuestArtifact } = require('../../lib/artifacts.js');
             grantQuestArtifact(player, choice.winArtifact);
@@ -342,7 +355,7 @@ async function resolveCombatTurn(deps, state, result, rng, { prevPlayerHp = null
   const cdLine = cdNote ? `\n\n${cdNote}` : '';
   return {
     reply: { text: `💥 ${log}\n\n${card}${cdLine}${trainingNote}`, buttons, imageKey: imageForEnemy(enemyTurn.attacker.name) },
-    nextState: { scene: 'combat', player: enemyTurn.defender, enemy: enemyTurn.attacker, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: result.stimUsedThisFight, curatorQuest: state.curatorQuest, npcArcCombat: state.npcArcCombat, sectorResident: state.sectorResident, skillCooldowns: cooldowns }
+    nextState: { scene: 'combat', player: enemyTurn.defender, enemy: enemyTurn.attacker, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: result.stimUsedThisFight, curatorQuest: state.curatorQuest, npcArcCombat: state.npcArcCombat, questSiteReturn: state.questSiteReturn, sectorResident: state.sectorResident, skillCooldowns: cooldowns }
   };
 }
 
@@ -360,7 +373,7 @@ async function handleCombat(state, input, rng, deps, playerId) {
       const buttons = ['⚔️ Обычная атака', ...skillButtons(state.player, {}), 'Стим'];
       return {
         reply: { text: `${combatFullCard(state.player, state.enemy)}\n\nВыбери действие:`, buttons, imageKey: imageForEnemy(state.enemy.name) },
-        nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: false, curatorQuest: state.curatorQuest, npcArcCombat: state.npcArcCombat, sectorResident: state.sectorResident, skillCooldowns: {} }
+        nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: false, curatorQuest: state.curatorQuest, npcArcCombat: state.npcArcCombat, questSiteReturn: state.questSiteReturn, sectorResident: state.sectorResident, skillCooldowns: {} }
       };
     }
     case SCENES.COMBAT_STIM_SELECT: {
@@ -369,7 +382,7 @@ async function handleCombat(state, input, rng, deps, playerId) {
       if (input === '⬅️ Назад') {
         return {
           reply: { text: `${combatFullCard(state.player, state.enemy)}\n\nВыбери действие:`, buttons: backButtons, imageKey: imageForEnemy(state.enemy.name) },
-          nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest, npcArcCombat: state.npcArcCombat, sectorResident: state.sectorResident, skillCooldowns: state.skillCooldowns }
+          nextState: { scene: 'combat', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest, npcArcCombat: state.npcArcCombat, questSiteReturn: state.questSiteReturn, sectorResident: state.sectorResident, skillCooldowns: state.skillCooldowns }
         };
       }
       const prevPlayerHp = state.player.hp;
@@ -389,7 +402,7 @@ async function handleCombat(state, input, rng, deps, playerId) {
         }
         return {
           reply: { text: 'Выбери стим:', buttons: [...stimButtons(), '⬅️ Назад'] },
-          nextState: { scene: 'combat_stim_select', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest, npcArcCombat: state.npcArcCombat, sectorResident: state.sectorResident, skillCooldowns: state.skillCooldowns }
+          nextState: { scene: 'combat_stim_select', player: state.player, enemy: state.enemy, trainingFight: state.trainingFight, zone: state.zone, depth: state.depth, fragmentId: state.fragmentId, stimUsedThisFight: state.stimUsedThisFight, curatorQuest: state.curatorQuest, npcArcCombat: state.npcArcCombat, questSiteReturn: state.questSiteReturn, sectorResident: state.sectorResident, skillCooldowns: state.skillCooldowns }
         };
       }
       const skillId = input === '⚔️ Обычная атака' ? null : skillIdByName(input);
